@@ -532,14 +532,41 @@ def test_every_asset_category_id_resolves_and_agrees_with_its_own_size(ranked: d
     how the board divides. This is the assertion that the document survives that: an asset's
     `category_id` has to name a listed category whose size is the size the asset itself
     reports, whichever partition the asset came from.
+
+    NOT EVERY ASSET REPORTS A SIZE, and this test used to assume otherwise. `AbstainedAsset`
+    has no `n_local` field — only a scored one does — so an abstained asset's size was reachable
+    only through its `measurement`, and `measurement` keys are pinned per abstention REASON. A
+    resolution abstention carries `n_local`; a `far_outlier` abstention carries a threshold and
+    an IQR and no size at all. The old form read `measurement["n_local"]` from any abstained
+    asset and passed only because the fixture's off-look tail happened to abstain on resolution.
+
+    So the universal half stays universal and the conditional half is scoped to where a size
+    exists. Both halves are counted below, and the test fails if either population is empty,
+    because a scoping condition that silently matches nothing turns a weakened assertion into a
+    vacuous one that still reports green.
     """
     document = ranked["document"]
     sizes = {entry["category_id"]: entry["n_local"] for entry in document["board"]["categories"]}
     assert len(sizes) == len(document["board"]["categories"])
+
+    resolved = 0
+    size_checked = 0
     for asset in document["assets"]:
         assert asset["category_id"] in sizes
-        own = asset["n_local"] if asset["state"] == "scored" else asset["measurement"]["n_local"]
+        resolved += 1
+        if asset["state"] == "scored":
+            own = asset["n_local"]
+        elif "n_local" in asset["measurement"]:
+            own = asset["measurement"]["n_local"]
+        else:
+            continue
         assert own == sizes[asset["category_id"]]
+        size_checked += 1
+
+    assert resolved == len(document["assets"]), "the resolution arm did not cover every asset"
+    assert size_checked > 0, (
+        "no asset reported a size, so the agreement arm asserted nothing at all"
+    )
 
 
 def test_the_board_lists_a_category_for_every_partition_a_candidate_induced(ranked: dict):
