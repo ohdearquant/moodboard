@@ -123,27 +123,35 @@
     "interventions": [
       "recolour",
       "luminance_shift",
-      "crop",
-      "chroma_shift_l_fixed"
+      "crop"
     ],
     "expected_dominant_axis": {
       "recolour": "palette",
       "luminance_shift": "tone",
-      "crop": "composition",
-      "chroma_shift_l_fixed": "palette"
+      "crop": "composition"
     },
     "_paired_arms_comment": [
-      "luminance_shift and chroma_shift_l_fixed are the two arms of ONE symmetric claim, that",
-      "palette and tone are separable, and both are required. luminance_shift holds chroma",
-      "exactly fixed and tone must win; chroma_shift_l_fixed holds L exactly fixed and palette",
-      "must win. recolour is NOT the second arm: it is a general recolour that may move",
-      "lightness too, so it cannot isolate chroma and passing it says nothing about symmetry.",
-      "Registered after the lightness arm was measured unsatisfiable (ADR-0003, twelve subject",
-      "sets, ratio 0.70-1.90 against 2.0) because palette clustered over full CIELAB including",
-      "L. The repair was to cluster palette on (a, b) only. The mirrored arm exists so the",
-      "repair cannot be validated by re-running only the direction that failed, and it is the",
-      "arm that catches the opposite error: a palette axis stripped so far toward chroma that",
-      "it stops responding to a real recolour passes the lightness arm perfectly and fails here."
+      "luminance_shift and recolour are the two arms of ONE symmetric claim, that palette and",
+      "tone are separable, and both are required. luminance_shift adds to L with chroma held",
+      "exactly fixed and tone must win; recolour rotates the (a, b) plane with L held exactly",
+      "fixed and palette must win. The mirrored arm exists so that a repair to the palette",
+      "colour space cannot be validated by re-running only the direction that failed, and it",
+      "catches the opposite error: a palette axis stripped so far toward chroma that it stops",
+      "responding to a real recolour would pass the lightness arm perfectly and fail here.",
+      "CORRECTION, measured 2026-08-07. An earlier version of this block registered a fourth",
+      "intervention, chroma_shift_l_fixed, and asserted that recolour was unfit as the second",
+      "arm because a general recolour may move lightness too. That was wrong about this",
+      "implementation and was written without reading it. recolour holds L exactly fixed in",
+      "CIELAB; the only lightness it moves is what sRGB gamut clipping leaks back on the round",
+      "trip, and that was measured across six subjects at three magnitudes as a median absolute",
+      "dL of 0.22 on a 0-100 scale, max 0.24, against luminance_shift's 11.15 on the same",
+      "subjects. Two percent of the deliberate intervention. So recolour already IS the",
+      "chroma-isolation arm and the fourth intervention was a duplicate of it.",
+      "WHAT THIS ARM CAN AND CANNOT CARRY, so nobody re-derives it: on the synthetic",
+      "population recolour ranks palette first in 12 of 12 subject sets but clears the",
+      "registered 2.0 margin in only 10 of 12, ratio 1.45 to 4.58. The chroma direction is",
+      "therefore real but NOT robust at this margin, and it is weaker evidence than the crop",
+      "row, which clears at 6.49 and up. Do not read a passing chroma arm as symmetric proof."
     ],
     "_removed_grain_comment": [
       "A grain -> texture row was registered here while the axis vocabulary is exactly",
