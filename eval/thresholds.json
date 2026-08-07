@@ -144,12 +144,20 @@
         "when it cannot. A two-group board with large sub-looks is therefore a board the tool",
         "is supposed to SCORE, so requiring fire_rate 1.0 on it demanded behaviour the",
         "decision rule forbids and no conforming implementation could pass. Sub-looks of 8 at",
-        "alpha 0.05 give 1/(8+1) = 0.111 > 0.05, so neither category can express the request."
+        "alpha 0.05 give 1/(8+1) = 0.111 > 0.05, so neither category can express the request.",
+        "",
+        "resolution_effective_size_arm's group_sizes is a histogram of near-duplicate group",
+        "sizes among the 6 distinct sources (4 sources contributing 3 copies each, 2",
+        "contributing 4, totalling the 20 files n names): n_eff = 20^2 / (4*3^2 + 2*4^2) =",
+        "400/68 = 5.88, so 1/(n_eff+1) = 0.145 > alpha refuses, while the file-count floor",
+        "1/(20+1) = 0.0476 < alpha would have honoured it. This is the case that",
+        "distinguishes an implementation reading n_local from one reading n_eff_local."
       ],
       "constructed_cases": [
         {"case": "threshold_below_resolution", "n": 10, "alpha": 0.05, "expect_reason": "resolution"},
         {"case": "two_disjoint_style_groups", "sub_look_size": 8, "alpha": 0.05, "expect_reason": "multi_modality"},
-        {"case": "asset_from_absent_domain", "alpha": 0.05, "expect_reason": "far_outlier"}
+        {"case": "asset_from_absent_domain", "alpha": 0.05, "expect_reason": "far_outlier"},
+        {"case": "resolution_effective_size_arm", "n": 20, "group_sizes": {"3": 4, "4": 2}, "alpha": 0.05, "expect_reason": "resolution"}
       ],
       "required_fire_rate": 1.0,
       "reason_must_match_construction": true
@@ -168,13 +176,21 @@
         "Restricting this to single-look boards of 20 or more leaves the small-board and",
         "multi-look populations unmeasured, which are exactly the populations rules 1 and 2",
         "are most likely to refuse without cause. Each size is tested at an alpha it can",
-        "express, since testing it at one it cannot is a must_fire case wearing quiet clothes."
+        "express, since testing it at one it cannot is a must_fire case wearing quiet clothes.",
+        "",
+        "The fifth row's group_sizes (a histogram, same reading as must_fire's) is a mildly",
+        "duplicated board, 50 files from 40 distinct sources (30 singletons, 10 pairs):",
+        "n_eff = 50^2 / (30*1^2 + 10*2^2) = 2500/70 = 35.7, so 1/(n_eff+1) = 0.027 < alpha",
+        "still admits the request. This is what stops resolution_effective_size_arm's new",
+        "n_eff floor being satisfied by an implementation that refuses whenever any",
+        "duplicate is present at all, which would pass that case and be useless."
       ],
       "population": [
         {"n": 10, "alpha": 0.1, "look": "single"},
         {"n": 20, "alpha": 0.05, "look": "single"},
         {"n": 50, "alpha": 0.02, "look": "single"},
-        {"n": 50, "alpha": 0.05, "look": "multi", "sub_look_size": 25}
+        {"n": 50, "alpha": 0.05, "look": "multi", "sub_look_size": 25},
+        {"n": 50, "alpha": 0.05, "look": "single", "group_sizes": {"1": 30, "2": 10}}
       ],
       "assets": "drawn from the board's own group",
       "max_false_abstention_rate": 0.05,

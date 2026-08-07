@@ -70,6 +70,40 @@ def _look(rng: np.random.Generator, count: int, axis: int, jitter: float = 0.10)
     return _unit(base + jitter * rng.normal(size=(count, DIM)))
 
 
+def _duplicated_look(
+    rng: np.random.Generator,
+    group_sizes: list[int],
+    axis: int,
+    base_jitter: float = 0.10,
+    dup_jitter: float = 1e-4,
+) -> np.ndarray:
+    """`len(group_sizes)` distinct sources on `axis`, each repeated to its listed size.
+
+    The distinct sources are scattered exactly as `_look` scatters a whole board, so they survive
+    as one category; each source is then repeated and perturbed by `dup_jitter`, far below the
+    0.05 duplicate cut, so the repeats are near-duplicates of their own source rather than exact
+    copies or copies of a different source. This is `eval/thresholds.json`'s `group_sizes`
+    histogram, expanded to references, for the two cases whose point is n_eff diverging from the
+    file count.
+    """
+    bases = _look(rng, len(group_sizes), axis, jitter=base_jitter)
+    groups = [
+        _unit(
+            np.repeat(base.reshape(1, -1), size, axis=0) + dup_jitter * rng.normal(size=(size, DIM))
+        )
+        for base, size in zip(bases, group_sizes, strict=True)
+    ]
+    return np.vstack(groups)
+
+
+def _expand_group_sizes(histogram: dict) -> list[int]:
+    """`{"3": 4, "4": 2}` (4 groups of 3, 2 groups of 4) -> `[3, 3, 3, 3, 4, 4]`."""
+    sizes: list[int] = []
+    for size, count in histogram.items():
+        sizes.extend([int(size)] * count)
+    return sizes
+
+
 def _hashes(count: int, prefix: str = "r") -> list[str]:
     return [f"{prefix}{index:04d}" for index in range(count)]
 
@@ -118,7 +152,7 @@ def test_thresholds_are_read_from_the_committed_registry(thresholds):
     assert thresholds.path.parent.name == "eval"
     assert thresholds.max_false_abstention_rate == 0.05
     assert thresholds.required_fire_rate == 1.0
-    assert len(thresholds.must_fire_cases) == 3
+    assert len(thresholds.must_fire_cases) == 4
 
 
 def test_env_var_overrides_the_registry_location(tmp_path, monkeypatch, registry):
@@ -250,6 +284,41 @@ def test_asset_from_an_absent_domain_fires_with_reason_far_outlier(thresholds):
     assert verdict.measurement["iqr_multiplier"] == pytest.approx(1.5)
 
 
+def test_resolution_effective_size_arm_fires_only_because_of_n_eff(thresholds):
+    """ADR-0004's second floor on rule 1: a board whose file count alone would honour the
+    request, refused only because near-duplicates lower n_eff below what alpha needs.
+
+    This is the case that discriminates an implementation reading `n_local` (the achievability
+    floor, which admits the request here) from one reading `n_eff_local` (the admissibility
+    floor, which does not); only the second is a conforming rule 1.
+    """
+    case = _must_fire_case(thresholds, "resolution_effective_size_arm")
+    group_sizes = _expand_group_sizes(case["group_sizes"])
+    assert sum(group_sizes) == case["n"]
+
+    rng = np.random.default_rng(100)
+    references = _duplicated_look(rng, group_sizes, axis=0)
+    candidate = _look(rng, 1, 0)[0]
+    partition = _partition(references, candidate)
+    groups = duplicate_groups(references, DUP_CUT)
+    assert sorted(len(group) for group in groups) == sorted(group_sizes)
+
+    resolution_alpha = 1.0 / (case["n"] + 1)
+    assert resolution_alpha < case["alpha"], (
+        "the file-count floor must admit this request, or the case does not discriminate "
+        "an implementation that ignores n_eff from one that reads it"
+    )
+
+    verdict = check_resolution(partition, case["alpha"], groups)
+
+    assert verdict is not None
+    assert verdict.reason == case["expect_reason"] == "resolution"
+    assert verdict.measurement["n_local"] == case["n"]
+    assert verdict.measurement["n_eff_local_source"] == "duplicate_groups"
+    assert verdict.measurement["resolution_alpha"] == pytest.approx(resolution_alpha)
+    assert verdict.measurement["supported_alpha"] > case["alpha"]
+
+
 def test_every_must_fire_case_in_the_registry_is_covered():
     """The registry is the list of cases, so a case added to it without a test here fails loudly
     rather than being silently unmeasured."""
@@ -257,6 +326,7 @@ def test_every_must_fire_case_in_the_registry_is_covered():
         "threshold_below_resolution",
         "two_disjoint_style_groups",
         "asset_from_absent_domain",
+        "resolution_effective_size_arm",
     }
     registered = {case["case"] for case in load_abstention_thresholds().must_fire_cases}
     assert registered == covered
@@ -321,7 +391,11 @@ def test_the_rules_stay_quiet_on_well_formed_boards(thresholds):
     for row_index, row in enumerate(thresholds.must_stay_quiet_population):
         rng = np.random.default_rng(100 + row_index)
         for trial in range(TRIALS):
-            if row["look"] == "single":
+            if row["look"] == "single" and "group_sizes" in row:
+                group_sizes = _expand_group_sizes(row["group_sizes"])
+                assert sum(group_sizes) == row["n"]
+                references = _duplicated_look(rng, group_sizes, axis=0)
+            elif row["look"] == "single":
                 references = _look(rng, row["n"], 0)
             else:
                 sub_look = row["sub_look_size"]
