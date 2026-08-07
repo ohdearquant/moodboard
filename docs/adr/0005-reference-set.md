@@ -109,6 +109,13 @@ mechanism and not merely a number, and the cost is named rather than absorbed. T
 and its parameters are recorded in the report, because an unstated correction to a sample size
 is a worse problem than an uncorrected one.
 
+Both cuts are pinned a priori and neither has moved, but encoder revision 2 changed the
+distances they are applied to, which is recorded as an amendment under ADR-0004 rule 2. The
+two cuts are affected very differently: the 0.35 sub-look cut sees roughly half its pairs
+change side, while the 0.05 duplicate cut barely moves, because near-coincident pairs stay
+near-coincident under any reweighting of the blocks. That asymmetry is a consequence of the
+same argument this paragraph makes for why one pass cannot serve both.
+
 ## Acceptance criteria
 
 This record stays `Proposed` until the following is measured.
