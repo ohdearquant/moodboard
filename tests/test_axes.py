@@ -482,14 +482,27 @@ class TestAdr0003AxisInterventionOnSyntheticImages:
     @pytest.mark.xfail(
         strict=True,
         reason=(
-            "A luminance shift does not clear the registered 2.0 margin on synthetic images, "
-            "and did not clear it in any of twelve independent subject sets, where the ratio "
-            "ran from 0.70 to 1.90. The cause is that palette_distance clusters over the full "
-            "CIELAB vector including L, so a change in lightness moves the palette centroids "
-            "even with chroma held exactly fixed, and palette absorbs much of the response "
-            "that should belong to tone. See TestPaletteDistanceSelfNormalisation for the "
-            "mechanism. Marked strict so that a correction turns this into a failure and the "
-            "marker has to be removed deliberately rather than left behind."
+            "THE CAUSE THIS MARKER ORIGINALLY NAMED IS FIXED, AND THE TEST STILL FAILS FOR A "
+            "DIFFERENT ONE. It used to read that palette_distance clusters over the full "
+            "CIELAB vector including L, so lightness moved the palette centroids and palette "
+            "absorbed response belonging to tone. That was true and is no longer: the "
+            "clustering now runs on the chroma plane per ADR-0003, and at magnitude 0.15 tone "
+            "clears palette and composition by 6.99x against a required 2.0, with palette at "
+            "0.0035. The axis behaves exactly as the record requires wherever the intervention "
+            "is faithful. "
+            "What fails now is the INTERVENTION, not the axis. luminance_shift's docstring "
+            "claims it holds chroma exactly fixed; it does not. Darkening pushes colours out "
+            "of the sRGB gamut and the lab2rgb round trip clips them, which moves chroma for "
+            "real. Measured, fraction of pixels whose chroma moves more than 1.0 Lab unit: "
+            "0.07% at magnitude 0.15, 9.91% at 0.30, 25.98% at 0.45, with a maximum chroma "
+            "move of 12.61 at 0.45. So at the two larger magnitudes palette is correctly "
+            "reporting a chroma change the test did not intend to make, and the ratio "
+            "collapses to 0.52. A competing explanation, that dropping L shrank the earth "
+            "mover normaliser and inflated palette distances, was tested and REFUTED: the "
+            "normaliser is 120.3 chroma-only against 124.0 full-Lab on the same pair. "
+            "Kept strict so the correction still has to remove this marker deliberately. "
+            "Fixing it means making the intervention gamut-safe, which changes a "
+            "pre-registered acceptance instrument and is therefore not a unilateral edit."
         ),
     )
     def test_a_luminance_shift_clears_the_registered_margin(

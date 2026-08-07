@@ -110,14 +110,27 @@ def _luminance01(image: np.ndarray) -> np.ndarray:
 def _dominant_colours(
     image: np.ndarray, k: int = _PALETTE_CLUSTERS, seed: int = _PALETTE_CLUSTER_SEED
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Cluster the image's pixels in Lab space into at most `k` weighted dominant colours.
-    Returns (centroids, weights) with weights summing to 1. Deterministic for a fixed seed."""
-    rgb = _downsample_rgb(image, _PALETTE_DOWNSAMPLE_SIDE)
-    lab = rgb2lab(rgb).reshape(-1, 3)
+    """Cluster the image's pixels in the CIELAB **chroma plane** into at most `k` weighted
+    dominant colours. Returns (centroids, weights) with weights summing to 1, centroids being
+    (a, b) pairs. Deterministic for a fixed seed.
 
-    n_clusters = min(k, lab.shape[0])
+    L is dropped rather than down-weighted, and ADR-0003 states why: palette is the axis of hue
+    and chroma identity, tone is the axis of lightness, so the L channel belongs to tone and is
+    kept out of this clustering. The consequence the record requires be stated is that two
+    images with identical hues at very different lightness have a palette distance of zero.
+
+    This clustered over the full (L, a, b) vector until now, which is the defect ADR-0003
+    records as superseded: a luminance shift moved the palette centroids even with chroma held
+    exactly fixed, palette absorbed response belonging to tone, and the record's own acceptance
+    criterion 4 was unsatisfiable by any conforming implementation. The record was corrected
+    first and the code was left behind it, so this is a conformance fix and not a design change.
+    """
+    rgb = _downsample_rgb(image, _PALETTE_DOWNSAMPLE_SIDE)
+    chroma = rgb2lab(rgb).reshape(-1, 3)[:, 1:]
+
+    n_clusters = min(k, chroma.shape[0])
     if n_clusters <= 1:
-        return lab.mean(axis=0, keepdims=True), np.array([1.0])
+        return chroma.mean(axis=0, keepdims=True), np.array([1.0])
 
     try:
         # A near-uniform image (few or one distinct colour) leaves kmeans++ unable to place
@@ -127,16 +140,18 @@ def _dominant_colours(
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
             warnings.simplefilter("ignore", category=UserWarning)
-            centroids, labels = kmeans2(lab, n_clusters, minit="++", seed=seed, missing="warn")
+            centroids, labels = kmeans2(
+                chroma, n_clusters, minit="++", seed=seed, missing="warn"
+            )
     except Exception:
         # Degenerate input (e.g. every pixel identical) can leave kmeans2 unable to seed
         # distinct starting centroids. The image has effectively one dominant colour.
-        return lab.mean(axis=0, keepdims=True), np.array([1.0])
+        return chroma.mean(axis=0, keepdims=True), np.array([1.0])
 
     counts = np.bincount(labels, minlength=n_clusters).astype(np.float64)
     occupied = counts > 0
     if not occupied.any():
-        return lab.mean(axis=0, keepdims=True), np.array([1.0])
+        return chroma.mean(axis=0, keepdims=True), np.array([1.0])
     centroids = centroids[occupied]
     counts = counts[occupied]
     return centroids, counts / counts.sum()
@@ -169,7 +184,8 @@ def _earth_movers_distance(
 
 
 def palette_distance(image_a: np.ndarray, image_b: np.ndarray) -> float:
-    """Dominant colours in CIELAB compared by earth mover's distance, returned in [0, 1] by
+    """Dominant colours in the CIELAB chroma plane, lightness excluded per ADR-0003, compared
+    by earth mover's distance, returned in [0, 1] by
     normalising against the maximum transport cost the comparison admits, so values are
     comparable across image pairs. Deterministic: any internal clustering uses a fixed seed."""
     colours_a, weights_a = _dominant_colours(image_a)

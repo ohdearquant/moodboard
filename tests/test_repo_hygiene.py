@@ -1,10 +1,10 @@
 """Tracked files must not cite documents that are not tracked.
 
 This repository is public. The engine was built against a specification document that is not
-committed here, and thirteen tracked files cited it by name, several of them by numbered item
-("deliverable 8"). Every one of those citations was unresolvable for any reader who does not have
-the uncommitted file: a footnote pointing at nothing, in prose that reads as if the reader could
-go and check.
+committed here, and thirteen tracked files cited it by name, several of them by its numbered
+items. Every one of those citations was unresolvable for any reader who does not have the
+uncommitted file: a footnote pointing at nothing, in prose that reads as if the reader could go
+and check.
 
 The constraints those citations carried were real and are kept. What is removed is the pointer,
 because a reference is a promise that the referent can be reached, and this one could not be.
@@ -65,15 +65,23 @@ def test_no_tracked_file_cites_the_untracked_specification():
 def test_no_tracked_file_cites_the_specification_by_numbered_item():
     """The same defect without the filename, which a search for the filename alone does not see.
 
-    This is the arm that matters: "deliverable 3" names an item in a document this repository
-    does not contain, and it survives any grep aimed at the document's name. Removing the
-    filename citations while leaving these would have looked complete and left half the problem.
+    This is the arm that matters: a citation of the form <item-word> <number> names an entry in
+    a document this repository does not contain, and it survives any grep aimed at the
+    document's name. Removing the filename citations while leaving these would have looked
+    complete and left half the problem.
+
+    Like the arm above, every literal this searches for is assembled rather than written out.
+    The first version was not, and it passed: an uncommitted file is not in `git ls-files`, so
+    the guard sat outside its own jurisdiction and could not see itself. It began failing the
+    moment it was committed. A repository-wide guard's first green, taken before the guard is
+    tracked, is not evidence about the guard.
     """
     import re
 
-    pattern = re.compile(r"\bdeliverables?\s+\d+", re.IGNORECASE)
+    item_word = "deliver" + "able"
+    pattern = re.compile(rf"\b{item_word}s?\s+\d+", re.IGNORECASE)
 
-    assert pattern.search("per deliverable 8 above"), (
+    assert pattern.search(f"per {item_word} 8 above"), (
         "the pattern does not match a known-positive string, so its silence is not evidence"
     )
 
