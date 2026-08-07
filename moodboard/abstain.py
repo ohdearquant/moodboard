@@ -156,11 +156,17 @@ def _default_thresholds_path() -> Path:
     """Locate `eval/thresholds.json`.
 
     Honours `MOODBOARD_THRESHOLDS` when set, so a caller can point the engine at a different
-    registry deliberately. Otherwise walks up from this file until it finds `eval/thresholds.json`,
-    which works both from a source checkout and from an editable install. Raises rather than
-    falling back to a built-in default, because an engine that cannot find its registry and
-    silently proceeds on numbers compiled into its own source is the exact failure this
-    arrangement exists to prevent.
+    registry deliberately. Otherwise walks up from this file until it finds `eval/thresholds.json`.
+    Raises rather than falling back to a built-in default, because an engine that cannot find its
+    registry and silently proceeds on numbers compiled into its own source is the exact failure
+    this arrangement exists to prevent.
+
+    The walk covers all three layouts, and the first parent it checks is what makes the third
+    work. A source checkout and an editable install both resolve to the repository's own
+    `eval/thresholds.json`, since neither has a `moodboard/eval/` directory to stop at. A wheel
+    install stops at the first parent, because the build force-includes the registry to
+    `moodboard/eval/thresholds.json`; before that, an installed copy raised FileNotFoundError on
+    every abstention call, which was the correct direction to fail in and still unusable.
     """
     override = os.environ.get(_THRESHOLDS_ENV_VAR)
     if override:
