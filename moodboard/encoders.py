@@ -53,6 +53,18 @@ class Encoder(Protocol):
         ...
 
 
+def _unit(part: np.ndarray) -> np.ndarray:
+    """Scale one descriptor block to unit length, leaving an all-zero block alone.
+
+    An all-zero block has no direction to normalise. It is left as zeros rather than raising,
+    because a block can legitimately be empty (a flat image has no salient region) while the
+    other two carry the image; `embed` raises only if the whole concatenation is zero, which
+    is the case that genuinely has no direction.
+    """
+    norm = float(np.linalg.norm(part))
+    return part if norm == 0.0 else part / norm
+
+
 def _feature_parts(image: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """The three fixed-length descriptors `ClassicalEncoder` concatenates, in pinned order.
 
@@ -85,37 +97,50 @@ class ClassicalEncoder:
     weights, no download, deterministic on identical input.
 
     **Axis weighting, measured, because it decides how to read this encoder's distances.**
-    INTERFACES.md pins the construction as the raw concatenation normalised once, with the
-    parts left unnormalised, and that is what is implemented here. The three descriptors
-    arrive on very different scales: the palette and tone histograms are pixel counts over a
-    128-pixel canonical grid, so each carries a squared magnitude of order 1e7 to 1e8, while
-    the composition descriptor is a saliency distribution summing to one plus a ratio in
-    [0, 1], so it carries a squared magnitude of order 1. After the single L2 pass the
-    composition
-    block therefore holds a share of the squared energy of order 1e-9 (measured across
-    synthetic images: 3.2e-10, 4.2e-9, 2.4e-9), which is below float32 resolution in a dot
-    product between two unit rows. Cosine distances from this encoder are, in practice, a
-    function of palette and tone alone.
+    INTERFACES.md revision 2 pins the construction as **each descriptor L2-normalised to unit
+    length, then concatenated, then the whole normalised once**, so the three axes contribute
+    exactly one third of the squared energy each. Revision 1 concatenated the parts raw and
+    normalised only the whole, and that is the defect this construction exists to fix.
 
-    A second consequence of the same scale gap: the palette histogram totals the pixel count
-    of the downsampled image, which depends on the source aspect ratio, while the tone
-    histogram always totals the fixed canonical grid. So the palette-to-tone balance shifts
-    with the shape of the input image.
+    The three descriptors arrive on very different scales: the palette and tone histograms are
+    pixel counts over a 128-pixel canonical grid, carrying squared magnitudes of order 1e7 to
+    1e8, while the composition descriptor is a saliency distribution summing to one plus a
+    ratio in [0, 1], carrying a squared magnitude of order 1. Under revision 1 the composition
+    block therefore held a share of the squared energy of order 1e-9 (measured on three
+    synthetic subjects, uniform noise, gradient and flat colour: 3.31e-10, 4.17e-09, 2.72e-09),
+    which is below float32 resolution in a dot product between two unit rows. The axis was
+    present in the vector and absent from the answer.
 
-    Neither property affects the conformal guarantee, which ADR-0003 states does not depend on
-    the embedding being well behaved, and neither affects the `*_distance` functions in
-    `axes.py`, which are separate computations and are what ADR-0003's axis-intervention
-    criterion measures. Both are recorded here because a caller reading a composition-sensitive
-    result out of this encoder's cosine distances would be reading noise.
+    The decisive measurement was not the energy share. Two images with identical pixel content,
+    a bright square moved from one corner to the other, differ by 0.2318 under
+    `axes.composition_distance` and by 5.96e-08 in revision 1 cosine distance, which is below
+    float32 epsilon. `tests/test_encoders.py` keeps that probe as a must-pass characterisation
+    test with an explicit floor, so this defect class cannot return silently.
+
+    Per-block normalisation also removes a second consequence of the same scale gap, which is
+    why no separate fix is needed for it: the palette histogram totalled the pixel count of the
+    downsampled image and so depended on source aspect ratio, while the tone histogram always
+    totals the fixed canonical grid, so the palette-to-tone balance used to shift with input
+    shape. Neither block's raw total survives unit-normalisation. One test arm is kept on that
+    property for the same reason.
+
+    Neither the old defect nor this fix affects the conformal guarantee, which ADR-0003 states
+    does not depend on the embedding being well behaved, and neither affects the `*_distance`
+    functions in `axes.py`, which are separate computations and are what ADR-0003's
+    axis-intervention criterion measures.
 
     `dim` is fixed by `axes.py`'s bin counts and grid size, not chosen at construction. A
     change to any of those changes every embedding this class produces, so it requires a
     `revision` bump; `tests/test_encoders.py` pins the three part lengths so such a change
-    fails loudly rather than silently invalidating board hashes computed under revision 1.
+    fails loudly rather than silently invalidating board hashes.
+
+    Revision 2 is a semantic break: every embedding and therefore every board hash changes.
+    The set of `brand.mb` artifacts invalidated by it was empty when it landed, which is why it
+    landed then rather than later.
     """
 
     name: str = "classical-v1"
-    revision: str = "1"
+    revision: str = "2"
     dim: int = _classical_dim()
 
     def embed(self, images: Sequence[np.ndarray]) -> np.ndarray:
@@ -131,7 +156,7 @@ class ClassicalEncoder:
         for index, image in enumerate(images):
             _validate_image(image, index)
             parts = _feature_parts(image)
-            vector = np.concatenate(parts)
+            vector = np.concatenate([_unit(part) for part in parts])
             if vector.size != self.dim:
                 raise RuntimeError(
                     f"image at index {index} produced a {vector.size}-length descriptor, "

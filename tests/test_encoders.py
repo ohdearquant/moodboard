@@ -7,7 +7,7 @@ The properties tested are the ones INTERFACES.md states as the Protocol's contra
 shape and dtype, L2-normalised rows, input order preserved, determinism, and no mutation of the
 caller's arrays. Two further tests pin numbers that are not free parameters. The first pins the
 three feature lengths, so a change to `axes.py`'s bin counts fails here rather than silently
-changing every embedding produced under `revision = "1"`. The second characterises the axis
+changing every embedding the encoder produces. The second characterises the axis
 weighting the concatenation produces, so that a future change to it is a deliberate, visible
 act rather than a quiet one.
 """
@@ -190,15 +190,22 @@ class TestRejectedInputNamesTheOffendingPosition:
             ClassicalEncoder().embed([noise_image(20)])
 
 
-class TestTheAxisWeightingThisConstructionProduces:
-    """Characterisation, not aspiration.
+# The floor the moved-square probe must clear. Chosen from the two measurements it sits
+# between rather than picked for roundness: revision 1 scored 5.96e-08 on this pair, revision 2
+# scores 0.03979, and 0.01 is comfortably under the working value while remaining five orders
+# of magnitude above the broken one. A floor set just under 0.03979 would fail on ordinary
+# numerical drift; a floor near 1e-07 would pass the defect it exists to catch.
+MIN_COMPOSITION_ONLY_EMBEDDING_MOVEMENT = 0.01
 
-    INTERFACES.md pins the raw concatenation with a single L2 pass over the whole vector and
-    states that the parts are not normalised individually. The three descriptors are on very
-    different scales, so that construction leaves the composition block numerically negligible.
-    This is recorded in `ClassicalEncoder`'s docstring and pinned here so that changing the
-    construction breaks a test and forces both the docstring and the encoder revision to move
-    with it.
+
+class TestEachAxisCarriesEqualWeightInTheEmbedding:
+    """The construction INTERFACES.md revision 2 pins: each descriptor normalised to unit
+    length, then concatenated, then the whole normalised once.
+
+    These were characterisation tests of a defect. Revision 1 concatenated the parts raw and
+    normalised only the whole, which left the composition block at a share of squared energy
+    of order 1e-9, below float32 resolution in a dot product. They asserted that share stayed
+    negligible. The construction was ruled changed, so they now assert what replaced it.
     """
 
     @staticmethod
@@ -214,21 +221,68 @@ class TestTheAxisWeightingThisConstructionProduces:
         )
 
     @pytest.mark.parametrize("seed", [17, 18, 19])
-    def test_composition_holds_a_negligible_share_of_the_energy(self, seed):
-        _, _, composition = self._energy_shares(noise_image(seed))
-        assert composition < 1e-6
+    def test_every_axis_holds_one_third_of_the_squared_energy(self, seed):
+        shares = self._energy_shares(noise_image(seed))
+        for share in shares:
+            assert share == pytest.approx(1.0 / 3.0, abs=1e-6)
 
-    def test_palette_and_tone_hold_essentially_all_of_it(self):
-        palette, tone, _ = self._energy_shares(gradient_image())
-        assert palette + tone > 1.0 - 1e-6
+    def test_composition_is_no_longer_negligible(self):
+        """The specific failure revision 2 exists to fix, asserted as its own arm.
 
-    def test_the_palette_to_tone_balance_shifts_with_the_input_shape(self):
-        # The palette histogram totals the pixel count of the downsampled image, which depends
-        # on the source shape; the tone histogram always totals the fixed canonical grid.
+        Stated separately from the one-third test because it is the claim a reader cares about
+        and because it fails for a reason the reader can act on: under the old construction this
+        number was 1e-9 and a composition-sensitive result read out of this encoder was noise.
+        """
+        _, _, composition = self._energy_shares(gradient_image())
+        assert composition > 0.3
+
+    def test_a_composition_only_change_moves_the_embedding(self):
+        """The decisive probe, kept permanently and required to pass.
+
+        Two images with identical pixel content, a bright square moved corner to corner, so
+        only composition differs. `axes.composition_distance` calls them 0.2318 apart. Under
+        revision 1 their embeddings were 5.96e-08 apart, below float32 epsilon: the axis was
+        present in the vector and absent from the answer. An energy-share assertion alone would
+        not have caught that, because a block can hold a third of the energy and still be
+        dominated by whatever it shares the vector with; this measures the thing that matters,
+        which is whether the encoder's own distances can see the axis at all.
+        """
+        side = 128
+        corner = np.zeros((side, side, 3), dtype=np.uint8)
+        corner[:20, :20] = 255
+        opposite = np.zeros((side, side, 3), dtype=np.uint8)
+        opposite[-20:, -20:] = 255
+
+        assert corner.sum() == opposite.sum(), (
+            "the two probe images must carry identical pixel mass, or this measures a "
+            "brightness change rather than a composition change"
+        )
+        assert axes.composition_distance(corner, opposite) > 0.1, (
+            "the composition axis itself must see this pair, or the probe says nothing about "
+            "the encoder"
+        )
+
+        first, second = ClassicalEncoder().embed([corner, opposite])
+        movement = 1.0 - float(np.dot(first.astype(np.float64), second.astype(np.float64)))
+        assert movement > MIN_COMPOSITION_ONLY_EMBEDDING_MOVEMENT, (
+            f"a composition-only change moved the embedding by {movement:.3e}, under the "
+            f"{MIN_COMPOSITION_ONLY_EMBEDDING_MOVEMENT} floor; revision 1 scored 5.96e-08 here"
+        )
+
+    def test_the_palette_to_tone_balance_no_longer_shifts_with_the_input_shape(self):
+        """The second consequence of the same scale gap, which the fix removes for free.
+
+        The palette histogram totalled the pixel count of the downsampled image, which depends
+        on source shape, while the tone histogram always totals the fixed canonical grid, so
+        the balance between them used to move with aspect ratio. Neither raw total survives
+        unit-normalisation. Kept as an arm because it is a distinct property from the energy
+        shares and would be the first thing to break if per-block normalisation were applied to
+        only some of the blocks.
+        """
         square_palette, square_tone, _ = self._energy_shares(flat_image((120, 60, 30), side=64))
         wide = np.tile(np.array([120, 60, 30], dtype=np.uint8), (16, 256, 1))
         wide_palette, wide_tone, _ = self._energy_shares(wide)
-        assert not np.isclose(square_palette / square_tone, wide_palette / wide_tone, rtol=1e-3)
+        assert square_palette / square_tone == pytest.approx(wide_palette / wide_tone, rel=1e-6)
 
 
 # A population wide enough that the normalisation property is tested as a property rather than
