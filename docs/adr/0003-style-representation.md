@@ -228,9 +228,25 @@ establish the claim.** Separability between two axes is a symmetric assertion, s
 measurements:
 
 - *Lightness isolation.* Shift luminance with chroma held exactly fixed. **Tone** clears the 2.0
-  margin over palette.
+  margin over palette. This is the `luminance_shift` intervention.
 - *Chroma isolation, the mirrored arm.* Shift hue and chroma with lightness held exactly fixed.
-  **Palette** clears the 2.0 margin over tone.
+  **Palette** clears the 2.0 margin over tone. This is the existing `recolour` intervention,
+  which rotates the (a, b) plane and leaves L untouched.
+
+An earlier version of this record registered a fourth intervention for the chroma arm, on the
+stated ground that a general recolour might move lightness as well and so could not isolate
+chroma. That ground was false about the implementation actually in the tree, and it was written
+without reading it. Measured across six subjects at three magnitudes, `recolour` moves lightness
+by a median absolute 0.22 on the 0-100 L scale, against 11.15 for `luminance_shift` on the same
+subjects. The residue is sRGB gamut clipping on the round trip, it is two percent of the
+deliberate intervention, and it does not disqualify the arm. The fourth intervention was a
+duplicate and is withdrawn.
+
+The strength of this arm is stated here rather than left to be rediscovered: on the synthetic
+population `recolour` ranks palette first in twelve of twelve subject sets but clears the 2.0
+margin in only ten of twelve, over a ratio range of 1.45 to 4.58. So the chroma direction is
+real and is weaker than the composition evidence, which clears at 6.49 and above. A passing
+chroma arm is not by itself proof of symmetry.
 
 Both are required. This is recorded because the natural repair, when one direction fails, is to
 fix that direction and re-run it alone, which measures one arm of a two-arm claim while reading
