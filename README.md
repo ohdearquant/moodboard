@@ -92,9 +92,13 @@ required-pull-request rule that the only pusher is permitted to bypass would be 
 statement about how code actually gets in, and a false control is worse than a missing
 one because it gets cited. The rule was removed rather than left standing as decoration.
 
+The deletion and force-push rules carry no bypass at all, including for administrators, so
+they bind every actor including the one that does the pushing. That is deliberate. Those
+two guard irreversible acts that normal work here never performs, so making them real costs
+nothing and leaves the ruleset saying only true things.
+
 This is written down so that the absence of a pull-request requirement reads as a
-decision. If a second author starts committing here, the rule should come back and the
-bypass should go with it.
+decision. If a second author starts committing here, the rule should come back.
 
 ## Licence
 
