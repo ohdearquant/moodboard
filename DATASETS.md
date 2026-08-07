@@ -177,12 +177,22 @@ the coarse test and be useless on this one, so this row exists to say which of t
 tool's claim rests on. **It is the more important of the two measurements and it currently has
 no dataset.** The section above records why Unsplash cannot serve it.
 
-The protocol itself survives the source going away, so it is stated here for whatever replaces
-it. It needs a corpus of photographs carrying two independent groupings: a **style** grouping
-where members plausibly share a look, and a **content** label per photo. Build the same two
-pair families as the coarse test — same style with different content, different style with
-same content — and report the AUC for ranking the first family above the second, for CSD and
-each baseline.
+**Amendment, adopted: the style grouping is the PHOTOGRAPHER, not a curated collection.** The
+original protocol grouped by collection on the assumption that a curated collection is a
+coherent look. That assumption was measured and does not hold — the largest collections are
+subject buckets, and a filter meant to exclude subject-dominated ones failed in both
+directions, rejecting everything when read as within-group share and admitting hoards when
+read as lift. The measurements are in the section above. Photographer identity assumes no
+curation at all: same person, same equipment, same grade, varying subject. On the source that
+prompted the change it yielded 87 usable groups from 8,558 photographers, covering 3,925
+photos in groups of 15 to 442, which is a real population rather than a residue.
+
+The protocol survives the source going away, so it is stated here for whatever replaces it. It
+needs a corpus of photographs carrying two independent groupings: a **style** grouping, now
+the photographer or equivalent creator identity, and a **content** label per photo. Build the
+same two pair families as the coarse test — same style with different content, different style
+with same content — and report the AUC for ranking the first family above the second, for CSD
+and each baseline.
 
 Requirements a candidate source has to meet, each of which came from something that went wrong
 above:
@@ -196,6 +206,25 @@ above:
    corpus rate rather than raw within-group share.
 4. **Enough groups of enough size**: boards run to 50, and members must be held out, so a
    usable group needs roughly 15 items minimum and the corpus needs tens of such groups.
+5. **A creator field per item**, since the style grouping is now creator identity. A source
+   with per-item licence metadata but no creator cannot serve this protocol.
+
+**Candidate routes, in the order they get tried.** Openly-licensed aggregators that carry both
+per-item licence metadata and a creator field are the first choice — Openverse and Wikimedia
+Commons both do, and both should be screened on the creator field before anything else, since
+a source failing requirement 5 is out regardless of how good its licensing is. Second choice
+is a source whose bulk-dataset terms block publication but whose ordinary content licence does
+not; that licence gets read at its own source with the same care that found clause 3.A above,
+and never inferred from the restrictive one.
+
+**Decision rule, fixed now so the choice does not turn into a survey.** The first route
+yielding roughly 50 or more creator groups of 20 or more members, with per-item licence
+clarity, wins. If both qualify, the openly-licensed aggregator wins on reproducibility, since
+a reader can rebuild the set without holding any permission the repository cannot grant them.
+
+Not pursued: seeking written permission for an otherwise-blocked source. An acceptance
+criterion whose reproduce command depends on a permission the reader cannot obtain is not
+reproducible, which contradicts the rule at the top of this file.
 
 ### `off-style-rejection`
 
