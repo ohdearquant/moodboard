@@ -1,0 +1,48 @@
+[project]
+name = "moodboard"
+version = "0.1.0"
+description = "Score how well a candidate image fits a reference moodboard, with a calibrated interval and a per-axis decomposition."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "scikit-image>=0.22",
+    "Pillow>=10.0",
+    # Not in the module's own axis or encoder math: report.py needs a validator for the
+    # committed JSON Schema file (IMPLEMENTATION_CONTRACT.md deliverable 1), and hand-rolling
+    # a JSON Schema validator duplicates a well-tested library rather than depending on one.
+    # See INTERFACES.md for the full rationale.
+    "jsonschema>=4.20",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+moodboard = "moodboard.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["moodboard"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# datasets/ predates this config and is not part of the moodboard package; its fetch scripts
+# are a separate concern from the engine this pyproject builds and are not linted here.
+extend-exclude = ["datasets"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

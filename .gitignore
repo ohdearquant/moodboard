@@ -40,3 +40,7 @@ node_modules/
 .DS_Store
 .idea/
 .vscode/
+
+# Progress report required by IMPLEMENTATION_CONTRACT.md. It is written before any code and
+# overwritten as work proceeds; the contract requires it stay untracked.
+IMPLEMENTATION_REPORT.md
