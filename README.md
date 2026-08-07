@@ -68,7 +68,7 @@ acceptance test attached: see [ADR-0003](docs/adr/0003-style-representation.md).
 **A standalone tool: the CLI, the library, and a self-contained HTML report.** It depends on
 nothing a contributor cannot get for free — clone the repository, fetch the datasets, and
 every measurement reproduces. No design-application SDK is a dependency of anything here,
-for any host ([ADR-0007](docs/adr/0007-standalone.md)). Integrations are possible precisely
+for any host ([ADR-0006](docs/adr/0006-standalone.md)). Integrations are possible precisely
 because they are not needed: the JSON report is the boundary, and anything that wants to
 display a score consumes the report file on its own side of it.
 
