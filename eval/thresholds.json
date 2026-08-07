@@ -123,13 +123,28 @@
     "interventions": [
       "recolour",
       "luminance_shift",
-      "crop"
+      "crop",
+      "chroma_shift_l_fixed"
     ],
     "expected_dominant_axis": {
       "recolour": "palette",
       "luminance_shift": "tone",
-      "crop": "composition"
+      "crop": "composition",
+      "chroma_shift_l_fixed": "palette"
     },
+    "_paired_arms_comment": [
+      "luminance_shift and chroma_shift_l_fixed are the two arms of ONE symmetric claim, that",
+      "palette and tone are separable, and both are required. luminance_shift holds chroma",
+      "exactly fixed and tone must win; chroma_shift_l_fixed holds L exactly fixed and palette",
+      "must win. recolour is NOT the second arm: it is a general recolour that may move",
+      "lightness too, so it cannot isolate chroma and passing it says nothing about symmetry.",
+      "Registered after the lightness arm was measured unsatisfiable (ADR-0003, twelve subject",
+      "sets, ratio 0.70-1.90 against 2.0) because palette clustered over full CIELAB including",
+      "L. The repair was to cluster palette on (a, b) only. The mirrored arm exists so the",
+      "repair cannot be validated by re-running only the direction that failed, and it is the",
+      "arm that catches the opposite error: a palette axis stripped so far toward chroma that",
+      "it stops responding to a real recolour passes the lightness arm perfectly and fails here."
+    ],
     "_removed_grain_comment": [
       "A grain -> texture row was registered here while the axis vocabulary is exactly",
       "palette, tone, composition, asserted by ADR-0002's schema invariant. Texture is not",
