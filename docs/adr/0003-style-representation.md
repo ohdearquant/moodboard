@@ -45,17 +45,30 @@ ratio. These are cheap, they are interpretable to a designer without any explana
 they cover the part of "look" that a person can name. They are never folded into the style
 axis silently. ADR-0002 requires them on the page.
 
-**Combination is a stated function, not a learned one, in the first version.** There is no
-labelled data for what weighting matches human judgment, so learning one would be fitting to
-nothing. The combination is documented, its weights are configurable, and the axes remain
-visible so a reader can disagree with the weighting and still use the report.
+**There is no combined score in the first version.** There is no labelled data for what
+weighting matches human judgment, so learning one would be fitting to nothing, and a
+hand-picked weighting would be a number wearing the statistical machinery's authority without
+its guarantee. The report's `score` field is the style axis's conformal p-value alone, defined
+below. The classical axes are reported beside it and are never folded in. A blended
+convenience index, if a viewer ever wants one, is a labelled viewer concern and never occupies
+`score`. An earlier draft of this record promised a documented combining function; that
+promise is withdrawn here rather than left dangling, because two implementers reading it
+would have built two different scores.
 
-**Distance is to the reference distribution, not to a centroid.** Brands carry sub-looks, so
-a reference set is frequently multi-modal and its mean can sit in a gap where no reference
-lives. With n between 10 and 50 against several hundred dimensions the sample covariance is
-singular, so it is regularised by shrinkage, with the estimator and its parameter recorded in
-the report. Scores are calibrated by leave-one-out against the board itself, which is what
-makes them comparable across boards.
+**Distance is local, to the nearest references, not to a centroid or a fitted Gaussian.**
+Brands carry sub-looks, so a reference set is frequently multi-modal and its mean can sit in
+a gap where no reference lives. The nonconformity measure is therefore pinned as: embeddings
+are L2-normalised, distance is cosine distance (one minus cosine similarity), and the
+nonconformity of an observation is its mean distance to its k nearest neighbours among the
+other observations in the bag, with k = min(5, n − 1). A local measure needs no covariance
+estimate and degrades gracefully on multi-modal boards, because each point is judged against
+its own neighbourhood. The shrunk-covariance Mahalanobis machinery an earlier draft called
+for is demoted to board diagnostics (the tightness and leverage statistics in ADR-0002),
+where a misestimated geometry misleads a summary rather than the score; if it is ever
+promoted back into the score path, that is a new record with its own validation, since at
+n ≤ 50 against 768 dimensions almost all of its geometry would come from the shrinkage
+target rather than from the data. Scores are calibrated against the board itself as defined
+below, which is what makes them comparable across boards.
 
 ## What the number means, and the board size that bounds it
 
@@ -64,11 +77,25 @@ said scores are "calibrated by leave-one-out against the board itself" and never
 the resulting number *is*. A report that prints an uninterpreted number is the failure
 ADR-0002 exists to prevent, and it was about to print one.
 
-The score is a **conformal p-value**. Take the mean distance to the k nearest references as
-the nonconformity measure, compute it for the candidate and for every reference under
-leave-one-out, and report the fraction of references at least as unusual as the candidate.
-Under exchangeability of the references with the candidate, that is a finite-sample inlier
-test with a guarantee that does not depend on the embedding being well behaved.
+The score is a **conformal p-value**, and the construction is the symmetric full-conformal
+one, stated exactly because an asymmetric paraphrase of it carries no guarantee. Form the
+augmented bag of n + 1 observations: the n references plus the candidate. For every
+observation in that bag, including the candidate, compute the same nonconformity measure
+against the other n observations of the bag: mean cosine distance to its k nearest
+neighbours among them, k = min(5, n − 1). Call these α₁ … αₙ for the references and
+α_cand for the candidate. The score is
+
+    p = (1 + #{i : αᵢ ≥ α_cand}) / (n + 1)
+
+with ties counted in the numerator, which is the conservative direction. Every observation
+in the bag is treated by the same rule, so under exchangeability of the references with the
+candidate this is a finite-sample inlier test with a guarantee that does not depend on the
+embedding being well behaved. Two things an implementer must not substitute: the fraction is
+over n + 1, not over n, and each reference's αᵢ is computed with the candidate present in
+its neighbour pool — scoring references only against each other breaks the permutation
+symmetry the guarantee rests on. Exchangeability itself is an assumption about how the board
+and candidate were assembled, not a property the tool can verify; the guarantee is stated
+conditional on it, and ADR-0005 records the ways real curation strains it.
 
 **It is not a probability that an asset is on-brand.** It answers "would this look out of
 place among these references", which is a narrower question than "is this right for the
@@ -97,11 +124,20 @@ an already-registered number is worse than the gap it closes.
 
 ## Acceptance criteria
 
-This record stays `Proposed` until all **five** measurements exist in the repository, each
-reproducible by the command named in its dataset row. The first three test the
-representation. The last two, added later, test the report's labels and the weights the
-whole thing runs on, and are cheap: neither needs human labels and neither needs a dataset
-this repository cannot obtain.
+This record stays `Proposed` until **four gating** measurements exist in the repository, each
+reproducible by the exact command in its dataset row. A fifth, off-style rejection, is
+informational and does not gate — see criterion 3 for why the demotion, not the inclusion,
+is the honest call.
+
+**Two of the four cannot run today and this record therefore cannot be accepted today.**
+Content invariance on brand photography has no dataset, and weight reproduction has no
+licensed WikiArt route. Neither is a failing measurement; both are absent ones, and the
+distinction matters because `content_invariance.on_partial_pass` governs an observed brand
+*failure* and says nothing about an unavailable measurement. `DATASETS.md` now carries
+`weight-reproduction` as an explicit blocked row rather than a sentence, and both rows must
+reach a runnable state before this record can be accepted rather than partially accepted.
+The sentence "neither needs a dataset this repository cannot obtain" was in this preamble and
+was false about the WikiArt row when written.
 
 **1. Content invariance, coarse.** On a set with a full crossing of style and subject, embed
 every image and compare two families of pairs: same style with different subject, and
@@ -125,9 +161,14 @@ point is to keep the conclusion and soften the test.
 on illustration and painting, which is the domain the published evaluations use. The intended
 use is commercial photography, where styles differ by lighting, grade, grain and framing
 rather than by medium, and those differences are far smaller. A representation can pass the
-coarse test and be useless here. So the same test runs on human-curated photographic
-collections, with the collection standing for style and the photograph's own subject
-standing for content.
+coarse test and be useless here. So the same test runs on photographs carrying two independent
+groupings, with the photographer — creator identity — standing for style and the
+photograph's own subject standing for content. An earlier version of this paragraph said
+"human-curated collections, with the collection standing for style"; that assumption was
+measured against a real release and refuted (the largest collections are subject buckets),
+and the adopted amendment in `DATASETS.md` under `content-invariance-brand` governs. Creator
+identity assumes no curation at all: same person, same equipment, same grade, varying
+subject.
 
 Passing the coarse test and failing this one is a real possible outcome and it would change
 the product rather than end it, since the honest response is a narrower claim about what kind
@@ -136,10 +177,19 @@ time: `content_invariance.on_partial_pass` in `eval/thresholds.json` says the re
 accepted as written, the claim narrows to the domain that passed, and the narrowing goes in
 the README where a reader sees it.
 
-**3. Off-style rejection.** Build a board from one group, score assets from that group and
-assets drawn from a deliberately different group, and require that every on-look asset ranks
-above every off-look one. This is the weakest of the three tests and it is included because
-it is the one a reader will try first, by hand, with two obviously different folders.
+**3. Off-style rejection — informational, and not a gate.** Build a board from one group,
+score assets from that group and assets drawn from a deliberately different group, and
+require that every on-look asset ranks above every off-look one, over 100 resampled board
+pairs rather than one board per group so that board-selection variance is measured. This is
+the weakest of the tests and it is kept because it is the one a reader will try first, by
+hand, with two obviously different folders.
+
+It does not gate acceptance, and the reason is the caveat it always carried: on the only
+runnable source its groups differ by *medium*, so a green result says a photograph is not a
+sketch and says nothing about discriminating treatments within commercial photography. A
+measurement that cannot distinguish the property it is named for should not be able to
+certify it. It becomes a gate on a source whose groups differ by treatment within a medium,
+which is the same source the brand row needs.
 
 **4. The axes measure what their labels claim.** The classical axes are reported separately
 under the names palette, tone and composition, and until now nothing checked that those
@@ -149,10 +199,16 @@ richer while telling a designer less than a single number honestly labelled.
 
 Take an image, apply one intervention at a time, and record how much each axis moves.
 Recolouring must move palette most. A luminance shift must move tone most. Cropping must
-move composition most. Added grain must move texture most. Acceptance, pre-registered in
-`eval/thresholds.json` under `axis_intervention`: the intended axis moves at least twice as
-much as the largest unintended one. An axis that fails loses its name in the report and
-appears as an unlabelled component, or comes out.
+move composition most. Acceptance, pre-registered in `eval/thresholds.json` under
+`axis_intervention`: per-axis movements are normalised before comparison (each axis's
+movement is divided by that axis's median absolute movement across all interventions, so the
+ratio compares like with like rather than raw units), and the intended axis moves at least
+twice as much as the largest unintended one. An axis that fails loses its name in the report
+and appears as an unlabelled component, or comes out. There is no grain row: texture is not
+one of the v1 axes, so a grain intervention has no registered axis to move, and a test case
+whose expected winner is absent from the vocabulary can only fail by schema rather than
+inform. If a texture axis is ever added — the Gram-matrix statistic in the alternatives is
+the standing candidate — it arrives with its own intervention row before it gets a name.
 
 This runs entirely on images the repository already has, needs no human judgment, and would
 have caught a mislabelled decomposition that every other test in this record passes.
@@ -164,11 +220,23 @@ not guarantee the right one, and a pinned wrong answer is more durable than an u
 because it is reproducible.
 
 So reproduce the published benchmark before quoting it: WikiArt artist retrieval, mAP@1,
-against the reported 64.56 from arXiv:2404.01292. Acceptance is a shortfall of no more than
-2 absolute points. On failure the weights are not the paper's, and either weights that do
-reproduce it are found or that published number is struck from every claim here. Citing a
-paper's benchmark while running weights that miss it is the quiet version of making the
-number up.
+against the reported 64.56 from arXiv:2404.01292. Acceptance is a deviation of no more than
+2 absolute points **in either direction**. A one-sided shortfall gate accepts an arbitrarily
+higher result, and a score meaningfully above the published number is evidence of a protocol
+or checkpoint mismatch exactly as a lower one is. On failure the weights are not the paper's,
+and either weights that do reproduce it are found or that published number is struck from
+every claim here. Citing a paper's benchmark while running weights that miss it is the quiet
+version of making the number up.
+
+**Landing within tolerance does not prove the checkpoint is the paper's, and this criterion
+used to imply that it did.** Several checkpoints and protocols can reproduce one number to
+two points, so agreement is necessary and not sufficient. The criterion compares the
+checkpoint's own sha256 against an authoritative published hash where one exists. Where none
+exists, the claim is renamed rather than stretched: the repository says "benchmark reproduced
+under this pinned revision" and never "the paper's weights".
+
+This criterion has no dataset today. `DATASETS.md` carries `weight-reproduction` as a blocked
+row needing a licensed WikiArt route with an exact split, preprocessing and command.
 
 ## Alternatives considered
 

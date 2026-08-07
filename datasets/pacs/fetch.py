@@ -34,7 +34,14 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _common import Expected, FetchError, download, write_checksums, write_manifest  # noqa: E402
+from _common import (  # noqa: E402
+    Expected,
+    FetchError,
+    download,
+    verify_checksums,
+    write_checksums,
+    write_manifest,
+)
 
 HERE = Path(__file__).resolve().parent
 RAW = HERE.parent / "_raw"
@@ -66,12 +73,31 @@ EXPECTED_LABELS = {
     0: "dog", 1: "elephant", 2: "giraffe", 3: "guitar",
     4: "horse", 5: "house", 6: "person",
 }
+# The protocol builds both pair families in every style x content cell, so a cell
+# that arrived empty silently narrows the measurement to whatever remained.
+# Marginal totals cannot see this: the published per-domain and per-class counts
+# can both match while one cell holds nothing.
+EXPECTED_CELLS = len(EXPECTED_DOMAINS) * len(EXPECTED_LABELS)  # 28
+# Exact duplicates across domains would seed the cross-style family with pairs
+# that are trivially identical. DATASETS.md registers this at zero, so it is an
+# assertion; a printed count enforces nothing.
+EXPECTED_EXACT_DUPLICATES = 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    import argparse
     import hashlib
 
     import pyarrow.parquet as pq
+
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--write-checksums",
+        action="store_true",
+        help="MAINTAINER: rewrite checksums.sha256 from this run instead of "
+        "verifying against it. Commit the result separately, saying what moved.",
+    )
+    regenerate = ap.parse_args(argv).write_checksums
 
     print(f"PACS <- {REPO} @ {REVISION[:12]}")
     local = RAW / "pacs-train-00000.parquet"
@@ -120,19 +146,49 @@ def main() -> int:
     if set(by_label) != set(EXPECTED_LABELS.values()):
         raise FetchError(f"class vocabulary is {sorted(by_label)}")
 
-    # Exact duplicates across domains would inflate the cross-style family with
-    # pairs that are trivially identical, so the count is recorded rather than
-    # discovered later. It is reported, not fatal: PACS is assembled from
-    # overlapping public sources and some duplication is expected.
+    # Marginals agreeing is not the same as every cell being populated, and the
+    # protocol needs the cells: it builds same-style pairs within a domain across
+    # classes and cross-style pairs within a class across domains, so an empty
+    # cell removes pairs from both families without changing either marginal.
+    by_cell = Counter((r["style_group"], r["content_group"]) for r in rows)
+    if len(by_cell) != EXPECTED_CELLS:
+        missing = sorted(
+            (d, c)
+            for d in EXPECTED_DOMAINS
+            for c in EXPECTED_LABELS.values()
+            if (d, c) not in by_cell
+        )
+        raise FetchError(
+            f"expected {EXPECTED_CELLS} populated style x content cells, found "
+            f"{len(by_cell)}. Missing: {missing}"
+        )
+
+    # DATASETS.md registers zero exact duplicates, and a registered number that
+    # nothing asserts is a number that stops being true without anyone noticing.
+    # Duplicates across domains would seed the cross-style family with trivially
+    # identical pairs, which is the family the AUC is supposed to rank below.
     dupes = n - len(seen)
+    if dupes != EXPECTED_EXACT_DUPLICATES:
+        raise FetchError(
+            f"expected {EXPECTED_EXACT_DUPLICATES} exact-duplicate images, found "
+            f"{dupes}. The cross-style pair family would carry identical pairs, so "
+            "resolve this before measuring rather than recording it as a caveat."
+        )
 
     manifest = HERE / "manifest.jsonl"
     written = write_manifest(rows, manifest)
-    write_checksums([manifest], HERE / "checksums.sha256", relative_to=HERE)
+    checksums = HERE / "checksums.sha256"
+    if regenerate:
+        write_checksums([manifest], checksums, relative_to=HERE)
+        print(f"  checksums REWRITTEN at {checksums.name} (maintainer action)")
+    else:
+        verify_checksums([manifest], checksums, relative_to=HERE)
+        print("  checksums: rebuilt manifest matches the committed expectation")
 
     print(f"  manifest: {written} rows")
     print(f"  style groups:   {dict(sorted(by_domain.items()))}")
     print(f"  content groups: {dict(sorted(by_label.items()))}")
+    print(f"  populated cells: {len(by_cell)}/{EXPECTED_CELLS}")
     print(f"  exact-duplicate images: {dupes}")
     return 0
 

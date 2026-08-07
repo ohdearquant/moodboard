@@ -35,15 +35,62 @@ and there is currently nothing in the system that would notice.
 ## Decision
 
 **The board is a versioned artifact with a content hash, and every score names it.** The
-`brand.mb` file carries a hash over the reference images and the fitting parameters, and
-ADR-0002's report echoes it. Two scores are comparable when their board hashes match and are
-not comparable otherwise. This is cheap, it is exact, and it removes an entire class of
-argument about whether two numbers can be put beside each other.
+`brand.mb` file carries the hash and ADR-0002's report echoes the same value under
+`board.id`. One definition, used in both places: sha256 over a canonical JSON serialisation,
+with sorted keys and no insignificant whitespace, of the object
 
-**The tool reports effective sample size, not just file count.** At build time, cluster the
-references and report both n, the number of files, and n_eff, an estimate that discounts
-near-duplicates. Every downstream rule that currently reads n reads n_eff instead: the
-resolution bound in ADR-0003, the threshold refusal in ADR-0004, and the sub-look minimum.
+    {"v": 1, "refs": [sorted reference content hashes],
+     "model": {"repo": …, "revision": …},
+     "fit": {"metric": "cosine", "k": …, "cluster_cut": …, "dup_cut": …}}
+
+Two scores are comparable when their board hashes match and are not comparable otherwise.
+Including the fitting parameters is the load-bearing part: an earlier version had ADR-0002
+hashing the reference content alone while this record hashed content plus parameters, which
+means changing k or a clustering cut would have preserved the identifier under one record and
+changed it under the other, and scores fitted under incompatible parameters would have been
+put side by side under a matching id. Any parameter that can change a score belongs inside
+this hash, and adding one bumps `v`.
+
+**The tool reports effective sample size, not just file count.** At build time, group the
+references by near-duplication and report both n, the number of files, and n_eff, an estimate
+that discounts near-duplicates.
+
+The estimator is pinned, because "an estimate that discounts near-duplicates" is a sentence
+several incompatible formulas satisfy. Near-duplicate grouping is a **separate** procedure
+from the sub-look clustering in ADR-0004 and uses the opposite distance regime: sub-looks are
+far apart, duplicates are almost coincident. Group references by single-linkage agglomerative
+clustering on the L2-normalised style embeddings under cosine distance, cut at 0.05, giving
+groups g₁ … g_m of sizes s₁ … s_m summing to n. Then
+
+    n_eff = (Σ sᵢ)² / Σ sᵢ²
+
+which is Kish's effective sample size applied to equal weights within a group. It equals n
+when every group is a singleton, equals m when all groups are the same size, and lies between
+otherwise. It is reported as a real number and never rounded before use. An earlier version
+of this record said the estimate came from "the same clustering ADR-0004 already needs";
+that was wrong in a way that would have shipped, because one cut cannot separate sub-looks
+and collapse duplicates at once.
+
+**n_eff is a reported diagnostic and an admissibility floor. It is not the conformal
+denominator.** An earlier version of this record said every downstream rule reading n reads
+n_eff instead, and that rule is withdrawn here rather than softened. The achievable p-values
+of a conformal score are determined by the number of ranked calibration scores actually in
+the bag, which is a count of files and cannot be a fractional estimate; 1/(n_eff+1) is
+frequently not an achievable value at all, and substituting it does not restore
+exchangeability after clustered selection — it only relabels the same score. So:
+
+- **The score's denominator stays n_local**, the count of references in the candidate's
+  category, exactly as ADR-0003 and ADR-0004 define it. The report carries it.
+- **n_eff gates what the tool will agree to answer.** A requested α is honoured only when it
+  is at least 1/(n_eff_local+1). This is a conservative policy floor, labelled as one, and it
+  is the mechanism by which a board of twenty near-identical files stops advertising
+  twenty-file resolution.
+- **The report carries n, n_eff and the requested α side by side**, so a reader can see the
+  gap rather than inferring it from a single corrected number.
+
+Restoring the guarantee itself under dependent references needs a weighted or cluster
+conformal construction with its own theorem, which is the deferred alternative at the end of
+this record and not something a substitution can stand in for.
 
 **A board is not rejected for containing duplicates.** They are usually there for a good
 reason and removing them is the user's decision, not the tool's. The tool reports the gap,
@@ -69,19 +116,38 @@ Two numbers must move, and pre-registration lives in `eval/thresholds.json` unde
 `effective_board_size`:
 
 1. The duplicated board must be measurably more restrictive on held-out on-style assets than
-   the distinct board of the same file count. If it is not, the premise of this record is
-   wrong and it should be rejected rather than kept for tidiness.
+   the distinct board of the same file count. **The effect is fixed now, before any pilot:**
+   a rejection-rate difference of at least 0.10 in absolute terms at α = 0.05, one-sided, on
+   a held-out on-style population of 500 assets across 20 board pairs. At that size the
+   standard error on a rejection-rate difference near 0.2 is under 0.03, so 0.10 is more than
+   three standard errors and the pass/fail boundary is not a coin flip. An earlier version
+   deferred this number until "the pilot fixes the sampling error", which is a threshold
+   chosen after seeing the result wearing a pre-registration label — the exact move the
+   preamble of `eval/thresholds.json` exists to forbid. If the pilot shows the sampling error
+   was badly misjudged, that is a commit to this file stating what was learned, which is the
+   visible act the policy intends.
+
+   If the effect is below 0.10, the premise of this record is wrong and it should be rejected
+   rather than kept for tidiness.
 2. n_eff on the duplicated board must land closer to the count of distinct sources than to the
-   file count, within a stated tolerance.
+   file count, within the tolerance in `eval/thresholds.json`. The tolerance is a fraction of
+   the interval between those two counts, so it has a unit and a denominator:
+   `|n_eff − distinct| / |file_count − distinct| ≤ 0.25`.
 
 The first is the falsifier and it comes first deliberately. It is entirely possible that the
 effect is negligible at these board sizes, and this record should be capable of dying on that
 measurement instead of surviving because the correction it proposes was implemented.
 
-**A control that keeps the first number honest.** Restriction must be compared at equal n_eff,
-not equal file count. A board of six distinct references is also more restrictive than a board
-of twenty, simply for being smaller, so a comparison that does not hold that constant would
-confirm the hypothesis using an effect the hypothesis does not predict.
+**A control that keeps the first number honest, and it does not run on n_eff.** The confound
+is that a board carrying less information is more restrictive for reasons this hypothesis does
+not predict, since a board of six distinct references is also more restrictive than a board of
+twenty. The control holds the **ground-truth distinct-source count** constant: the duplicated
+board of n files built from d distinct sources is compared against a genuinely distinct board
+of d files, and criterion 1's effect must survive that comparison as well as the equal-file
+one. An earlier version said to compare at equal n_eff, which is circular — n_eff is the
+estimator under test, so matching on it validates the estimator by construction and measures
+nothing. The distinct-source count is known because the duplicates are generated, and it is
+withheld from the estimator, which is what makes criterion 2 a test rather than a restatement.
 
 ## Alternatives considered
 
@@ -111,7 +177,8 @@ effect is large.
 The build step gains clustering, which ADR-0004 already required, and a hash, which is trivial.
 The report gains two fields.
 
-Everything downstream that reads a board size must read n_eff, and that includes text already
-written into ADR-0003 and ADR-0004. Those records are `Proposed`, so this is an amendment
-rather than a supersession, but if either is accepted before this one is measured, the
-substitution has to be made explicitly in both rather than assumed to have propagated.
+The admissibility floor in ADR-0004's rule 1 reads n_eff; the score's denominator in
+ADR-0003 does not. Both records carry that split in their own text rather than inheriting it
+from here, because a rule that lives in one record and governs another propagates by memory,
+which is how the two hash definitions drifted apart. Those records are `Proposed`, so this is
+an amendment rather than a supersession.

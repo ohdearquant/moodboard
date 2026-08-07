@@ -165,11 +165,59 @@ def write_manifest(rows: Iterable[dict], path: Path) -> int:
     return n
 
 
-def write_checksums(files: Sequence[Path], path: Path, *, relative_to: Path) -> None:
-    """Write a sha256sum-format file, so it can be checked without this repo."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _checksum_lines(files: Sequence[Path], *, relative_to: Path) -> str:
     lines = [f"{sha256_file(f)}  {f.relative_to(relative_to)}" for f in sorted(files)]
-    path.write_text("\n".join(lines) + "\n")
+    return "\n".join(lines) + "\n"
+
+
+def write_checksums(files: Sequence[Path], path: Path, *, relative_to: Path) -> None:
+    """Write a sha256sum-format file, so it can be checked without this repo.
+
+    MAINTAINER COMMAND ONLY. A fetch script must call verify_checksums instead.
+    Writing here during an ordinary fetch is what makes the reproducibility claim
+    vacuous: the rebuilt manifest overwrites the expectation with its own hash, so
+    a drifted upstream produces a green run and a modified committed file rather
+    than the loud failure DATASETS.md promises.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_checksum_lines(files, relative_to=relative_to))
+
+
+def verify_checksums(files: Sequence[Path], path: Path, *, relative_to: Path) -> None:
+    """Compare rebuilt outputs against the committed expectation, and fail loudly.
+
+    This is the check the repository's central reproducibility claim rests on:
+    "anyone rebuilding gets exactly the same thing, and it fails loudly when they
+    do not". Nothing was performing it. A missing expectation file is also fatal
+    rather than an invitation to create one, because a fetch that writes the file
+    it is supposed to be checked against cannot fail.
+    """
+    rebuilt = _checksum_lines(files, relative_to=relative_to)
+    if not path.exists():
+        raise FetchError(
+            f"no committed checksum at {path}. The expectation is what makes a "
+            "rebuild checkable; generate it deliberately with --write-checksums "
+            "and commit it, rather than having a fetch create its own."
+        )
+    committed = path.read_text()
+    if committed == rebuilt:
+        return
+
+    want = dict(reversed(ln.split("  ", 1)) for ln in committed.splitlines() if ln)
+    got = dict(reversed(ln.split("  ", 1)) for ln in rebuilt.splitlines() if ln)
+    detail = []
+    for name in sorted(set(want) | set(got)):
+        if want.get(name) != got.get(name):
+            detail.append(f"  {name}\n    committed: {want.get(name, '(absent)')}"
+                          f"\n    rebuilt:   {got.get(name, '(absent)')}")
+    raise FetchError(
+        "rebuilt output does not match the committed checksum.\n"
+        + "\n".join(detail)
+        + "\n\nThe upstream source, this script, or the protocol changed. Resolve "
+        "which before taking any measurement on this set. If the change is "
+        "intended, re-run with --write-checksums and commit that in its own "
+        "commit saying what moved."
+    )
 
 
 def read_manifest(path: Path) -> Iterator[dict]:

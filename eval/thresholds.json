@@ -19,24 +19,59 @@
     "resamples": 1000,
     "board_sizes": [10, 20, 50],
     "min_observed_coverage": 0.85,
-    "on_shortfall": "report the observed coverage as the level, rounded down to the nearest 0.05, and change the report's stated level to it",
-    "applies_per": "board_size"
+    "on_shortfall": "report the observed coverage as the level, rounded down to the nearest 0.01, and change the report's stated level to it",
+    "applies_per": ["board_size", "group"],
+    "_applies_per_comment": [
+      "Pooling only by board size lets a pooled 0.87 sit on top of a minority group at 0.70",
+      "while every emitted report still claims 0.90. The gate is the worst group.",
+      "The rounding is 0.01 here and in ADR-0002; the two said 0.05 and 'the observed",
+      "coverage' respectively, which turns an observed 0.86 into two different corrections."
+    ],
+    "sharpness": {
+      "_comment": [
+        "Coverage alone cannot pass this criterion. An interval of [0,1] achieves perfect",
+        "coverage and ties every asset, certifying that the tool declines to distinguish",
+        "anything. These two bounds are what make the coverage number mean something."
+      ],
+      "max_median_interval_width": 0.25,
+      "max_all_tied_rate": 0.5,
+      "applies_per": "board_size"
+    },
+    "tie_definition": "the interval around the paired score DIFFERENCE, over shared folds, contains zero; not marginal-interval overlap, which is non-transitive and cannot define groups"
   },
   "content_invariance": {
     "adr": "0003",
     "metric": "auc_same_style_over_cross_style",
+    "gated_on": "cell_balanced",
+    "_gated_on_comment": [
+      "PACS cells run from 80 to 816 items, so an all-pairs AUC is weighted by cell size and",
+      "is mostly a statement about the large cells. Both figures are reported; the balanced",
+      "one is what acceptance reads. Uncertainty is a GROUP-level bootstrap over images:",
+      "millions of pairs built from thousands of images are heavily dependent, and treating",
+      "pairs as independent understates the standard error."
+    ],
+    "uncertainty": "bootstrap over images, not over pairs",
     "min_auc_absolute": 0.8,
     "min_margin_over_clip": 0.1,
     "baselines": ["clip_vit_l_14", "dinov2_vit_l_14"],
     "datasets": ["pacs", "unsplash-collections"],
     "both_datasets_must_pass": false,
+    "claim_scope_on_coarse_only_pass": "coarse cross-medium style invariance; the same-medium claim rests entirely on the brand row and is not evidenced by PACS",
     "on_partial_pass": "if the coarse dataset passes and the brand dataset does not, the record is NOT accepted as written; the claim is narrowed to the domain that passed and the narrowing is stated in the README"
   },
   "off_style_rejection": {
     "adr": "0003",
+    "acceptance_gate": false,
+    "_gate_comment": [
+      "INFORMATIONAL on PACS. Separating photographs from sketches is a low bar whose",
+      "passing says nothing about discriminating treatments within commercial photography,",
+      "which is the property the tool is sold on. It carried that caveat while still being",
+      "one of three acceptance measurements; the caveat argues for the demotion. It becomes",
+      "a gate on a source whose groups differ by treatment rather than by medium."
+    ],
     "max_inversions": 0,
     "inversion_reporting": "every inversion names both images so it can be looked at",
-    "scope": "smoke test at board size 20, one board per group"
+    "scope": "smoke test at board size 20, 100 resampled board pairs so board-selection variance is measured"
   },
   "score_semantics": {
     "adr": "0003",
@@ -68,12 +103,26 @@
       "An axis that responds to everything is not a decomposition, it is three copies",
       "of one number wearing different names, and it would read as a richer report."
     ],
-    "interventions": ["recolour", "luminance_shift", "crop", "grain"],
+    "interventions": ["recolour", "luminance_shift", "crop"],
     "expected_dominant_axis": {
       "recolour": "palette",
       "luminance_shift": "tone",
-      "crop": "composition",
-      "grain": "texture"
+      "crop": "composition"
+    },
+    "_removed_grain_comment": [
+      "A grain -> texture row was registered here while the axis vocabulary is exactly",
+      "palette, tone, composition, asserted by ADR-0002's schema invariant. Texture is not",
+      "an axis, so the grain case could not pass without violating the schema: the gate was",
+      "unsatisfiable rather than demanding. If a texture axis is added it arrives with its",
+      "own intervention row, and not before."
+    ],
+    "normalisation": "each axis's movement is divided by that axis's median absolute movement across all interventions, so a ratio compares like with like rather than raw units",
+    "protocol": {
+      "images": 200,
+      "sampled_across": "all four PACS domains, seeded",
+      "magnitudes_per_intervention": 3,
+      "uncertainty": "bootstrap over images",
+      "on_zero_intended_response": "FAIL; an intervention whose intended axis does not move is a failed decomposition, never a 0/0 ratio to be excluded"
     },
     "min_diagonal_to_offdiagonal_ratio": 2.0,
     "on_failure": "the axis loses its name in the report and is shown as an unlabelled component, or is removed"
@@ -86,13 +135,50 @@
       "useless, so the quiet-when-it-should number is what gives the other one meaning."
     ],
     "must_fire": {
-      "constructed_cases": ["threshold_below_resolution", "two_disjoint_style_groups", "medium_absent_from_board"],
+      "_construction_comment": [
+        "EVERY case names its alpha. The same board is serviceable at one alpha and must",
+        "refuse at another, so a case without one has no defined outcome.",
+        "",
+        "The two-group case pins its SUB-LOOK size, and that pin is load-bearing. ADR-0004",
+        "rule 2 scores locally whenever a sub-look can express the request and abstains only",
+        "when it cannot. A two-group board with large sub-looks is therefore a board the tool",
+        "is supposed to SCORE, so requiring fire_rate 1.0 on it demanded behaviour the",
+        "decision rule forbids and no conforming implementation could pass. Sub-looks of 8 at",
+        "alpha 0.05 give 1/(8+1) = 0.111 > 0.05, so neither category can express the request."
+      ],
+      "constructed_cases": [
+        {"case": "threshold_below_resolution", "n": 10, "alpha": 0.05, "expect_reason": "resolution"},
+        {"case": "two_disjoint_style_groups", "sub_look_size": 8, "alpha": 0.05, "expect_reason": "multi_modality"},
+        {"case": "asset_from_absent_domain", "alpha": 0.05, "expect_reason": "far_outlier"}
+      ],
       "required_fire_rate": 1.0,
       "reason_must_match_construction": true
     },
+    "must_detect_and_score": {
+      "_comment": [
+        "The other half of rule 2, and a distinct arm: a stuck-on-abstain implementation",
+        "passes must_fire completely and fails only here."
+      ],
+      "case": {"two_disjoint_style_groups": true, "sub_look_size": 25, "alpha": 0.05},
+      "required_outcome": "scored, carrying the category the candidate was scored in",
+      "max_abstention_rate": 0.05
+    },
     "must_stay_quiet": {
-      "population": "single-look boards of 20 or more, assets drawn from the board's own group",
-      "max_false_abstention_rate": 0.05
+      "_population_comment": [
+        "Restricting this to single-look boards of 20 or more leaves the small-board and",
+        "multi-look populations unmeasured, which are exactly the populations rules 1 and 2",
+        "are most likely to refuse without cause. Each size is tested at an alpha it can",
+        "express, since testing it at one it cannot is a must_fire case wearing quiet clothes."
+      ],
+      "population": [
+        {"n": 10, "alpha": 0.1, "look": "single"},
+        {"n": 20, "alpha": 0.05, "look": "single"},
+        {"n": 50, "alpha": 0.02, "look": "single"},
+        {"n": 50, "alpha": 0.05, "look": "multi", "sub_look_size": 25}
+      ],
+      "assets": "drawn from the board's own group",
+      "max_false_abstention_rate": 0.05,
+      "reported_per": "reason, since a pooled rate hides one rule firing constantly while the others stay silent"
     },
     "on_failure": "a rule that cannot satisfy both halves is removed rather than tuned, since tuning it against these same cases is fitting to the test"
   },
@@ -105,12 +191,28 @@
     ],
     "falsifier_first": {
       "claim": "a board padded with near-duplicates is more restrictive on held-out on-style assets than a distinct board of the same file count",
-      "min_effect": "stated as a rejection-rate difference once the pilot fixes the sampling error, and fixed before the full run",
-      "control": "compare at equal n_eff, not equal file count; a smaller board is more restrictive for reasons this claim does not predict"
+      "min_effect": 0.1,
+      "min_effect_units": "absolute rejection-rate difference at alpha = 0.05, one-sided",
+      "_min_effect_comment": [
+        "This number was previously deferred: 'stated once the pilot fixes the sampling",
+        "error, and fixed before the full run'. A threshold chosen after the pilot results",
+        "are visible is a description of the result wearing a pre-registration label, which",
+        "is the exact move this file's preamble forbids. It is fixed now, before any pilot.",
+        "At 500 held-out assets across 20 board pairs the standard error on a rejection-rate",
+        "difference near 0.2 is under 0.03, so 0.10 is more than three standard errors and",
+        "the pass/fail boundary is not a coin flip. If the pilot shows the sampling error was",
+        "badly misjudged, that is a commit to this file stating what was learned."
+      ],
+      "holdout_assets": 500,
+      "board_pairs": 20,
+      "control": "compare against a genuinely distinct board of d files, where d is the KNOWN distinct-source count of the duplicated board; NOT at equal n_eff, which is circular because n_eff is the estimator under test"
     },
     "n_eff_tracking": {
+      "estimator": "Kish, n_eff = (sum s_i)^2 / sum s_i^2 over single-linkage duplicate groups at cosine cut 0.05",
       "requirement": "n_eff on the duplicated board lands closer to the distinct-source count than to the file count",
-      "tolerance": 0.25
+      "tolerance": 0.25,
+      "tolerance_metric": "|n_eff - distinct| / |file_count - distinct|, so the tolerance has a unit and a denominator",
+      "ground_truth": "the distinct-source count is known because the duplicates are generated, and it is withheld from the estimator"
     },
     "duplicate_generation": ["crop", "mild_recolour", "recompression"]
   },
@@ -125,7 +227,20 @@
     "benchmark": "wikiart_artist_retrieval_map_at_1",
     "published_value": 64.56,
     "published_source": "arXiv:2404.01292",
-    "max_absolute_shortfall": 2.0,
+    "max_absolute_deviation": 2.0,
+    "_two_sided_comment": [
+      "This was a one-sided shortfall gate, which accepts an arbitrarily HIGHER result. A",
+      "score meaningfully above the published number is evidence of a protocol or checkpoint",
+      "mismatch exactly as a lower one is, so the tolerance is two-sided.",
+      "",
+      "And agreement is necessary, not sufficient: several checkpoints and protocols can land",
+      "within two points of one number, so matching it does not establish that these are the",
+      "paper's weights. Hence the checkpoint hash comparison below. Where no authoritative",
+      "published hash exists, the claim is renamed to 'benchmark reproduced under this pinned",
+      "revision' and never 'the paper's weights'."
+    ],
+    "checkpoint_identity": "compare the checkpoint sha256 against an authoritative published hash; benchmark agreement alone does not establish identity",
+    "dataset_row": "weight-reproduction in DATASETS.md, currently BLOCKED: no licensed route, split, preprocessing or command exists",
     "on_failure": "the weights are not the paper's; either locate weights that reproduce it or drop the published number from every claim in this repository"
   }
 }

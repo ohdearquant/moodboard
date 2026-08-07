@@ -35,30 +35,65 @@ make "the exact set" a checkable statement rather than a hope.
 **That rule is not always sufficient, and assuming it was is how this project nearly published
 licensed data.** It protects against a restriction on the *images*. A source may instead
 restrict the *data*, in which case the manifest is a portion of the restricted thing and
-cannot be committed either. So a row is only `ready` when its licence permits publishing the
-manifest specifically — checked at the terms shipped with the data, not inferred from the
-source's public description of its licence. Where it does not, the fetch script and the
-manifest's checksum are committed, the manifest is git-ignored, and the row is `blocked`.
+cannot be committed either. Whether the manifest may be published is checked at the terms
+shipped with the data, never inferred from the source's public description of its licence.
+Where publication is not permitted, the fetch script and the manifest's checksum are
+committed and the manifest itself is git-ignored.
+
+**Readiness is two questions, and collapsing them into one status was wrong.** This section
+previously said a row is `ready` only when its licence permits publishing the manifest, which
+made publication permission a precondition for *running* a measurement. Those are different
+things and they fail for different reasons:
+
+- **`runnable`** — can a reader with a fresh clone rebuild the exact set and reproduce the
+  measurement? That needs the fetch script, the pinned source checksum, the committed
+  manifest checksum, and the protocol assertions. It does not need permission to republish
+  anything, because the reader fetches from the source themselves.
+- **`manifest-publishable`** — may this repository commit the per-item manifest? That is
+  purely a licence question.
+
+A row is `ready` when it is `runnable`. A row that is runnable but not manifest-publishable
+is `ready, manifest withheld` and its manifest is git-ignored — the measurement stands, the
+data does not travel. A row that is not runnable is `blocked`, whatever its licence says.
+
+The distinction is load-bearing in both directions. Reading it the old way, PACS is
+`blocked` on an unresolved licence and every acceptance criterion in ADRs 0002 through 0005
+loses its evidence, which is a stronger conclusion than the facts support: the licence is
+unresolved for *redistribution*, and nothing about it stops a reader fetching the mirror and
+rebuilding. Reading it too loosely in the other direction is how the Unsplash manifest came
+within one command of being published. Unsplash is `blocked` under the new reading too, and
+for the reason that actually applies: its own fetcher is exploratory rather than ready, quite
+apart from the terms.
+
+**An unresolved licence is not permission, and `ready, manifest withheld` does not launder
+one into the other.** PACS carries an unresolved licence and this repository publishes no
+portion of it.
 
 ## Rows
 
-| claim | dataset | source | size | licence | redistributable | status |
+| claim | dataset | source | size | licence | manifest published | status |
 |---|---|---|---|---|---|---|
-| `content-invariance-coarse` | PACS | mirror `flwrlabs/pacs`, rev `394113073`; original release is gone, see below | 9,991 images, 4 style groups, 7 content groups | **unresolved**; mirror declares `unknown` | no, manifest only | **`ready`** |
-| `content-invariance-brand` | Unsplash Lite | `unsplash.com/data/lite/latest` | 25,000 photos | grant is **internal use only**; publishing any portion is barred | **no, not even the manifest** | **`blocked`** |
-| `off-style-rejection` | derived | no new source | held-out cells of the above | inherits | n/a | `ready` on PACS, `blocked` on brand |
-| `interval-coverage` | derived | no new source | resampled boards of n in {10, 20, 50} | inherits | n/a | `ready` on PACS, `blocked` on brand |
+| `content-invariance-coarse` | PACS | mirror `flwrlabs/pacs`, rev `394113073`; original release is gone, see below | 9,991 images, 4 style groups, 7 content groups | **unresolved**; mirror declares `unknown` | **no** | **`ready, manifest withheld`** |
+| `content-invariance-brand` | Unsplash Lite | `unsplash.com/data/lite/latest` | 25,000 photos | grant is **internal use only**; publishing any portion is barred | **no** | **`blocked`** — exploratory fetcher, and the terms bar publication |
+| `off-style-rejection` | derived | no new source | held-out cells of the above | inherits | no | `ready, manifest withheld` on PACS (**informational only**, see protocol); `blocked` on brand |
+| `interval-coverage` | derived | no new source | resampled boards of n in {10, 20, 50} | inherits | no | `ready, manifest withheld` on PACS |
 | `human-style-grouping` | none yet | — | — | — | — | `blocked`, needs a source |
-| `abstention-triggers` | derived | no new source | resampled boards below threshold resolution, two-group boards, cross-medium assets | inherits | n/a | `ready` on PACS |
-| `effective-board-size` | derived | no new source | paired boards of equal file count, one padded with generated near-duplicates | inherits | n/a | `ready` on PACS |
+| `abstention-triggers` | derived | no new source | resampled boards below threshold resolution, two-group boards at pinned sub-look sizes, cross-domain assets | inherits | no | `ready, manifest withheld` on PACS |
+| `effective-board-size` | derived | no new source | paired boards of equal file count, one padded with generated near-duplicates | inherits | no | `ready, manifest withheld` on PACS |
+| `weight-reproduction` | WikiArt artist retrieval | unresolved, see licence notes | — | unresolved | — | `blocked`, needs a source |
 
-Reproduce with `uv run --with pyarrow datasets/pacs/fetch.py`. Each fetch script verifies an
-exact checksum and fails loudly rather than proceeding with a partial or substituted file.
+Every row's exact reproduce command is in its protocol section below, and a row without one
+is not `ready` regardless of its licence — `docs/adr/README.md` requires the command, and
+six measurements previously had none. Rebuild the source set first with
+`uv run --with pyarrow datasets/pacs/fetch.py`, which verifies an exact source checksum,
+asserts the protocol's own properties, and compares the rebuilt manifest against the
+committed checksum rather than overwriting it.
 
-**One row is ready, three are blocked on a licence, and that is the finding.** The
-brand-photography half of the central claim has no usable source today. What follows records
-how each row got to its status, because in both cases the first plan was wrong in a way that
-would have survived into implementation.
+**One source is runnable, the brand source is blocked, and that is the finding.** The
+brand-photography half of the central claim has no usable source today, so ADR-0003 cannot
+reach its own five-measurement gate and stays `Proposed`. What follows records how each row
+got to its status, because in both cases the first plan was wrong in a way that would have
+survived into implementation.
 
 ## What preparing these actually found
 
@@ -164,11 +199,26 @@ ViT-L/14 without changing anything else.
 
 ```
 uv run moodboard-eval invariance --dataset pacs --models csd,clip,dinov2 \
+    --balance cells --bootstrap group --seed 20260807 \
     --out results/invariance-pacs.json
 ```
 
 The result is a table of AUC by representation, committed under `results/`, with the exact
 model revisions recorded in the output.
+
+**The gate is the cell-balanced AUC, not the all-pairs one.** Both are reported and the
+all-pairs figure is secondary. The reason is above: cells run from 80 to 816 items, so an
+all-pairs AUC is weighted by cell size and is mostly a statement about the large cells, and
+`eval/thresholds.json` registers the balanced figure as the one acceptance reads. Uncertainty
+is a group-level bootstrap over images, not a pair-level one — the millions of pairs are
+built from thousands of images and are heavily dependent, so treating pairs as independent
+understates the standard error by roughly the square root of the pairs-per-image factor.
+
+**What a green result here can and cannot certify.** PACS domains differ by *medium*, and
+separating a photograph from a sketch is not the property the tool is sold on. A pass here is
+evidence for coarse cross-medium style invariance and nothing more; the same-medium claim
+rests entirely on the brand row, which has no source. This is stated in the ADR as well, so
+that a reader meeting the number first does not have to come here to learn what it means.
 
 ### `content-invariance-brand` — BLOCKED, no source
 
@@ -206,8 +256,17 @@ above:
    worked where curated collections did not.
 3. **Subject labels dense enough to test that confounding**, and lift measured against the
    corpus rate rather than raw within-group share.
-4. **Enough groups of enough size**: boards run to 50, and members must be held out, so a
-   usable group needs roughly 15 items minimum and the corpus needs tens of such groups.
+4. **Enough groups of enough size, and the arithmetic is not "roughly 15".** The protocols
+   here draw boards of up to 50 *without replacement*, hold out assets that were not on the
+   board, and — for the interval-coverage protocol — draw a second board disjoint from the
+   first. So a group that has to serve the largest board plus a holdout needs **at least 51
+   distinct members**, and a group that has to serve two disjoint boards of 50 needs **at
+   least 101**. A 20-member group cannot supply even one 50-member board. The earlier figure
+   of 15 came from the smallest board size and was silently applied to a protocol that needs
+   the largest; a group between 15 and 50 can serve the n=10 and n=20 rows only, and the row
+   it can serve is recorded per group rather than assumed. Sampling with replacement would
+   let the test run at any size, and is banned here, because it changes the duplicate
+   structure of the board — which is the exact quantity ADR-0005 measures.
 5. **A creator field per item**, since the style grouping is now creator identity. A source
    with per-item licence metadata but no creator cannot serve this protocol.
 
@@ -228,27 +287,98 @@ Not pursued: seeking written permission for an otherwise-blocked source. An acce
 criterion whose reproduce command depends on a permission the reader cannot obtain is not
 reproducible, which contradicts the rule at the top of this file.
 
-### `off-style-rejection`
+### `off-style-rejection` — INFORMATIONAL on PACS, not an acceptance gate
 
-Build a board from one group, meaning one PACS domain while that is the only ready source.
+Build a board from one group, meaning one PACS domain while that is the only runnable source.
 Score held-out members of that group and members of a deliberately different group. Require
 that every on-look asset ranks above every off-look one, and report any inversion with both
-images named so it can be looked at.
+images named so it can be looked at. Resample 100 board pairs rather than using one board per
+group, so the result carries board-selection variance instead of one draw's luck.
+
+```
+uv run moodboard-eval off-style --dataset pacs --board-size 20 --boards 100 \
+    --seed 20260807 --out results/off-style-pacs.json
+```
 
 Note what a PACS-only version of this test can and cannot say. Separating photographs from
 sketches is a low bar and passing it is close to uninformative; the test earns its place only
 on a source where the groups differ by treatment rather than by medium. Until the brand row
-has a dataset, a green result here is not evidence the tool works.
+has a dataset, a green result here is not evidence the tool works — so this row is marked
+informational in `eval/thresholds.json` and ADR-0003 does not gate on it. It was previously
+one of three acceptance measurements while carrying this same caveat, which is a caveat that
+argues for exactly the demotion it did not receive.
 
 ### `interval-coverage`
 
 Sample boards of size n in {10, 20, 50} from a group. For each board, compute the interval
-around a held-out asset's score. Independently resample a second board from the same group
-and recompute the score. Record how often the first board's interval contains the second
-board's score, and report that empirical coverage against the stated level, by board size.
+around a held-out asset's score. Independently resample a second board from the same group,
+**disjoint from the first**, and recompute the score. Record how often the first board's
+interval contains the second board's score, and report that empirical coverage against the
+stated level, by board size **and by group**.
+
+```
+uv run moodboard-eval coverage --dataset pacs --board-sizes 10,20,50 \
+    --resamples 1000 --level 0.90 --per-group --seed 20260807 \
+    --out results/coverage-pacs.json
+```
+
+Coverage alone cannot pass this row, because an interval of [0,1] covers everything.
+The same run reports median interval width and the all-tied rate, and
+`eval/thresholds.json` bounds both.
 
 If the observed coverage is below the stated level, the stated level is corrected to the
-observed one. The claim moves, not the measurement.
+observed one, rounded down to the nearest 0.01. The claim moves, not the measurement.
+
+### `axis-intervention`
+
+Take 200 images sampled across all four PACS domains, seeded. Apply each intervention at
+three magnitudes, record every axis's movement, normalise each axis by its own median
+absolute movement across all interventions, and report the diagonal-to-largest-off-diagonal
+ratio per intervention with a bootstrap interval over images. An intervention whose intended
+axis does not move at all is a failure, not a ratio of 0/0.
+
+```
+uv run moodboard-eval axes --dataset pacs --images 200 --magnitudes 3 \
+    --seed 20260807 --out results/axes-pacs.json
+```
+
+### `abstention-triggers`
+
+All cases are resampled from PACS and every case names its α, because the same board is
+serviceable at one α and must refuse at another.
+
+- must-fire, resolution: n=10 boards, α=0.05.
+- must-fire, multi-modality: two disjoint PACS domains, **each sub-look resampled to 8
+  members**, α=0.05. The sub-look size is pinned here, and it is the whole point of the case:
+  ADR-0004 rule 2 scores locally whenever a sub-look can express the request, so a two-group
+  board with large sub-looks is one the tool is supposed to score. Constructing this case
+  without pinning the sub-look size below the rule-1 minimum demands an abstention the
+  decision rule forbids, and no conforming implementation can pass it.
+- must-fire, far-outlier: assets from a PACS domain absent from the board.
+- must-detect-and-score (not a refusal): two disjoint domains, **each sub-look at 25
+  members**, α=0.05. Required outcome is a score carrying its category.
+- must-stay-quiet: single-look boards at n=10/α=0.10, n=20/α=0.05, n=50/α=0.02, plus
+  multi-look boards whose sub-looks each satisfy the requested α. False-abstention rates
+  reported per reason.
+
+```
+uv run moodboard-eval abstention --dataset pacs --seed 20260807 \
+    --out results/abstention-pacs.json
+```
+
+### `effective-board-size`
+
+Build paired boards of equal file count, one from distinct sources and one padded with
+near-duplicates generated by crop, mild recolour and recompression. Score a held-out on-style
+population of 500 assets against both, across 20 board pairs. Report the rejection-rate
+difference at α=0.05, and n_eff against the known distinct-source count. The control board
+holds the **distinct-source count** constant, not n_eff — matching on the estimator under
+test would validate it by construction.
+
+```
+uv run moodboard-eval neff --dataset pacs --board-pairs 20 --holdout 500 \
+    --alpha 0.05 --seed 20260807 --out results/neff-pacs.json
+```
 
 ## Licence notes
 
@@ -268,9 +398,34 @@ paraphrase that caused the problem: the actual grant is for *internal* use and c
 publishing any portion of the data in any manner. See
 `datasets/unsplash-collections/LICENCE.md` for the quoted clauses.
 
-**WikiArt** — still unresolved and still not a dependency of any acceptance criterion. Its
-artist labels remain an appealing source of human style grouping. Resolving the terms is a
-task in its own right and the answer belongs in this file beside the source that settles it.
+**WikiArt** — unresolved, and it **is** a dependency of an acceptance criterion, which this
+note previously denied. ADR-0003's fifth criterion reproduces the published WikiArt artist
+retrieval benchmark before quoting the paper's number, so the record cannot reach its own
+five-measurement gate while this row has no source, no split, no preprocessing and no
+command. That is now a `blocked` row in the table above rather than a footnote, because a
+dependency recorded only in prose is a dependency nothing checks.
+
+Its artist labels remain an appealing source of human style grouping for the brand row as
+well. Resolving the terms is a task in its own right and the answer belongs in this file
+beside the source that settles it.
+
+### `weight-reproduction` — BLOCKED, no source
+
+Reproduce the published WikiArt artist-retrieval mAP@1 under the pinned CSD checkpoint and
+compare against the paper's 64.56. Two things the current criterion gets wrong and that a
+source, when found, has to carry:
+
+**The tolerance is two-sided.** A one-sided shortfall gate accepts an arbitrarily *higher*
+result, and a result meaningfully above the published number is evidence of a protocol or
+checkpoint mismatch just as a lower one is. `eval/thresholds.json` registers ±2.0 absolute.
+
+**Benchmark agreement is necessary, not sufficient, for checkpoint identity.** Several
+checkpoints and protocols can land within two points of one number, so matching it does not
+establish that these are the paper's weights. The criterion therefore compares the
+checkpoint's own sha256 against an authoritative published hash where one exists, and where
+none exists the claim is renamed: the repository says "benchmark reproduced under this
+pinned revision" and never "the paper's weights", and ADR-0003's existing rule to strike the
+published number applies.
 
 **A rule earned from the Unsplash case, applying to every future source.** Read the terms
 shipped *with the data* and quote the operative clause into the row, rather than summarising

@@ -17,24 +17,57 @@ shows whether a bar ever moved to meet a measurement.
 ## The numbers, and how each was chosen
 
 **Interval coverage, `min_observed_coverage` 0.85 against a stated level of 0.90.** With
-1,000 resamples, the standard error of an estimated coverage near 0.9 is about 0.0095. Five
-percentage points is therefore more than five standard errors, so a shortfall that large is a
-real miscalibration rather than sampling noise, and a shortfall smaller than that is not
-distinguishable from noise and should not fail the criterion. On a genuine shortfall the
-reported level moves to the observed value rather than the measurement being adjusted.
+1,000 resamples, the standard error of an estimated coverage near 0.9 is about 0.0095 if the
+resamples were independent. Five percentage points is more than five of those standard
+errors, so a shortfall that large is a real miscalibration rather than sampling noise.
+
+**A shortfall smaller than five points is not thereby noise, and this paragraph used to say
+it was.** At the same standard error a three-point shortfall is about 3.2 standard errors,
+which is a detectable miscalibration that this gate deliberately tolerates. The gate is a
+tolerance, not a detection threshold, and the difference matters because the old wording
+justified the number with a claim about noise that the arithmetic does not support. Two
+consequences are accepted deliberately: an observed 0.87 passes and the report then says 0.87
+rather than 0.90, and the correction rule is what carries the honesty rather than the gate.
+
+Two further caveats, stated because a coverage figure invites more confidence than it earns.
+The resamples are drawn from the same group and share references, so they are not independent
+Bernoulli trials and the true standard error is larger than 0.0095; the reported interval
+around the coverage estimate is a cluster bootstrap over source images, not the binomial
+figure quoted above, which is used here only to size the gap between pass and fail. And
+coverage is pooled per board size *and* per group, gated on the worst group, because a pooled
+figure can sit comfortably above 0.85 while a minority group runs at 0.70 and every report
+still claims 0.90.
+
+**Interval sharpness, `max_median_interval_width` 0.25 and `max_all_tied_rate` 0.50.**
+Coverage on its own cannot pass this criterion. An interval of [0, 1] covers every score
+perfectly and makes every asset tie with every other, so an instrument measuring only
+coverage certifies that the tool declines to distinguish anything. These two bounds are what
+make the coverage number mean something, and the direction of error they guard is the one the
+tie rule creates: over-wide intervals look conservative and read as caution.
 
 **Content invariance, `min_auc_absolute` 0.80 and `min_margin_over_clip` 0.10.** Two
 conditions, because either one alone can be satisfied by something useless. A large margin
 over a baseline that is itself near chance would mean both are unusable, so there is an
 absolute floor. A high absolute score with no margin would mean the property came from the
-data rather than from the representation, so there is a margin. Both PACS and the Unsplash
-collections yield tens of thousands of eligible pairs, so the standard error on an AUC is
-well under 0.01 and a margin of 0.10 is an order of magnitude clear of it.
+data rather than from the representation, so there is a margin.
 
-**Off-style rejection, `max_inversions` 0.** This is the weakest of the three tests and it is
-the one a reader will run by hand with two obviously different folders. At that scale a
-single inversion is worth looking at rather than tolerating, so the threshold is zero and any
-inversion is reported with both images named.
+The figure acceptance reads is the **cell-balanced** AUC. PACS cells run from 80 items to
+816, so an all-pairs AUC is weighted by cell size and is mostly a statement about the large
+cells; both are reported and the all-pairs value is secondary. The uncertainty is a bootstrap
+over **images**, not over pairs. Millions of pairs built from thousands of images are heavily
+dependent, so a pair-level standard error is far too small — the "tens of thousands of
+eligible pairs, standard error well under 0.01" reasoning this paragraph used to carry
+counted dependent pairs as independent evidence. At the image level the margin of 0.10 is
+still comfortably clear of the noise, which is why the threshold does not move; the
+justification for it does.
+
+**Off-style rejection, `max_inversions` 0, and it no longer gates.** This is the weakest of
+the tests and it is the one a reader will run by hand with two obviously different folders.
+At that scale a single inversion is worth looking at rather than tolerating, so the threshold
+is zero and any inversion is reported with both images named. It is marked informational
+because on the only runnable source its groups differ by medium: a green result says a
+photograph is not a sketch, which is not the property being certified. It becomes a gate on a
+source whose groups differ by treatment within a medium.
 
 ## The partial-pass rule
 

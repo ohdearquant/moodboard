@@ -46,6 +46,15 @@ report JSON into the built viewer bundle. No server, no network access at view t
 the file can be attached to a message and opened by someone who has never installed
 anything.
 
+**The report therefore carries the reference images, not just their identifiers.** The
+interaction this record names as the reason for a browser viewer — seeing the three reference
+images a score is closest to — is unimplementable from a report that carries only IDs, on a
+boundary that forbids network access at view time. ADR-0002's schema grows a
+`references[]` catalogue with a content hash, MIME type, pixel dimensions and an inline
+thumbnail for exactly this reason. A viewer cannot show what the report does not carry, so
+what the viewer must show is what the report must carry, and that direction of the
+implication was missing.
+
 ## Alternatives considered
 
 **One Python artifact, with server-rendered HTML from a template engine.** Rejected. It is

@@ -27,7 +27,17 @@ asked. The insertion-point observation is fair. The costs of acting on it are no
 
 **The product is the standalone tool: the CLI, the library, and the self-contained HTML
 report.** Exactly the shape ADR-0001 defined. It depends on nothing a contributor cannot get
-for free, and every claim in this repository is reproducible from a clone.
+for free.
+
+**Every committed measurement whose dataset row is runnable is reproducible from a clone.**
+That is the promise, and the qualifier is not hedging — the unqualified version, "every claim
+in this repository is reproducible from a clone", was more than the repository can deliver.
+The brand-photography validation has no source at all, the WikiArt weight reproduction has no
+licensed route, and the one runnable source reaches the reader through a single third-party
+mirror that can disappear. The exact revision, archive checksum, size and magic-byte checks
+pinned against that mirror are a sound integrity guarantee — a reader who gets the file gets
+*the* file — but integrity is not availability and neither is permission. Overpromising here
+is worse than the gap it papers over, because a reader discovers it by trying.
 
 **No design-application SDK is a dependency of anything in this repository.** No panel, no
 plugin, no extension, for any host. The engine-and-report split from ADR-0001 already means

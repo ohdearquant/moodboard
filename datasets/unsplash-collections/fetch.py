@@ -9,11 +9,22 @@ photograph is never confused with a sketch. Commercial photography styles differ
 by lighting, grade, grain and framing, which is a far smaller signal, and a
 representation can pass the coarse test and be useless here.
 
-WHAT THIS SCRIPT DOWNLOADS: metadata only. Unsplash permits commercial and
-non-commercial use of the photos and is explicit that the dataset "cannot be
-used to redistribute the images contained within". So the manifest carries the
-photo id and its URL, and images are fetched at preparation time. See
-LICENCE.md.
+STATUS: EXPLORATORY, NOT A READY FETCHER. This row is `blocked` in DATASETS.md
+and this script is kept for the measurements it produced, not as a route to a
+usable dataset. Do not cite its output as evidence for any acceptance criterion.
+Three things would have to be built before it could be one: verified extraction
+(it currently reuses an already-extracted TSV without re-checking it), pinned
+per-image acquisition with per-image hashes, and a fatal assertion that every
+row carries the content label the protocol requires rather than permitting
+`content_group: None`.
+
+WHAT THIS SCRIPT DOWNLOADS: metadata only, and it does NOT download images at
+any point. An earlier version of this paragraph said images "are fetched at
+preparation time" while the script's own final line says they are not, and it
+cited the ordinary Unsplash photo licence, which is not the licence that governs
+here. The Dataset Terms shipped inside the archive grant internal use only and
+bar publishing any portion of the data, so the manifest this builds is
+git-ignored and never committed. See LICENCE.md for the quoted clauses.
 
 THE STYLE GROUPING IS THE PHOTOGRAPHER, NOT THE COLLECTION, and that is a
 correction to this project's first protocol. The reasoning and the measurements
@@ -33,7 +44,13 @@ import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _common import Expected, FetchError, download, write_checksums, write_manifest  # noqa: E402
+from _common import (  # noqa: E402
+    Expected,
+    FetchError,
+    download,
+    verify_checksums,
+    write_manifest,
+)
 
 HERE = Path(__file__).resolve().parent
 RAW = HERE.parent / "_raw"
@@ -100,9 +117,11 @@ def main() -> int:
         missing = [n for n in NEEDED if n not in present]
         if missing:
             raise FetchError(f"archive is missing {missing}; layout changed")
+        # Always re-extract. Skipping when the file already exists silently
+        # trusts whatever a previous, possibly different, run left behind, and
+        # the archive is the only thing here whose checksum was verified.
         for name in NEEDED:
-            if not (WORK / name).exists():
-                zf.extract(name, WORK)
+            zf.extract(name, WORK)
 
     photos = {r["photo_id"]: r for r in _read_tsv(WORK / "photos.tsv000")}
     if not photos:
@@ -198,7 +217,9 @@ def main() -> int:
 
     manifest = HERE / "manifest.jsonl"
     written = write_manifest(rows, manifest)
-    write_checksums([manifest], HERE / "checksums.sha256", relative_to=HERE)
+    # Exploratory row: the manifest is git-ignored and its checksum is committed,
+    # so the rebuild is checked against the expectation rather than overwriting it.
+    verify_checksums([manifest], HERE / "checksums.sha256", relative_to=HERE)
 
     sizes = sorted((len(m) for m in usable.values()), reverse=True)
     print(f"  manifest: {written:,} rows across {len(usable)} style groups "
