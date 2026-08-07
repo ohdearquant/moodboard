@@ -178,6 +178,19 @@
       "on everything satisfies the fires-when-it-should criterion completely and is",
       "useless, so the quiet-when-it-should number is what gives the other one meaning."
     ],
+    "_group_sizes_shape": [
+      "group_sizes is ALWAYS a histogram object mapping group size to how many groups have",
+      "it, so {\"3\": 4, \"4\": 2} means four groups of three and two of four, expanding to",
+      "[3,3,3,3,4,4]. One shape, everywhere this key appears, and it is machine-read.",
+      "Stated because it was violated: the must_fire case carried an explicit list while",
+      "must_stay_quiet carried the PROSE string '30 singletons + 10 pairs'. A reader",
+      "consuming both crashed on the second, which is the good outcome. The bad outcome was",
+      "available and nearly taken: a consumer tolerant enough to accept either would have",
+      "skipped the prose row silently and measured a smaller population than the registry",
+      "declares, while every count it printed still looked right.",
+      "A field that is machine-read in one section and documentation in another has no",
+      "shape at all. Put the prose in _why, which exists for it."
+    ],
     "must_fire": {
       "_construction_comment": [
         "EVERY case names its alpha. The same board is serviceable at one alpha and must",
@@ -212,14 +225,10 @@
           "case": "duplicated_board_below_effective_resolution",
           "n": 20,
           "distinct_sources": 6,
-          "group_sizes": [
-            3,
-            3,
-            3,
-            3,
-            4,
-            4
-          ],
+          "group_sizes": {
+            "3": 4,
+            "4": 2
+          },
           "alpha": 0.05,
           "expect_reason": "resolution",
           "expect_binding_floor": "effective",
@@ -281,7 +290,10 @@
         {
           "n": 50,
           "distinct_sources": 40,
-          "group_sizes": "30 singletons + 10 pairs",
+          "group_sizes": {
+            "1": 30,
+            "2": 10
+          },
           "alpha": 0.05,
           "look": "single",
           "_why": "n_eff = 2500/70 = 35.7, so 1/(35.7+1)=0.027 < alpha and the board ADMITS the request. Stops the effective-size arm being satisfied by an implementation that refuses whenever any duplicate is present, which would pass the must_fire case and be useless."
