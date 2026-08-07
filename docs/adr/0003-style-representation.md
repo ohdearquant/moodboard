@@ -268,9 +268,12 @@ Worth keeping in mind as a cheap additional texture axis.
 The engine depends on published model weights, so the report has to pin the exact revision.
 ADR-0002 already requires this.
 
-The three acceptance measurements are the project's validation section, and they are the part
-that makes the tool believable, so they belong in continuous integration and in the README
-once they exist.
+The four gating acceptance measurements, plus the informational fifth, are the project's
+validation section, and they are the part that makes the tool believable, so they belong in
+continuous integration and in the README once they exist. This sentence said "three" after
+the record had grown to five criteria, which is the same stale-count defect the review that
+produced this text was hunting elsewhere; a count in prose is a state claim and decays like
+any other.
 
 The datasets carry licences that do not permit redistributing images, so the repository ships
 manifests, checksums and fetch scripts, and never the image files. See `DATASETS.md`.
