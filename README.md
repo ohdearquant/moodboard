@@ -84,6 +84,18 @@ docs/design/      the longer design write-up
 DATASETS.md       one row per validation claim, with source, license and prepare command
 ```
 
+## Branch policy
+
+`main` is pushed to directly. The branch ruleset blocks deletion and force-push, and it
+deliberately does not require a pull request. This repository has one author, so a
+required-pull-request rule that the only pusher is permitted to bypass would be a false
+statement about how code actually gets in, and a false control is worse than a missing
+one because it gets cited. The rule was removed rather than left standing as decoration.
+
+This is written down so that the absence of a pull-request requirement reads as a
+decision. If a second author starts committing here, the rule should come back and the
+bypass should go with it.
+
 ## Licence
 
 MIT. See `LICENSE`.
