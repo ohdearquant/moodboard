@@ -229,3 +229,124 @@ class TestTheAxisWeightingThisConstructionProduces:
         wide = np.tile(np.array([120, 60, 30], dtype=np.uint8), (16, 256, 1))
         wide_palette, wide_tone, _ = self._energy_shares(wide)
         assert not np.isclose(square_palette / square_tone, wide_palette / wide_tone, rtol=1e-3)
+
+
+# A population wide enough that the normalisation property is tested as a property rather than
+# on the handful of images the classes above happen to use. It mixes aspect ratios, dtypes,
+# channel counts, degenerate extents and uniform colours, since the normalisation step divides
+# by a norm and a descriptor that came out near zero is where that goes wrong.
+def varied_encoder_population() -> list[np.ndarray]:
+    return [noise_image(seed) for seed in range(40, 48)] + [
+        gradient_image(),
+        gradient_image(side=17),
+        flat_image((0, 0, 0)),
+        flat_image((255, 255, 255)),
+        flat_image((7, 190, 120), side=5),
+        np.array([[[3, 250, 40]]], dtype=np.uint8),
+        noise_image(50, height=1, width=90),
+        noise_image(51, height=90, width=1),
+        noise_image(52, height=2, width=2),
+        noise_image(53, height=220, width=9),
+        noise_image(54, height=9, width=220),
+        noise_image(55)[..., 0],
+        noise_image(56)[..., :1],
+        np.concatenate([noise_image(57), np.full((40, 50, 1), 128, dtype=np.uint8)], axis=-1),
+        noise_image(58).astype(np.float64) / 255.0,
+    ]
+
+
+class TestEmbeddingsAreL2NormalisedAsAProperty:
+    """The Protocol's central numeric promise, over a wide population rather than a few images.
+
+    `conformal.py` reads cosine distance as one minus a dot product, which is only the cosine
+    if every row is a unit vector. A row that is not normalised does not raise anywhere; it
+    quietly changes every distance computed from it, so this is worth testing broadly.
+    """
+
+    def test_every_row_of_a_wide_population_is_a_unit_vector(self):
+        # The bound is float32 epsilon rather than a hand-picked tolerance, because that is
+        # what `embed`'s docstring promises: unit norm to within float32 resolution. Measured
+        # across this population the largest deviation is about 2.6e-8, so the bound sits a
+        # little over four times clear of the observation.
+        #
+        # What this bound deliberately does NOT do: it does not distinguish normalising in
+        # float64 before the cast from normalising in float32 after it. That was checked by
+        # mutation, and the float32-after variant reaches about 6.9e-8, which is still inside
+        # float32 resolution and so still satisfies the contract. The float64-first ordering
+        # buys a factor of roughly 2.7 on an already negligible error. Tightening this number
+        # until it separated the two would be testing an implementation detail through a
+        # tolerance tuned to one platform's arithmetic.
+        population = varied_encoder_population()
+        assert len(population) > 20
+        rows = ClassicalEncoder().embed(population).astype(np.float64)
+        norms = np.linalg.norm(rows, axis=1)
+        assert np.isfinite(norms).all()
+        assert np.abs(norms - 1.0).max() < float(np.finfo(np.float32).eps)
+
+    def test_normalisation_holds_when_each_image_is_embedded_alone(self):
+        # Batching must not be what makes the property true.
+        for image in varied_encoder_population():
+            row = ClassicalEncoder().embed([image]).astype(np.float64)[0]
+            assert np.isclose(np.linalg.norm(row), 1.0, atol=1e-6)
+
+    def test_no_row_carries_a_non_finite_component(self):
+        rows = ClassicalEncoder().embed(varied_encoder_population())
+        assert np.isfinite(rows).all()
+
+    def test_scaling_an_image_up_does_not_change_its_direction_much(self):
+        # A unit vector encodes direction only, so an image and a larger copy of the same
+        # content should land close together rather than at different magnitudes.
+        encoder = ClassicalEncoder()
+        small = gradient_image(side=48)
+        large = np.repeat(np.repeat(small, 2, axis=0), 2, axis=1)
+        rows = encoder.embed([small, large]).astype(np.float64)
+        assert float(rows[0] @ rows[1]) > 0.9
+
+
+class TestWhatProtocolConformanceDoesAndDoesNotCheck:
+    """`runtime_checkable` tests for the presence of members and for nothing else.
+
+    Worth pinning because `isinstance(x, Encoder)` reads like validation. It is not: it cannot
+    see an attribute's type and it cannot see `embed`'s signature or its return value. Anything
+    that relies on those holding has to check them itself, and the tests below are that check
+    for the one concrete encoder in this file.
+    """
+
+    def test_the_concrete_encoder_carries_the_declared_attribute_types(self):
+        encoder = ClassicalEncoder()
+        assert isinstance(encoder.name, str) and encoder.name
+        assert isinstance(encoder.revision, str) and encoder.revision
+        assert isinstance(encoder.dim, int) and encoder.dim > 0
+
+    def test_embed_returns_the_width_dim_advertises(self):
+        # `dim` is read by report.py for the representation block, so it has to be the width
+        # the array actually has rather than an independently declared number.
+        encoder = ClassicalEncoder()
+        assert encoder.embed([noise_image(60), noise_image(61)]).shape[1] == encoder.dim
+
+    def test_an_object_with_wrongly_typed_members_still_satisfies_the_protocol(self):
+        # Characterisation of the boundary's real strength, so that a later reader does not
+        # mistake the isinstance check above for a guarantee about types.
+        class WronglyTyped:
+            name = 42
+            revision = None
+            dim = "not an integer"
+
+            def embed(self, images):
+                return "not an array"
+
+        assert isinstance(WronglyTyped(), Encoder)
+
+    @pytest.mark.parametrize("missing", ["name", "revision", "dim", "embed"])
+    def test_dropping_any_single_member_breaks_conformance(self, missing):
+        # The must-not-match arm. Without it, a Protocol that accepted everything would pass
+        # the positive check in TestTheProtocol and nothing would notice.
+        members = {
+            "name": "x",
+            "revision": "1",
+            "dim": 3,
+            "embed": lambda self, images: np.zeros((len(images), 3), dtype=np.float32),
+        }
+        del members[missing]
+        incomplete = type("Incomplete", (), members)
+        assert not isinstance(incomplete(), Encoder)
