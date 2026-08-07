@@ -57,10 +57,51 @@ singular, so it is regularised by shrinkage, with the estimator and its paramete
 the report. Scores are calibrated by leave-one-out against the board itself, which is what
 makes them comparable across boards.
 
+## What the number means, and the board size that bounds it
+
+This section was added after the decision above, and it closes a hole in it. The decision
+said scores are "calibrated by leave-one-out against the board itself" and never said what
+the resulting number *is*. A report that prints an uninterpreted number is the failure
+ADR-0002 exists to prevent, and it was about to print one.
+
+The score is a **conformal p-value**. Take the mean distance to the k nearest references as
+the nonconformity measure, compute it for the candidate and for every reference under
+leave-one-out, and report the fraction of references at least as unusual as the candidate.
+Under exchangeability of the references with the candidate, that is a finite-sample inlier
+test with a guarantee that does not depend on the embedding being well behaved.
+
+**It is not a probability that an asset is on-brand.** It answers "would this look out of
+place among these references", which is a narrower question than "is this right for the
+brand", and the two come apart whenever the board is an incomplete statement of the brand,
+which is nearly always. The report renders it as an inlier test and the vocabulary in
+`eval/thresholds.json` under `score_semantics` forbids the percentage-of-fit rendering.
+
+**The board size bounds the resolution, and at the bottom of the supported range it bounds
+it hard.** With n references the achievable p-values are the multiples of 1/(n+1):
+
+| board size | finest expressible p | a 0.05 rejection rule |
+|---|---|---|
+| 10 | 1/11 = 0.0909 | impossible, zero power |
+| 20 | 1/21 = 0.0476 | just expressible |
+| 50 | 1/51 = 0.0196 | fine |
+
+So a ten-image board cannot reject anything at a nominal 5%, no matter how far off the
+candidate is. This is a property of the sample size and not of the method, and no choice of
+encoder changes it. The report computes 1/(n+1) for the board in front of it and refuses a
+threshold below that rather than rounding up to something it cannot support.
+
+This does not disturb the interval coverage pre-registered under ADR-0002. That asks for a
+0.90 level, and 1 - 1/11 = 0.909 at the smallest board, so the level is reachable at every
+supported size. Checked rather than assumed, because a correction that quietly invalidates
+an already-registered number is worse than the gap it closes.
+
 ## Acceptance criteria
 
-This record stays `Proposed` until all three measurements exist in the repository, each
-reproducible by the command named in its dataset row.
+This record stays `Proposed` until all **five** measurements exist in the repository, each
+reproducible by the command named in its dataset row. The first three test the
+representation. The last two, added later, test the report's labels and the weights the
+whole thing runs on, and are cheap: neither needs human labels and neither needs a dataset
+this repository cannot obtain.
 
 **1. Content invariance, coarse.** On a set with a full crossing of style and subject, embed
 every image and compare two families of pairs: same style with different subject, and
@@ -99,6 +140,35 @@ the README where a reader sees it.
 assets drawn from a deliberately different group, and require that every on-look asset ranks
 above every off-look one. This is the weakest of the three tests and it is included because
 it is the one a reader will try first, by hand, with two obviously different folders.
+
+**4. The axes measure what their labels claim.** The classical axes are reported separately
+under the names palette, tone and composition, and until now nothing checked that those
+names are true. An axis that responds to every change is not a decomposition. It is one
+number printed three times under different headings, and it would make the report look
+richer while telling a designer less than a single number honestly labelled.
+
+Take an image, apply one intervention at a time, and record how much each axis moves.
+Recolouring must move palette most. A luminance shift must move tone most. Cropping must
+move composition most. Added grain must move texture most. Acceptance, pre-registered in
+`eval/thresholds.json` under `axis_intervention`: the intended axis moves at least twice as
+much as the largest unintended one. An axis that fails loses its name in the report and
+appears as an unlabelled component, or comes out.
+
+This runs entirely on images the repository already has, needs no human judgment, and would
+have caught a mislabelled decomposition that every other test in this record passes.
+
+**5. The pinned weights are the paper's weights.** The CSD repository's own documentation
+warns that its published checkpoint does not reproduce the numbers in the paper. ADR-0002
+requires pinning an exact revision, which guarantees the same answer on every run. It does
+not guarantee the right one, and a pinned wrong answer is more durable than an unpinned one
+because it is reproducible.
+
+So reproduce the published benchmark before quoting it: WikiArt artist retrieval, mAP@1,
+against the reported 64.56 from arXiv:2404.01292. Acceptance is a shortfall of no more than
+2 absolute points. On failure the weights are not the paper's, and either weights that do
+reproduce it are found or that published number is struck from every claim here. Citing a
+paper's benchmark while running weights that miss it is the quiet version of making the
+number up.
 
 ## Alternatives considered
 

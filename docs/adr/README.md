@@ -39,3 +39,5 @@ validation claim.
 | [0001](0001-engine-and-viewer-split.md) | Two artifacts, a Python engine and a TypeScript viewer, joined by a file | Proposed |
 | [0002](0002-report-contract.md) | The report is the product, and its JSON schema is the contract | Proposed |
 | [0003](0003-style-representation.md) | Style representation, and the content invariance test that decides it | Proposed |
+| [0004](0004-abstention.md) | The tool refuses to score when it cannot, and refusing is a first-class output | Proposed |
+| [0005](0005-reference-set.md) | The reference set is an input with properties, not a folder of images | Proposed |

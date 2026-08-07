@@ -49,6 +49,8 @@ manifest's checksum are committed, the manifest is git-ignored, and the row is `
 | `off-style-rejection` | derived | no new source | held-out cells of the above | inherits | n/a | `ready` on PACS, `blocked` on brand |
 | `interval-coverage` | derived | no new source | resampled boards of n in {10, 20, 50} | inherits | n/a | `ready` on PACS, `blocked` on brand |
 | `human-style-grouping` | none yet | — | — | — | — | `blocked`, needs a source |
+| `abstention-triggers` | derived | no new source | resampled boards below threshold resolution, two-group boards, cross-medium assets | inherits | n/a | `ready` on PACS |
+| `effective-board-size` | derived | no new source | paired boards of equal file count, one padded with generated near-duplicates | inherits | n/a | `ready` on PACS |
 
 Reproduce with `uv run --with pyarrow datasets/pacs/fetch.py`. Each fetch script verifies an
 exact checksum and fails loudly rather than proceeding with a partial or substituted file.

@@ -37,5 +37,95 @@
     "max_inversions": 0,
     "inversion_reporting": "every inversion names both images so it can be looked at",
     "scope": "smoke test at board size 20, one board per group"
+  },
+  "score_semantics": {
+    "adr": "0003",
+    "_comment": [
+      "The score is a conformal p-value: the fraction of the reference set that is at",
+      "least as unusual as the candidate, under exchangeability. It is a finite-sample",
+      "inlier test. It is NOT a probability that the asset is on-brand, and the report",
+      "must never render it as a percentage of brand fit.",
+      "",
+      "Its resolution is bounded by the board size. With N references the achievable",
+      "p-values are the multiples of 1/(N+1), so a threshold finer than 1/(N+1) can",
+      "never fire, whatever the candidate looks like."
+    ],
+    "achievable_p_values": "multiples of 1/(N+1)",
+    "finest_expressible_by_board_size": {"10": 0.0909, "20": 0.0476, "50": 0.0196},
+    "min_alpha_permitted": "1/(N+1) for that board, computed and printed by the report",
+    "forbidden_renderings": [
+      "percentage on-brand",
+      "probability of approval",
+      "any wording implying calibration to a human decision"
+    ],
+    "on_alpha_below_resolution": "refuse the threshold and say so; do not round it up silently"
+  },
+  "axis_intervention": {
+    "adr": "0003",
+    "_comment": [
+      "The classical axes are reported separately and labelled palette, tone and",
+      "composition. Nothing currently tests that they measure what their labels say.",
+      "An axis that responds to everything is not a decomposition, it is three copies",
+      "of one number wearing different names, and it would read as a richer report."
+    ],
+    "interventions": ["recolour", "luminance_shift", "crop", "grain"],
+    "expected_dominant_axis": {
+      "recolour": "palette",
+      "luminance_shift": "tone",
+      "crop": "composition",
+      "grain": "texture"
+    },
+    "min_diagonal_to_offdiagonal_ratio": 2.0,
+    "on_failure": "the axis loses its name in the report and is shown as an unlabelled component, or is removed"
+  },
+  "abstention": {
+    "adr": "0004",
+    "_comment": [
+      "Both directions are pre-registered together on purpose. A refusal rule that fires",
+      "on everything satisfies the fires-when-it-should criterion completely and is",
+      "useless, so the quiet-when-it-should number is what gives the other one meaning."
+    ],
+    "must_fire": {
+      "constructed_cases": ["threshold_below_resolution", "two_disjoint_style_groups", "medium_absent_from_board"],
+      "required_fire_rate": 1.0,
+      "reason_must_match_construction": true
+    },
+    "must_stay_quiet": {
+      "population": "single-look boards of 20 or more, assets drawn from the board's own group",
+      "max_false_abstention_rate": 0.05
+    },
+    "on_failure": "a rule that cannot satisfy both halves is removed rather than tuned, since tuning it against these same cases is fitting to the test"
+  },
+  "effective_board_size": {
+    "adr": "0005",
+    "_comment": [
+      "The falsifier is listed first. If duplicated boards are not measurably more",
+      "restrictive at these board sizes, ADR-0005's premise is wrong and the record",
+      "should be rejected rather than kept because its correction was implemented."
+    ],
+    "falsifier_first": {
+      "claim": "a board padded with near-duplicates is more restrictive on held-out on-style assets than a distinct board of the same file count",
+      "min_effect": "stated as a rejection-rate difference once the pilot fixes the sampling error, and fixed before the full run",
+      "control": "compare at equal n_eff, not equal file count; a smaller board is more restrictive for reasons this claim does not predict"
+    },
+    "n_eff_tracking": {
+      "requirement": "n_eff on the duplicated board lands closer to the distinct-source count than to the file count",
+      "tolerance": 0.25
+    },
+    "duplicate_generation": ["crop", "mild_recolour", "recompression"]
+  },
+  "weight_reproduction": {
+    "adr": "0003",
+    "_comment": [
+      "The CSD repository's own documentation warns that its uploaded checkpoint does",
+      "not reproduce the paper's reported numbers. Pinning a revision guarantees the",
+      "same answer every time, which is worthless if it is the same wrong answer.",
+      "So the pin is accompanied by a reproduction of the published benchmark."
+    ],
+    "benchmark": "wikiart_artist_retrieval_map_at_1",
+    "published_value": 64.56,
+    "published_source": "arXiv:2404.01292",
+    "max_absolute_shortfall": 2.0,
+    "on_failure": "the weights are not the paper's; either locate weights that reproduce it or drop the published number from every claim in this repository"
   }
 }

@@ -21,6 +21,15 @@ The interesting part is not "is this image good", which is a different and older
 is "does this image belong with those images", which is a question about a relationship
 between one asset and a set.
 
+**This is not claimed to be new.** A survey of the commercial landscape found no vendor
+*publicly documenting* a calibrated numeric score for a candidate against a multi-image
+reference set, but that is a statement about published documentation and not about what
+exists. At least two products market workflows of this shape without publishing their
+method, and enterprise tools that are not publicly documented cannot be ruled out at all.
+So the survey supports "not publicly specified" and does not support "does not exist", and
+those are different claims. What this repository offers is a method written down in enough
+detail to be checked and refuted, which is a claim about transparency rather than priority.
+
 ## What it will do
 
 ```
