@@ -1,0 +1,33 @@
+# Datasets are reconstructed from manifests, never committed. See DATASETS.md.
+datasets/*/images/
+datasets/*/raw/
+*.zip
+*.tar
+*.tar.gz
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+.next/
+.turbo/
+*.tsbuildinfo
+
+# Model caches
+.cache/
+~/.cache/huggingface
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
