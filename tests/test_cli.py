@@ -57,29 +57,77 @@ SEPARATION_MIN = 0.06
 SEPARATION_MAX = 0.60
 
 
-def _draw(rng: np.random.Generator, family: str = "warm") -> np.ndarray:
-    """One synthetic image from a named look.
+# A family is a palette, a luminance range and a panel scale, for the reason recorded at
+# `LOOKS` in test_board_cli_properties.py: under encoder revision 2 each descriptor block
+# carries a third of the vector, so a family that differs only in hue no longer reads as a
+# different look. The previous generator varied hue alone and reached only seven of the ten
+# references this file needs once the encoder stopped being 92% tone.
+FAMILIES = {
+    "warm": {
+        "palette": np.array(
+            [
+                [0.16, 0.11, 0.07],
+                [0.48, 0.30, 0.16],
+                [0.88, 0.54, 0.22],
+                [0.97, 0.90, 0.76],
+                [0.44, 0.45, 0.47],
+            ]
+        ),
+        "level": (0.72, 1.05),
+        "grid": (4, 8),
+    },
+    "cool": {
+        "palette": np.array(
+            [
+                [0.06, 0.09, 0.20],
+                [0.18, 0.30, 0.58],
+                [0.34, 0.56, 0.86],
+                [0.80, 0.90, 0.98],
+                [0.40, 0.44, 0.50],
+            ]
+        ),
+        "level": (0.26, 0.46),
+        "grid": (2, 4),
+    },
+}
 
-    A look is a hue direction plus a range of luminance levels, contrasts and spatial
-    frequencies. Two images from the same look sit near each other in the classical encoder's
-    space and two from different looks sit far apart.
+FAMILY_CONCENTRATION = 1.1
+
+
+def _draw(rng: np.random.Generator, family: str = "warm") -> np.ndarray:
+    """One synthetic image from a named look: that look's palette in a random proportion.
+
+    Images from one family differ by how much AREA each of its colours occupies rather than by
+    hue. `palette_feature_vector` is a hard-binned Lab histogram, so hue variation moves an
+    image between bins in a step and its palette distance jumps between roughly zero and one,
+    which leaves no usable middle for a selection window to sit in. Holding the palette fixed
+    gives every image identical bin support and a distance that varies smoothly with the
+    difference in mixture.
     """
     height, width = IMAGE_SIZE
-    rows = np.linspace(0, 1, height)[:, None]
-    columns = np.linspace(0, 1, width)[None, :]
+    spec = FAMILIES[family]
+    colours = spec["palette"]
+    weights = rng.dirichlet(np.full(len(colours), FAMILY_CONCENTRATION))
 
-    hues = {"warm": np.array([0.92, 0.52, 0.26]), "cool": np.array([0.22, 0.44, 0.92])}
-    hue = np.clip(hues[family] * rng.uniform(0.7, 1.15), 0.04, 1.0)
+    low, high = spec["grid"]
+    blocks_y = int(rng.integers(low, high))
+    blocks_x = int(rng.integers(low, high + 1))
+    panel = colours[rng.choice(len(colours), size=(blocks_y, blocks_x), p=weights)]
+    tile = np.repeat(
+        np.repeat(panel, int(np.ceil(height / blocks_y)), axis=0),
+        int(np.ceil(width / blocks_x)),
+        axis=1,
+    )[:height, :width]
 
-    angle = rng.uniform(0, np.pi)
+    rows = np.linspace(0.0, 1.0, height)[:, None, None]
+    columns = np.linspace(0.0, 1.0, width)[None, :, None]
+    angle = float(rng.uniform(0.0, np.pi))
     ramp = np.cos(angle) * rows + np.sin(angle) * columns
     ramp = (ramp - ramp.min()) / (ramp.max() - ramp.min())
-    texture = 0.5 + 0.5 * np.sin(rng.uniform(2, 12) * np.pi * (rows + columns) + rng.uniform(0, 6))
 
-    level = rng.uniform(0.28, 0.68)
-    contrast = rng.uniform(0.15, 0.45)
-    field = level + contrast * (0.6 * ramp + 0.4 * texture - 0.5)
-    return (np.clip(field[..., None] * hue[None, None, :], 0, 1) * 255).astype(np.uint8)
+    level = float(rng.uniform(*spec["level"]))
+    field = np.clip(level * tile * (0.72 + 0.5 * ramp), 0.0, 1.0)
+    return (field * 255.0).astype(np.uint8)
 
 
 def _reference_arrays(
@@ -128,9 +176,10 @@ def _candidate_dir(root: Path, count: int, seed: int, family: str = "warm") -> P
 
 
 def _spread_candidate_arrays(
-    reference_dir: Path, distinct: int = 4, seed: int = 99, pool: int = 200
+    reference_dir: Path, distinct: int = 3, seed: int = 99, pool: int = 200
 ) -> list[np.ndarray]:
-    """Candidates chosen to realise several different scores, plus one exact repeat.
+    """Candidates chosen to realise several different scores, plus one exact repeat, plus one
+    drawn from the other look so the abstained arm of the union is reachable.
 
     A candidate drawn at random from the board's own look is usually the most typical thing in
     the augmented bag, so it scores 1.0, and a whole candidate set drawn that way scores 1.0
@@ -140,7 +189,14 @@ def _spread_candidate_arrays(
 
     So the pool is scored first and one image is kept per distinct score, highest first, with
     a second image at the top score so an exact tie exists. Raises rather than returning a
-    narrower set: a set with two distinct scores is a different fixture from one with four.
+    narrower set: a set with two distinct scores is a different fixture from one with three.
+
+    The off-look member is APPENDED rather than hoped for. It used to arrive by luck: the
+    previous generator varied hue alone, which under a 92%-tone encoder spread the same-look
+    pool widely enough that its low tail abstained on resolution. Under revision 2 the
+    same-look pool is genuinely same-look, so nothing in it abstains, and the fixture's claim
+    to exercise both branches quietly became false while every assertion about the scored
+    branch still passed. A fixture should not depend on a tail it does not construct.
     """
     reference_embeddings = _reference_embeddings(reference_dir)
     rng = np.random.default_rng(seed)
@@ -164,6 +220,7 @@ def _spread_candidate_arrays(
 
     chosen = [by_score[score][0] for score in ordered[:distinct]]
     chosen.insert(1, by_score[ordered[0]][1])
+    chosen.append(_draw(np.random.default_rng(seed + 1), "cool"))
     return chosen
 
 

@@ -53,9 +53,20 @@ class TestTheProtocol:
         assert not isinstance(NotAnEncoder(), Encoder)
 
     def test_identity_fields_are_the_pinned_strings(self):
+        """The revision moved to "2" with the per-block normalisation, and this test failing on
+        that change is the revision field working rather than a test needing maintenance.
+
+        Revision 1 concatenated the three descriptors raw, which weighted them by whatever
+        magnitudes `axes.py` happened to produce: measured over a pool of 250, tone carried
+        92.0% of the vector's energy, palette 8.0% and composition 0.0%. Every distance the
+        engine computed under revision 1 was therefore a tone distance to three significant
+        figures, and any board built or scored under it is not comparable to one built under
+        revision 2. That is what a revision string is for, so it is bumped rather than the
+        change being made quietly under the old one.
+        """
         encoder = ClassicalEncoder()
         assert encoder.name == "classical-v1"
-        assert encoder.revision == "1"
+        assert encoder.revision == "2"
 
     def test_identity_fields_are_plain_attributes_not_properties(self):
         # board.py and report.py read these off the class without calling anything.

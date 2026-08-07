@@ -426,28 +426,84 @@ BOARD_SIZE = 10
 # n. The ceiling is below ADR-0004's category cut of 0.35, so the board reads as one look and
 # a candidate is compared against all ten references. Both ends are asserted by
 # `test_the_reference_board_is_in_the_regime_these_tests_assume`.
+#
+# RE-DERIVED against revision 2 of the encoder, and the answer is that these two numbers do
+# not move. Measured over sixteen seeds at a pool of 600, the generator below reaches ten
+# references satisfying the full regime — `duplicate_groups` returning ten groups and
+# `kish_n_eff` returning exactly ten — on 16 of 16, with the observed off-diagonal minimum
+# landing in 0.0801..0.0845 and the maximum in 0.2872..0.2999. Widening the ceiling to 0.32
+# makes it WORSE (15 of 16), because a laxer ceiling admits an early reference that is then
+# too far from the rest of the pool; raising the floor to 0.10 fails on every seed. What had
+# to change to keep this band is the generator, for the reason recorded on it below.
 SEPARATION_MIN = 0.08
 SEPARATION_MAX = 0.30
 
+# A look is a palette, a luminance range and a panel scale together, and it has to be all
+# three under revision 2. Under revision 1 a look could be a hue direction alone: that encoder
+# put 92.0% of its energy in tone, 8.0% in palette and 0.0% in composition (measured, pool of
+# 250 — the composition block's norm is ~0.9 against tone's ~15,000), so a fixture only had to
+# move one axis to move the embedding. Revision 2 pins each block at a third, so a second look
+# that differs only in hue lands at a cross-look distance of about 0.32 — inside this band,
+# where it would read as another reference rather than as a different look, and the abstained
+# arm of the union would quietly stop being reachable.
 LOOKS = {
-    "sand": np.array([0.86, 0.72, 0.52]),
-    "ink": np.array([0.18, 0.24, 0.40]),
+    "sand": {
+        "palette": np.array(
+            [
+                [0.88, 0.74, 0.54],
+                [0.62, 0.48, 0.34],
+                [0.35, 0.42, 0.46],
+                [0.20, 0.26, 0.38],
+                [0.78, 0.56, 0.40],
+            ]
+        ),
+        "level": (0.70, 1.05),
+        "grid": (4, 8),
+    },
+    "ink": {
+        "palette": np.array(
+            [
+                [0.16, 0.20, 0.34],
+                [0.24, 0.32, 0.52],
+                [0.10, 0.12, 0.20],
+                [0.34, 0.40, 0.60],
+                [0.18, 0.28, 0.44],
+            ]
+        ),
+        "level": (0.24, 0.44),
+        "grid": (2, 4),
+    },
 }
 
+# How tightly the panel proportions cluster. This is the one knob the band is derived against:
+# large values make every board nearly the same mixture and collapse distances toward zero,
+# small values let proportions vary wildly and push them toward one.
+LOOK_CONCENTRATION = 1.1
 
-def _swatch(rng: np.random.Generator, look: str, jitter: float = 0.40) -> np.ndarray:
-    """One synthetic image: a grid of tinted panels under a tilted gradient.
 
-    A look is a hue direction. Two images from one look sit near each other in the classical
-    encoder's space and two from different looks sit far apart, which is what lets one fixture
-    exercise both the scored and the abstained branch.
+def _swatch(rng: np.random.Generator, look: str) -> np.ndarray:
+    """One synthetic image: one look's palette in a random proportion, under a tilted gradient.
+
+    The images from a look vary by how much AREA each of its colours occupies, not by hue.
+    That is what a moodboard is, and it is also the only construction that gives this fixture
+    a usable middle. `palette_feature_vector` is a hard-binned 4x4x4 Lab histogram and an image
+    occupies a median of 4 of its 64 bins, so bin membership is a step function of hue: two
+    images whose bins are disjoint are exactly orthogonal. Measured on the previous
+    hue-jittering generator, 44.1% of palette pairs sat at distance 1.0 and 8.7% below 0.05,
+    leaving the interior of the window nearly empty and the selector unable to find ten
+    mutually in-band references (it reached 5). Holding the palette fixed and varying only the
+    proportions gives every image identical bin support, so distance varies smoothly with the
+    difference in mixture instead of jumping.
     """
     height, width = IMAGE_SIZE
-    hue = np.clip(LOOKS[look] * rng.uniform(1.0 - jitter, 1.0 + jitter, size=3), 0.03, 1.0)
+    spec = LOOKS[look]
+    colours = spec["palette"]
+    weights = rng.dirichlet(np.full(len(colours), LOOK_CONCENTRATION))
 
-    blocks_y = int(rng.integers(3, 7))
-    blocks_x = int(rng.integers(3, 8))
-    panel = rng.uniform(0.45, 1.35, size=(blocks_y, blocks_x, 1))
+    low, high = spec["grid"]
+    blocks_y = int(rng.integers(low, high))
+    blocks_x = int(rng.integers(low, high + 1))
+    panel = colours[rng.choice(len(colours), size=(blocks_y, blocks_x), p=weights)]
     tile = np.repeat(
         np.repeat(panel, int(np.ceil(height / blocks_y)), axis=0),
         int(np.ceil(width / blocks_x)),
@@ -460,12 +516,12 @@ def _swatch(rng: np.random.Generator, look: str, jitter: float = 0.40) -> np.nda
     ramp = np.cos(angle) * rows + np.sin(angle) * columns
     ramp = (ramp - ramp.min()) / (ramp.max() - ramp.min())
 
-    level = float(rng.uniform(0.55, 1.05))
-    field = np.clip(level * tile * (0.65 + 0.7 * ramp), 0.0, 2.0)
-    return np.clip(field * hue[None, None, :] * 255.0, 0, 255).astype(np.uint8)
+    level = float(rng.uniform(*spec["level"]))
+    field = np.clip(level * tile * (0.72 + 0.5 * ramp), 0.0, 1.0)
+    return (field * 255.0).astype(np.uint8)
 
 
-def _separated_references(count: int, seed: int, pool: int = 400) -> list[np.ndarray]:
+def _separated_references(count: int, seed: int, pool: int = 600) -> list[np.ndarray]:
     """A reference set every pair of which is separated into the window above.
 
     Raises rather than returning a shorter set. A board of eight where ten were asked for is a
@@ -524,9 +580,7 @@ def workspace(tmp_path_factory) -> Path:
 
 @pytest.fixture(scope="module")
 def reference_dir(workspace: Path) -> Path:
-    return _write(
-        workspace / "references", _separated_references(BOARD_SIZE, seed=20260807), "ref"
-    )
+    return _write(workspace / "references", _separated_references(BOARD_SIZE, seed=20260807), "ref")
 
 
 @pytest.fixture(scope="module")
@@ -831,9 +885,7 @@ def test_the_emitted_report_satisfies_the_committed_json_schema(ranked: dict):
     schema = json.loads(Path(SCHEMA_PATH).read_text(encoding="utf-8"))
     validator = jsonschema.Draft202012Validator(schema)
     errors = sorted(validator.iter_errors(ranked["document"]), key=lambda error: error.path)
-    assert not errors, "\n".join(
-        f"{list(error.path)}: {error.message}" for error in errors[:10]
-    )
+    assert not errors, "\n".join(f"{list(error.path)}: {error.message}" for error in errors[:10])
 
 
 def test_the_run_exercised_both_states_of_the_asset_union(ranked: dict):
