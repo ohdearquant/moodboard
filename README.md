@@ -65,19 +65,12 @@ acceptance test attached: see [ADR-0003](docs/adr/0003-style-representation.md).
 
 ## Scope for the first version
 
-**A panel inside the design application, backed by an engine that runs outside it.** The work
-being scored is already open in Photoshop, Illustrator or InDesign when the question gets
-asked, so that is where the answer belongs. A designer with two hundred candidates is not
-going to export them, run a command line tool and open a separate file, and every step
-between the question and the answer is a step where this loses to doing it by eye.
-
-The command line tool is how the engine is driven and tested, not a smaller version of the
-product. It stays, because every acceptance measurement in the records below runs headless
-over thousands of images and none of that is expressible through a panel.
-[ADR-0006](docs/adr/0006-adobe-panel-is-the-primary-surface.md) has the surface decision and
-the constraint that makes it an architectural one rather than a packaging choice: the engine
-is Python with large model weights, a panel is a sandboxed JavaScript host, and unreleased
-work under embargo should not leave the machine to get scored.
+**A standalone tool: the CLI, the library, and a self-contained HTML report.** It depends on
+nothing a contributor cannot get for free — clone the repository, fetch the datasets, and
+every measurement reproduces. No design-application SDK is a dependency of anything here,
+for any host ([ADR-0007](docs/adr/0007-standalone.md)). Integrations are possible precisely
+because they are not needed: the JSON report is the boundary, and anything that wants to
+display a score consumes the report file on its own side of it.
 
 Aesthetic quality scoring, meaning "is this a good photograph", is a different axis and is
 deliberately out of scope. Coherence with a reference set is not quality, and mixing them

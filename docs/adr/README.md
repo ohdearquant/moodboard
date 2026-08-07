@@ -41,4 +41,5 @@ validation claim.
 | [0003](0003-style-representation.md) | Style representation, and the content invariance test that decides it | Proposed |
 | [0004](0004-abstention.md) | The tool refuses to score when it cannot, and refusing is a first-class output | Proposed |
 | [0005](0005-reference-set.md) | The reference set is an input with properties, not a folder of images | Proposed |
-| [0006](0006-adobe-panel-is-the-primary-surface.md) | The Adobe panel is the primary surface, and the engine stays out of process | Proposed |
+| [0006](0006-adobe-panel-is-the-primary-surface.md) | The Adobe panel is the primary surface, and the engine stays out of process | Superseded by 0007 |
+| [0007](0007-standalone.md) | Standalone tool, no design-application SDK dependency | Proposed |

@@ -1,6 +1,6 @@
 # ADR-0006: The Adobe panel is the primary surface, and the engine stays out of process
 
-- **Status:** Proposed
+- **Status:** Superseded by [0007](0007-standalone.md)
 - **Date:** 2026-08-07
 - **Measurable claim:** partly. The surface choice is a product decision and carries no
   dataset. The latency budget it implies is measurable and is stated below; it is measured
