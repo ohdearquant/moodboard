@@ -58,9 +58,21 @@ data does not travel. A row that is not runnable is `blocked`, whatever its lice
 
 The distinction is load-bearing in both directions. Reading it the old way, PACS is
 `blocked` on an unresolved licence and every acceptance criterion in ADRs 0002 through 0005
-loses its evidence, which is a stronger conclusion than the facts support: the licence is
-unresolved for *redistribution*, and nothing about it stops a reader fetching the mirror and
-rebuilding. Reading it too loosely in the other direction is how the Unsplash manifest came
+loses its evidence, which is a stronger conclusion than the facts support: nothing about the
+licence stops a reader fetching the mirror and rebuilding, which is what `runnable` asserts
+and all it asserts.
+
+Stated precisely, because the earlier wording here narrowed the unresolvedness to
+*redistribution* and that narrowing was not ours to make. **The mirror declares the licence
+unknown wholesale, and unknown includes use.** So this row does not rest on a resolved
+permission to use the data; it rests on an accepted risk, taken deliberately and recorded
+here rather than dissolved by a qualifier. What makes the risk acceptable is its blast
+radius, not its absence: the use is non-commercial measurement inside a research repository,
+no portion of the data is republished, and the manifest is withheld. What would change the
+answer is the licence resolving to something restrictive on use, at which point the row goes
+`blocked` and the measurements built on it are withdrawn rather than grandfathered. Scoping
+an unknown to the half you are not worried about reads as diligence and is the same move as
+not checking. Reading it too loosely in the other direction is how the Unsplash manifest came
 within one command of being published. Unsplash is `blocked` under the new reading too, and
 for the reason that actually applies: its own fetcher is exploratory rather than ready, quite
 apart from the terms.

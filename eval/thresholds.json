@@ -17,10 +17,17 @@
     "adr": "0002",
     "stated_level": 0.9,
     "resamples": 1000,
-    "board_sizes": [10, 20, 50],
+    "board_sizes": [
+      10,
+      20,
+      50
+    ],
     "min_observed_coverage": 0.85,
     "on_shortfall": "report the observed coverage as the level, rounded down to the nearest 0.01, and change the report's stated level to it",
-    "applies_per": ["board_size", "group"],
+    "applies_per": [
+      "board_size",
+      "group"
+    ],
     "_applies_per_comment": [
       "Pooling only by board size lets a pooled 0.87 sit on top of a minority group at 0.70",
       "while every emitted report still claims 0.90. The gate is the worst group.",
@@ -53,8 +60,14 @@
     "uncertainty": "bootstrap over images, not over pairs",
     "min_auc_absolute": 0.8,
     "min_margin_over_clip": 0.1,
-    "baselines": ["clip_vit_l_14", "dinov2_vit_l_14"],
-    "datasets": ["pacs", "unsplash-collections"],
+    "baselines": [
+      "clip_vit_l_14",
+      "dinov2_vit_l_14"
+    ],
+    "datasets": [
+      "pacs",
+      "unsplash-collections"
+    ],
     "both_datasets_must_pass": false,
     "claim_scope_on_coarse_only_pass": "coarse cross-medium style invariance; the same-medium claim rests entirely on the brand row and is not evidenced by PACS",
     "on_partial_pass": "if the coarse dataset passes and the brand dataset does not, the record is NOT accepted as written; the claim is narrowed to the domain that passed and the narrowing is stated in the README"
@@ -86,7 +99,11 @@
       "never fire, whatever the candidate looks like."
     ],
     "achievable_p_values": "multiples of 1/(N+1)",
-    "finest_expressible_by_board_size": {"10": 0.0909, "20": 0.0476, "50": 0.0196},
+    "finest_expressible_by_board_size": {
+      "10": 0.0909,
+      "20": 0.0476,
+      "50": 0.0196
+    },
     "min_alpha_permitted": "1/(N+1) for that board, computed and printed by the report",
     "forbidden_renderings": [
       "percentage on-brand",
@@ -103,12 +120,31 @@
       "An axis that responds to everything is not a decomposition, it is three copies",
       "of one number wearing different names, and it would read as a richer report."
     ],
-    "interventions": ["recolour", "luminance_shift", "crop"],
+    "interventions": [
+      "recolour",
+      "luminance_shift",
+      "crop",
+      "chroma_shift_l_fixed"
+    ],
     "expected_dominant_axis": {
       "recolour": "palette",
       "luminance_shift": "tone",
-      "crop": "composition"
+      "crop": "composition",
+      "chroma_shift_l_fixed": "palette"
     },
+    "_paired_arms_comment": [
+      "luminance_shift and chroma_shift_l_fixed are the two arms of ONE symmetric claim, that",
+      "palette and tone are separable, and both are required. luminance_shift holds chroma",
+      "exactly fixed and tone must win; chroma_shift_l_fixed holds L exactly fixed and palette",
+      "must win. recolour is NOT the second arm: it is a general recolour that may move",
+      "lightness too, so it cannot isolate chroma and passing it says nothing about symmetry.",
+      "Registered after the lightness arm was measured unsatisfiable (ADR-0003, twelve subject",
+      "sets, ratio 0.70-1.90 against 2.0) because palette clustered over full CIELAB including",
+      "L. The repair was to cluster palette on (a, b) only. The mirrored arm exists so the",
+      "repair cannot be validated by re-running only the direction that failed, and it is the",
+      "arm that catches the opposite error: a palette axis stripped so far toward chroma that",
+      "it stops responding to a real recolour passes the lightness arm perfectly and fails here."
+    ],
     "_removed_grain_comment": [
       "A grain -> texture row was registered here while the axis vocabulary is exactly",
       "palette, tone, composition, asserted by ADR-0002's schema invariant. Texture is not",
@@ -144,20 +180,50 @@
         "when it cannot. A two-group board with large sub-looks is therefore a board the tool",
         "is supposed to SCORE, so requiring fire_rate 1.0 on it demanded behaviour the",
         "decision rule forbids and no conforming implementation could pass. Sub-looks of 8 at",
-        "alpha 0.05 give 1/(8+1) = 0.111 > 0.05, so neither category can express the request.",
-        "",
-        "resolution_effective_size_arm's group_sizes is a histogram of near-duplicate group",
-        "sizes among the 6 distinct sources (4 sources contributing 3 copies each, 2",
-        "contributing 4, totalling the 20 files n names): n_eff = 20^2 / (4*3^2 + 2*4^2) =",
-        "400/68 = 5.88, so 1/(n_eff+1) = 0.145 > alpha refuses, while the file-count floor",
-        "1/(20+1) = 0.0476 < alpha would have honoured it. This is the case that",
-        "distinguishes an implementation reading n_local from one reading n_eff_local."
+        "alpha 0.05 give 1/(8+1) = 0.111 > 0.05, so neither category can express the request."
       ],
       "constructed_cases": [
-        {"case": "threshold_below_resolution", "n": 10, "alpha": 0.05, "expect_reason": "resolution"},
-        {"case": "two_disjoint_style_groups", "sub_look_size": 8, "alpha": 0.05, "expect_reason": "multi_modality"},
-        {"case": "asset_from_absent_domain", "alpha": 0.05, "expect_reason": "far_outlier"},
-        {"case": "resolution_effective_size_arm", "n": 20, "group_sizes": {"3": 4, "4": 2}, "alpha": 0.05, "expect_reason": "resolution"}
+        {
+          "case": "threshold_below_resolution",
+          "n": 10,
+          "alpha": 0.05,
+          "expect_reason": "resolution"
+        },
+        {
+          "case": "two_disjoint_style_groups",
+          "sub_look_size": 8,
+          "alpha": 0.05,
+          "expect_reason": "multi_modality"
+        },
+        {
+          "case": "asset_from_absent_domain",
+          "alpha": 0.05,
+          "expect_reason": "far_outlier"
+        },
+        {
+          "case": "duplicated_board_below_effective_resolution",
+          "n": 20,
+          "distinct_sources": 6,
+          "group_sizes": [
+            3,
+            3,
+            3,
+            3,
+            4,
+            4
+          ],
+          "alpha": 0.05,
+          "expect_reason": "resolution",
+          "expect_binding_floor": "effective",
+          "_why": [
+            "Discriminating by construction, which is the point: 1/(20+1)=0.0476 < alpha so the",
+            "ACHIEVABILITY arm honours the request, while n_eff = 400/68 = 5.88 gives",
+            "1/(5.88+1)=0.145 > alpha so the ADMISSIBILITY arm refuses. An implementation reading",
+            "the file count alone returns a score here and still passes every other must_fire case.",
+            "expect_binding_floor is required because a refusal reporting only reason=resolution",
+            "cannot say which of the two arms fired."
+          ]
+        }
       ],
       "required_fire_rate": 1.0,
       "reason_must_match_construction": true
@@ -167,7 +233,11 @@
         "The other half of rule 2, and a distinct arm: a stuck-on-abstain implementation",
         "passes must_fire completely and fails only here."
       ],
-      "case": {"two_disjoint_style_groups": true, "sub_look_size": 25, "alpha": 0.05},
+      "case": {
+        "two_disjoint_style_groups": true,
+        "sub_look_size": 25,
+        "alpha": 0.05
+      },
       "required_outcome": "scored, carrying the category the candidate was scored in",
       "max_abstention_rate": 0.05
     },
@@ -176,21 +246,38 @@
         "Restricting this to single-look boards of 20 or more leaves the small-board and",
         "multi-look populations unmeasured, which are exactly the populations rules 1 and 2",
         "are most likely to refuse without cause. Each size is tested at an alpha it can",
-        "express, since testing it at one it cannot is a must_fire case wearing quiet clothes.",
-        "",
-        "The fifth row's group_sizes (a histogram, same reading as must_fire's) is a mildly",
-        "duplicated board, 50 files from 40 distinct sources (30 singletons, 10 pairs):",
-        "n_eff = 50^2 / (30*1^2 + 10*2^2) = 2500/70 = 35.7, so 1/(n_eff+1) = 0.027 < alpha",
-        "still admits the request. This is what stops resolution_effective_size_arm's new",
-        "n_eff floor being satisfied by an implementation that refuses whenever any",
-        "duplicate is present at all, which would pass that case and be useless."
+        "express, since testing it at one it cannot is a must_fire case wearing quiet clothes."
       ],
       "population": [
-        {"n": 10, "alpha": 0.1, "look": "single"},
-        {"n": 20, "alpha": 0.05, "look": "single"},
-        {"n": 50, "alpha": 0.02, "look": "single"},
-        {"n": 50, "alpha": 0.05, "look": "multi", "sub_look_size": 25},
-        {"n": 50, "alpha": 0.05, "look": "single", "group_sizes": {"1": 30, "2": 10}}
+        {
+          "n": 10,
+          "alpha": 0.1,
+          "look": "single"
+        },
+        {
+          "n": 20,
+          "alpha": 0.05,
+          "look": "single"
+        },
+        {
+          "n": 50,
+          "alpha": 0.02,
+          "look": "single"
+        },
+        {
+          "n": 50,
+          "alpha": 0.05,
+          "look": "multi",
+          "sub_look_size": 25
+        },
+        {
+          "n": 50,
+          "distinct_sources": 40,
+          "group_sizes": "30 singletons + 10 pairs",
+          "alpha": 0.05,
+          "look": "single",
+          "_why": "n_eff = 2500/70 = 35.7, so 1/(35.7+1)=0.027 < alpha and the board ADMITS the request. Stops the effective-size arm being satisfied by an implementation that refuses whenever any duplicate is present, which would pass the must_fire case and be useless."
+        }
       ],
       "assets": "drawn from the board's own group",
       "max_false_abstention_rate": 0.05,
@@ -230,7 +317,11 @@
       "tolerance_metric": "|n_eff - distinct| / |file_count - distinct|, so the tolerance has a unit and a denominator",
       "ground_truth": "the distinct-source count is known because the duplicates are generated, and it is withheld from the estimator"
     },
-    "duplicate_generation": ["crop", "mild_recolour", "recompression"]
+    "duplicate_generation": [
+      "crop",
+      "mild_recolour",
+      "recompression"
+    ]
   },
   "weight_reproduction": {
     "adr": "0003",

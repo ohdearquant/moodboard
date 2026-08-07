@@ -98,9 +98,16 @@ names the groups it found, and computes its guarantees from the honest number. T
 their twenty-image board behaves like a six-image board is useful; deleting fourteen of their
 files is not.
 
-**Effective size is estimated from the same clustering ADR-0004 already needs**, so this adds
-a number rather than a mechanism. The estimator and its parameters are recorded in the report,
-because an unstated correction to a sample size is a worse problem than an uncorrected one.
+**Effective size is estimated from a second clustering, not the one ADR-0004 already needs.**
+An earlier version of this record said the opposite, and the retraction is above; the sentence
+is restated here in corrected form rather than deleted, because it survived its own retraction
+once and a reader landing on this paragraph alone would otherwise rebuild the withdrawn
+version. The duplicate cut is single-linkage at 0.05 and the sub-look cut is average-linkage
+at 0.35, and no single pass can serve both: sub-looks are far apart, duplicates are nearly
+coincident, so a threshold tuned to find one is blind to the other. This therefore adds a
+mechanism and not merely a number, and the cost is named rather than absorbed. The estimator
+and its parameters are recorded in the report, because an unstated correction to a sample size
+is a worse problem than an uncorrected one.
 
 ## Acceptance criteria
 
@@ -174,8 +181,10 @@ effect is large.
 
 ## Consequences
 
-The build step gains clustering, which ADR-0004 already required, and a hash, which is trivial.
-The report gains two fields.
+The build step gains a second clustering, run at its own cut and distinct from the sub-look
+clustering ADR-0004 requires, plus a hash, which is trivial. The report gains two fields.
+Counting the clustering as free because ADR-0004 already clusters is the conflation this
+record retracts above, so the real cost is stated: two passes over the references, not one.
 
 The admissibility floor in ADR-0004's rule 1 reads n_eff; the score's denominator in
 ADR-0003 does not. Both records carry that split in their own text rather than inheriting it

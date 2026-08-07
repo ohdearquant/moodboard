@@ -49,12 +49,33 @@ wrong answer here.
 that is deliberate: a refusal rule described in prose is a rule each implementer writes
 differently, which is the same defect as no rule at all.**
 
-1. **Resolution.** If the requested threshold α is below 1/(n_local+1) for the board in hand,
-   refuse the threshold and report the finest value the board supports. `n_local` is the
-   number of references in the candidate's own category under rule 2, and equals n on a
-   single-look board. Do not round α up silently, which converts a request the tool cannot
-   honour into an answer the reader will trust. The comparison is strict: α exactly equal to
-   1/(n_local+1) is honoured, because that value is achievable.
+1. **Resolution. Two floors, and the binding one is whichever refuses more.** Refuse the
+   threshold, and report the finest value the board supports, when either of these fails:
+
+   - **Achievability:** α ≥ 1/(n_local+1). `n_local` is the number of references in the
+     candidate's own category under rule 2, and equals n on a single-look board. This one is
+     a count of files, because the achievable p-values of a conformal score are the multiples
+     of one over the number of ranked calibration scores actually in the bag.
+   - **Admissibility:** α ≥ 1/(n_eff_local+1), where `n_eff_local` is the ADR-0005 Kish
+     effective size computed over the candidate's own category. Since n_eff ≤ n_local, this
+     arm is the stricter of the two whenever the board carries near-duplicates, and it is the
+     only one that fires on them.
+
+   Both comparisons are strict: α exactly equal to a floor is honoured, because that value is
+   achievable. Do not round α up silently, which converts a request the tool cannot honour
+   into an answer the reader will trust. The report names both numbers and which one bound,
+   since they differ exactly when the board has a problem worth showing.
+
+   **The second arm is the one that was missing, and its absence was under-protection rather
+   than an omission of detail.** Rule 1 previously read only the file count, so a board of
+   twenty files built from six distinct sources advertised twenty-file resolution and honoured
+   an α its diversity could not support — precisely the defect ADR-0005 exists to prevent,
+   left unenforced in the single predicate able to enforce it. ADR-0005's Consequences already
+   asserted that this rule reads n_eff; that assertion was false about this record until now,
+   and by this record's own standard, that a rule described only in prose is a rule each
+   implementer writes differently, the floor did not exist. n_eff enters here as a floor and
+   nowhere else: it is never the conformal denominator, which ADR-0005 states at length
+   because the opposite rule was withdrawn.
 
 2. **Multi-modality.** The reference set is partitioned before anything is fitted, by a
    procedure that is a symmetric function of the augmented bag — the n references plus the
@@ -123,6 +144,15 @@ constructed:
   made the must-fire arm unsatisfiable by any conforming implementation.
 - *Far-outlier.* Assets drawn from a PACS domain absent from the board, which are far
   outliers by distance on any board built from a single other domain.
+- *Resolution, effective-size arm.* A board of **20 files built from 6 distinct sources**
+  (four sources contributing 3 near-duplicate copies each, two contributing 4), at α = 0.05.
+  The arithmetic is what makes this case discriminating rather than merely additional:
+  1/(20+1) = 0.0476 < α, so the **achievability arm honours the request**, while
+  n_eff = 20²/(4·3² + 2·4²) = 400/68 = 5.88 gives 1/(5.88+1) = 0.145 > α, so the
+  **admissibility arm refuses**. A conforming implementation abstains here **only if the
+  n_eff floor exists**; one that reads the file count alone returns a score and passes every
+  other must-fire case. The report must name `effective` as the binding floor, since a
+  refusal that says only "resolution" cannot distinguish which arm fired.
 
 **1b. The rules report multi-modality without refusing it.** Boards built from two disjoint
 PACS domains with **each sub-look at 25 members** and α = 0.05, where 1/(25+1) = 0.0385 < α.
@@ -136,7 +166,13 @@ completely. So the same measurement runs on well-formed boards with in-distribut
 where the abstention rate must be low. Pre-registered in `eval/thresholds.json` under
 `abstention`: at most 5% false abstention, measured across **every supported board size at an
 α that size can express** — n = 10 at α = 0.10, n = 20 at α = 0.05, n = 50 at α = 0.02 — and
-on multi-look boards whose sub-looks each satisfy the requested α. Restricting this arm to
+on multi-look boards whose sub-looks each satisfy the requested α, **and on a mildly
+duplicated board whose n_eff still admits the requested α**: 50 files from 40 distinct
+sources (30 singletons, 10 pairs), α = 0.05, where n_eff = 50²/(30·1² + 10·2²) = 2500/70 =
+35.7 and 1/(35.7+1) = 0.027 < α. That row is what stops the new effective-size arm being
+satisfied by an implementation that simply refuses whenever any duplicate is present, which
+would pass the must-fire case above and be useless. A floor needs both directions for the
+same reason every other rule here does. Restricting this arm to
 single-look boards of 20 or more, as an earlier version did, leaves the small-board and
 multi-look populations unmeasured, which are exactly the populations rule 1 and rule 2 are
 most likely to refuse without cause. False-abstention rates are reported per reason, since a

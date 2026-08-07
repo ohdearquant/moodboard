@@ -39,11 +39,28 @@ measurement its meaning: a number for CSD alone says nothing without a number fo
 representation everyone would otherwise have reached for.
 
 **Classical axes, computed alongside and reported separately.** Palette, as dominant colours
-in CIELAB compared by earth mover's distance. Tone, as a distance between luminance and local
-contrast distributions. Composition, coarsely, as saliency placement and negative space
-ratio. These are cheap, they are interpretable to a designer without any explanation, and
-they cover the part of "look" that a person can name. They are never folded into the style
-axis silently. ADR-0002 requires them on the page.
+compared by earth mover's distance, clustered in the **chroma plane (a, b) only**. Tone, as a
+distance between luminance and local contrast distributions. Composition, coarsely, as saliency
+placement and negative space ratio. These are cheap, they are interpretable to a designer
+without any explanation, and they cover the part of "look" that a person can name. They are
+never folded into the style axis silently. ADR-0002 requires them on the page.
+
+**Palette excludes lightness deliberately, and that is a statement about meaning rather than a
+tuning choice.** Palette is the axis of hue and chroma identity: what colours these are. Tone is
+the axis of lightness: how light or dark they sit. So the L channel belongs to tone and is kept
+out of the palette clustering, and the consequence a designer must be told is that **two images
+with identical hues at very different lightness have a palette distance of zero.** That is
+intended behaviour, not a limitation. The pair is not invisible to the tool: it moves to the
+axis named for lightness, where tone registers it maximally. Relocating a signal to the axis
+whose name claims it is what a decomposition is for.
+
+An earlier version of this record clustered palette over the full CIELAB vector with L included,
+and that was the defect rather than a defensible alternative. It made the axes correlated by
+construction: a luminance shift moved the palette centroids even with chroma held exactly fixed,
+so palette absorbed response belonging to tone, and criterion 4 below became unsatisfiable by any
+conforming implementation. Measured across twelve independent subject sets, the tone margin ran
+0.70 to 1.90 against a required 2.0 and was never cleared. The amendment is recorded here rather
+than made in the clustering call because it changes what the report means to its reader.
 
 **There is no combined score in the first version.** There is no labelled data for what
 weighting matches human judgment, so learning one would be fitting to nothing, and a
@@ -204,7 +221,22 @@ move composition most. Acceptance, pre-registered in `eval/thresholds.json` unde
 movement is divided by that axis's median absolute movement across all interventions, so the
 ratio compares like with like rather than raw units), and the intended axis moves at least
 twice as much as the largest unintended one. An axis that fails loses its name in the report
-and appears as an unlabelled component, or comes out. There is no grain row: texture is not
+and appears as an unlabelled component, or comes out.
+
+**The palette/tone pair is tested in BOTH directions, and one direction alone does not
+establish the claim.** Separability between two axes is a symmetric assertion, so it takes two
+measurements:
+
+- *Lightness isolation.* Shift luminance with chroma held exactly fixed. **Tone** clears the 2.0
+  margin over palette.
+- *Chroma isolation, the mirrored arm.* Shift hue and chroma with lightness held exactly fixed.
+  **Palette** clears the 2.0 margin over tone.
+
+Both are required. This is recorded because the natural repair, when one direction fails, is to
+fix that direction and re-run it alone, which measures one arm of a two-arm claim while reading
+as though the claim were restored. The mirrored arm is also the one that would catch the
+opposite error: a palette axis stripped so far toward chroma that it stops responding to a
+genuine recolour would pass the lightness arm perfectly and fail here. There is no grain row: texture is not
 one of the v1 axes, so a grain intervention has no registered axis to move, and a test case
 whose expected winner is absent from the vocabulary can only fail by schema rather than
 inform. If a texture axis is ever added — the Gram-matrix statistic in the alternatives is
@@ -268,9 +300,12 @@ Worth keeping in mind as a cheap additional texture axis.
 The engine depends on published model weights, so the report has to pin the exact revision.
 ADR-0002 already requires this.
 
-The three acceptance measurements are the project's validation section, and they are the part
-that makes the tool believable, so they belong in continuous integration and in the README
-once they exist.
+The four gating acceptance measurements, plus the informational fifth, are the project's
+validation section, and they are the part that makes the tool believable, so they belong in
+continuous integration and in the README once they exist. This sentence said "three" after
+the record had grown to five criteria, which is the same stale-count defect the review that
+produced this text was hunting elsewhere; a count in prose is a state claim and decays like
+any other.
 
 The datasets carry licences that do not permit redistributing images, so the repository ships
 manifests, checksums and fetch scripts, and never the image files. See `DATASETS.md`.
