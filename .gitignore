@@ -1,9 +1,18 @@
 # Datasets are reconstructed from manifests, never committed. See DATASETS.md.
 datasets/*/images/
 datasets/*/raw/
+datasets/_raw/
 *.zip
 *.tar
 *.tar.gz
+*.parquet
+
+# Manifests are LOCAL artifacts. What is committed is the recipe that builds one
+# and the checksum it must produce, which carries the reproducibility claim
+# without republishing anything derived from a source whose terms are restrictive
+# (Unsplash) or unresolved (PACS). Regenerate with the dataset's fetch.py and
+# check against checksums.sha256. See DATASETS.md, "What ready means".
+datasets/*/manifest.jsonl
 
 # Python
 __pycache__/

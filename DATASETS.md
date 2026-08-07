@@ -12,31 +12,138 @@ run for the first time, with the reasoning for each number in `eval/README.md`.
 
 A row is `ready` when all of the following exist in the repository:
 
-- a fetch script that downloads the source and verifies it,
-- `datasets/<name>/manifest.jsonl`, one line per item, carrying the item id, the group labels
-  the protocol needs, and a content hash,
-- `datasets/<name>/checksums.sha256`,
-- `datasets/<name>/LICENCE.md` recording the terms under which the source was obtained and
-  what may be redistributed.
+- a fetch script that downloads the source, verifies it against a pinned checksum, and
+  **asserts the properties the protocol depends on** rather than printing them,
+- `datasets/<name>/checksums.sha256`, the checksum the rebuilt manifest must produce,
+- `datasets/<name>/LICENCE.md` recording the terms under which the source was obtained, quoting
+  the operative clauses, and saying what may and may not be republished.
+
+**The manifest itself is a local artifact and is not committed.** It is one line per item,
+carrying the item id, the group labels the protocol needs, and a content hash, and it is
+rebuilt by running the fetch script. Committing the checksum instead of the file is not a
+weaker claim, it is a stronger one: the file only shows what was built once, whereas the
+checksum is a statement that anyone rebuilding gets exactly the same thing, and it fails
+loudly when they do not. It also keeps the repository from republishing per-item data derived
+from a source whose terms are restrictive or unresolved, which is the situation for both
+sources here.
 
 **Image files are never committed.** Every source below either forbids redistribution or
 leaves it unclear, so the repository carries the manifest, the checksums and the recipe. A
 fresh clone reconstructs the exact set by running the fetch script, and the checksums are what
 make "the exact set" a checkable statement rather than a hope.
 
+**That rule is not always sufficient, and assuming it was is how this project nearly published
+licensed data.** It protects against a restriction on the *images*. A source may instead
+restrict the *data*, in which case the manifest is a portion of the restricted thing and
+cannot be committed either. So a row is only `ready` when its licence permits publishing the
+manifest specifically — checked at the terms shipped with the data, not inferred from the
+source's public description of its licence. Where it does not, the fetch script and the
+manifest's checksum are committed, the manifest is git-ignored, and the row is `blocked`.
+
 ## Rows
 
 | claim | dataset | source | size | licence | redistributable | status |
 |---|---|---|---|---|---|---|
-| `content-invariance-coarse` | PACS | Li et al. 2017, "Deeper, Broader and Artier Domain Generalization" | 9,991 images, 4 domains, 7 classes | research use, per the original release | no, manifest only | `pending` |
-| `content-invariance-brand` | Unsplash Lite, collections | `unsplash.com/data`, `github.com/unsplash/datasets` | 25,000 photos, plus `collections.tsv` grouping them | commercial and non-commercial use permitted, images explicitly not redistributable | no, manifest and URLs only | `pending` |
-| `off-style-rejection` | derived from the two above | no new source | held-out cells | inherits | n/a | `pending` |
-| `interval-coverage` | derived from the two above | no new source | resampled boards of n in {10, 20, 50} | inherits | n/a | `pending` |
-| `human-style-grouping` | Unsplash collections, and WikiArt artist labels if the licence resolves | as above | as above | WikiArt terms unresolved at the time of writing, see below | no | `pending` |
+| `content-invariance-coarse` | PACS | mirror `flwrlabs/pacs`, rev `394113073`; original release is gone, see below | 9,991 images, 4 style groups, 7 content groups | **unresolved**; mirror declares `unknown` | no, manifest only | **`ready`** |
+| `content-invariance-brand` | Unsplash Lite | `unsplash.com/data/lite/latest` | 25,000 photos | grant is **internal use only**; publishing any portion is barred | **no, not even the manifest** | **`blocked`** |
+| `off-style-rejection` | derived | no new source | held-out cells of the above | inherits | n/a | `ready` on PACS, `blocked` on brand |
+| `interval-coverage` | derived | no new source | resampled boards of n in {10, 20, 50} | inherits | n/a | `ready` on PACS, `blocked` on brand |
+| `human-style-grouping` | none yet | — | — | — | — | `blocked`, needs a source |
 
-Every row is `pending` because no fetch script has been written yet. That is the honest state
-of the project on the day these records were opened, and it is the reason all three decision
-records are `Proposed` rather than `Accepted`.
+Reproduce with `uv run --with pyarrow datasets/pacs/fetch.py`. Each fetch script verifies an
+exact checksum and fails loudly rather than proceeding with a partial or substituted file.
+
+**One row is ready, three are blocked on a licence, and that is the finding.** The
+brand-photography half of the central claim has no usable source today. What follows records
+how each row got to its status, because in both cases the first plan was wrong in a way that
+would have survived into implementation.
+
+## What preparing these actually found
+
+### PACS: three dead acquisition routes, and a licence weaker than assumed
+
+All three routes normally cited for PACS were checked on 2026-08-07, each with a reachable
+control in the same call so that this records dead routes and not an unreachable network. The
+DomainBed helper's Google Drive object returns HTTP 404 as a 1,652 byte HTML error page. The
+paper's project page returns 404. The authors' lab download site does not resolve.
+
+A 404 page is a perfectly valid file: it downloads without error, it has a plausible size, and
+only its content says it is wrong. This is why every fetch script here verifies a checksum and
+a magic-byte prefix, and why the failure is fatal rather than a warning.
+
+The route used instead is a Hugging Face mirror pinned to an exact revision and file checksum,
+obtained without downloading first by reading the hub's file metadata. **The cost is licence
+provenance:** terms travel with the original distribution, and when that distribution
+disappears what remains is a copy whose uploader declares the licence `unknown`. The row now
+says unresolved, where it previously said "research use, per the original release" — a claim
+this project could not verify and had inherited from convention. Details in
+`datasets/pacs/LICENCE.md`.
+
+The prepared set was checked against the properties the protocol actually needs, not just
+against its checksum:
+
+- 9,991 items, matching the published count exactly.
+- The domain split matches the published one exactly: art_painting 2,048, cartoon 2,344,
+  photo 1,670, sketch 3,929. The fetch script asserts this rather than printing it.
+- All 28 style × content cells are populated, so both pair families can be built everywhere.
+- 11,592,384 same-style pairs and 5,019,117 cross-style pairs, so the standard error on an AUC
+  is far below the 0.10 margin `eval/thresholds.json` requires.
+- Zero exact-duplicate images, which matters because PACS is assembled from overlapping public
+  sources and duplicates across domains would seed the cross-style family with trivial pairs.
+
+**One caveat that belongs in the measurement, not in a footnote.** The cells are badly
+unbalanced: sketch/horse holds 816 items and sketch/house holds 80. An AUC over all pairs is
+therefore weighted by cell size and is mostly a statement about the large cells. The
+measurement should report both the all-pairs figure and a cell-balanced one, and if they
+disagree, the balanced figure is the honest one.
+
+### Unsplash: the premise was wrong, and then the licence made it moot
+
+Two independent findings. The second blocks the row; the first stands on its own and applies
+to whatever source replaces it.
+
+**The licence blocks it.** The Dataset Terms shipped inside the archive grant only *internal*
+business use (2.A) and bar publishing "any portion of the Licensed Data in any manner" (3.A).
+This project's standing rule — never commit images, commit a manifest instead — does not help
+here, because the restriction is on the data rather than on the images, and a manifest of photo
+ids, URLs, keywords and photographer names is a portion of the data. The manifest is built and
+git-ignored, never published. Clause quotes and the routes forward are in
+`datasets/unsplash-collections/LICENCE.md`.
+
+**The premise was already refuted before the licence was read.** This file used to assert that
+"a collection is curated by a person and its members are chosen to sit together, so collection
+membership is a human grouping of a coherent look." Measured against the release:
+
+- 558,146 distinct collections touch the 25,000-photo sample, with a median of 2 members each.
+- The largest are subject buckets, not looks: 'Nature' (2,650), 'Wallpapers' (1,996),
+  'Animals' (1,393), 'Halloween!' (2,770).
+
+The filter this file proposed — exclude collections "dominated by a single subject" — was
+implemented and **failed both control arms**, in opposite directions:
+
+- Its obvious form, highest within-group keyword share, rejected *everything*: 0 collections
+  passed at a 30% threshold. The cause is that Unsplash tags are dense, 36 per photo on
+  average, and the corpus is nature-heavy, so 'nature' sits on 70.9% of all photos and
+  'outdoors' on 66.2%. The filter was measuring corpus ubiquity, not subject concentration.
+  **Zero passing read as a fact about the data when it was a defect in the instrument, and it
+  read in the direction that would have killed this row.**
+- Re-expressed as lift over the corpus rate, it then failed open. 'Halloween!' passed at 1.3x,
+  because a 2,770-member hoard dilutes every keyword below the share gate; and the top scorers
+  were collections named 'Misc', 'Ideas' and 'Objects', which scored 0.00 because no keyword
+  reached the gate at all. Absence of a measurable subject was being read as subject diversity.
+
+**Photographer identity is the better grouping** and does not depend on a curation assumption:
+same person, same equipment, same grade, varying subject. Of 8,558 photographers, 222 have at
+least 15 photos in the sample and 87 of those pass a subject-lift filter, covering 3,925
+photos across groups of 15 to 442. That is enough to build boards and hold out members.
+
+A calibration note worth carrying to the replacement source, because it nearly shipped wrong:
+an early version screened candidate keywords by a 5% ubiquity cutoff *before* computing lift.
+That was redundant — a keyword on 70.9% of the corpus cannot reach 3x without appearing on
+213% of a group, so ubiquitous tags are structurally incapable of flagging anything — and it
+was harmful, admitting 73 extra groups including a photographer whose work is 78% 'wallpaper'
+against a 6.7% corpus rate, an 11.6x concentration waved through as diverse. Lift needs no
+help. The cutoff is right only for choosing which keywords to *record* as a subject.
 
 ## Protocols
 
@@ -61,38 +168,46 @@ uv run moodboard-eval invariance --dataset pacs --models csd,clip,dinov2 \
 The result is a table of AUC by representation, committed under `results/`, with the exact
 model revisions recorded in the output.
 
-### `content-invariance-brand`, on Unsplash collections
+### `content-invariance-brand` — BLOCKED, no source
 
 The coarse test uses domains that differ by medium, and a photograph is never going to be
 confused with a sketch. Commercial photography is the intended use and its styles differ by
 lighting, grade, grain and framing, which is a far smaller signal. A representation can pass
 the coarse test and be useless on this one, so this row exists to say which of the two the
-tool's claim rests on.
+tool's claim rests on. **It is the more important of the two measurements and it currently has
+no dataset.** The section above records why Unsplash cannot serve it.
 
-`collections.tsv` in the Unsplash Lite dataset has one row per photo and collection pair,
-carrying `photo_id`, `collection_id` and `collection_title`. A collection is curated by a
-person and its members are chosen to sit together, so collection membership is a human
-grouping of a coherent look, which is the ground truth this test needs and is otherwise
-expensive to obtain.
+The protocol itself survives the source going away, so it is stated here for whatever replaces
+it. It needs a corpus of photographs carrying two independent groupings: a **style** grouping
+where members plausibly share a look, and a **content** label per photo. Build the same two
+pair families as the coarse test — same style with different content, different style with
+same content — and report the AUC for ranking the first family above the second, for CSD and
+each baseline.
 
-Same construction as the coarse test, with collection standing for style and the photo's own
-subject keywords, from `keywords.tsv`, standing for content. Collections are filtered to
-those with enough members for a board, and to those whose members are not dominated by a
-single subject, since a collection that is entirely one subject cannot separate the two
-factors and would score well for the wrong reason. The filter and its thresholds are part of
-the prepared manifest, not a runtime flag, so the population is fixed and inspectable.
+Requirements a candidate source has to meet, each of which came from something that went wrong
+above:
 
-```
-uv run moodboard-eval invariance --dataset unsplash-collections --models csd,clip,dinov2 \
-    --out results/invariance-unsplash.json
-```
+1. **A publishable manifest.** Per-item metadata that may be committed, which means the source
+   licence has to permit it, not merely permit using the images.
+2. **A style grouping that does not rest on an untested assumption.** Whatever the grouping is,
+   measure whether it is confounded with subject before relying on it. Photographer identity
+   worked where curated collections did not.
+3. **Subject labels dense enough to test that confounding**, and lift measured against the
+   corpus rate rather than raw within-group share.
+4. **Enough groups of enough size**: boards run to 50, and members must be held out, so a
+   usable group needs roughly 15 items minimum and the corpus needs tens of such groups.
 
 ### `off-style-rejection`
 
-Build a board from one group, meaning one PACS domain or one Unsplash collection. Score
-held-out members of that group and members of a deliberately different group. Require that
-every on-look asset ranks above every off-look one, and report any inversion with both images
-named so it can be looked at.
+Build a board from one group, meaning one PACS domain while that is the only ready source.
+Score held-out members of that group and members of a deliberately different group. Require
+that every on-look asset ranks above every off-look one, and report any inversion with both
+images named so it can be looked at.
+
+Note what a PACS-only version of this test can and cannot say. Separating photographs from
+sketches is a low bar and passing it is close to uninformative; the test earns its place only
+on a source where the groups differ by treatment rather than by medium. Until the brand row
+has a dataset, a green result here is not evidence the tool works.
 
 ### `interval-coverage`
 
@@ -106,23 +221,28 @@ observed one. The claim moves, not the measurement.
 
 ## Licence notes
 
-**PACS** is distributed for research use. The repository carries the manifest and the fetch
-script and no images. The usual acquisition route is the download script in the DomainBed
-benchmark suite, `facebookresearch/DomainBed`, which places the set under a `kfold`
-directory. Availability of that link is an open question at the time of writing, since the
-project's own issue tracker carries a report of it failing, so the fetch script must verify
-what it downloaded against the committed checksums and fail loudly rather than proceeding with
-a partial set. If the route is dead, the alternative is the original authors' release, and
-whichever route is used gets recorded in `datasets/pacs/LICENCE.md` with the date it worked.
+Per-source detail lives beside each fetch script, in `datasets/<name>/LICENCE.md`, because
+that is where someone running the script will look. Summary:
 
-**Unsplash Lite** is documented as free for commercial and non-commercial use, and the
-repository is explicit that it "cannot be used to redistribute the images contained within".
-So the manifest carries `photo_id` and the image URL and the fetch script downloads at
-prepare time. The dataset itself is obtained from `unsplash.com/data/lite/latest`.
+**PACS** — unresolved, and recorded as unresolved. The mirror actually used declares the
+licence `unknown`; the original release, which is where terms would have travelled, is gone.
+The wider literature has operated on the assumption of non-commercial research use and this
+project has not been able to verify that at source. PACS is additionally assembled from
+several upstream collections with terms of their own, so a single licence line could not have
+been accurate even had one been given. See `datasets/pacs/LICENCE.md`.
 
-**WikiArt** is the evaluation set used by the published style descriptor work and its artist
-labels are an appealing second source of human grouping. Its redistribution terms were not
-resolved at the time of writing, so it is listed as `pending` on the licence question rather
-than being assumed usable, and it is not a dependency of any acceptance criterion. Resolving
-it is a task in its own right, and the answer belongs in this file with the source that
-settles it.
+**Unsplash Lite** — blocks the row. This entry previously read "free for commercial and
+non-commercial use" with the only restriction being on redistributing images, which is the
+paraphrase that caused the problem: the actual grant is for *internal* use and clause 3.A bars
+publishing any portion of the data in any manner. See
+`datasets/unsplash-collections/LICENCE.md` for the quoted clauses.
+
+**WikiArt** — still unresolved and still not a dependency of any acceptance criterion. Its
+artist labels remain an appealing source of human style grouping. Resolving the terms is a
+task in its own right and the answer belongs in this file beside the source that settles it.
+
+**A rule earned from the Unsplash case, applying to every future source.** Read the terms
+shipped *with the data* and quote the operative clause into the row, rather than summarising
+the source's public marketing about licensing. The two disagreed here, the summary was the
+permissive one, and the manifest was one command from being pushed to a public repository.
+Terms get read before a dataset row is written, not before the measurement is run.
