@@ -56,6 +56,17 @@ BOARD_SIZE = 10
 SEPARATION_MIN = 0.06
 SEPARATION_MAX = 0.60
 
+# The window a TWO-look board is selected into for the partition-disagreement test below. It is
+# a property of the board, not of any blend constant, and it was measured: an inter-look mean
+# distance of 0.3335 merges the looks for every candidate, 0.3818 and above splits them for
+# every candidate, and 0.3550 and 0.3613 both put the board just under the 0.35 average-linkage
+# cut, where a candidate's own cross-pairs decide the partition. The same blend fraction landed
+# inside the window for one seed and outside it for another, so `_two_look_board_arrays`
+# searches for the regime and measures what it found. A pinned fraction would read as a
+# constant and would silently stop selecting the regime the next time the encoder moves.
+PARTITION_DISAGREEMENT_MIN = 0.35
+PARTITION_DISAGREEMENT_MAX = 0.37
+
 
 # A family is a palette, a luminance range and a panel scale, for the reason recorded at
 # `LOOKS` in test_board_cli_properties.py: under encoder revision 2 each descriptor block
@@ -240,6 +251,89 @@ def _measured_n_eff(reference_dir: Path) -> float:
     return kish_n_eff([len(group) for group in groups])
 
 
+def _draw_between(rng: np.random.Generator, fraction: float) -> np.ndarray:
+    """Draw from a family interpolated `fraction` of the way from warm toward cool.
+
+    The family SPEC is interpolated, not two finished images: a pixel average of a warm and a
+    cool swatch has neither look's palette and reads to the encoder as a third thing, whereas
+    an interpolated palette is still a palette and every draw is a real member of some look.
+    """
+    if fraction <= 0.0:
+        return _draw(rng, "warm")
+    warm, cool = FAMILIES["warm"], FAMILIES["cool"]
+    FAMILIES["_between"] = {
+        "palette": np.clip(
+            (1.0 - fraction) * warm["palette"] + fraction * cool["palette"], 0.0, 1.0
+        ),
+        "level": tuple(
+            (1.0 - fraction) * w + fraction * c
+            for w, c in zip(warm["level"], cool["level"], strict=True)
+        ),
+        "grid": warm["grid"],
+    }
+    try:
+        return _draw(rng, "_between")
+    finally:
+        del FAMILIES["_between"]
+
+
+def _two_look_board_arrays(seed: int = 20260807) -> tuple[list[np.ndarray], float, float]:
+    """A board of two looks sitting just under the category cut, plus what was measured.
+
+    Returns the images, the blend fraction the search settled on, and the measured mean distance
+    between the two halves. The search is the substance: see PARTITION_DISAGREEMENT_MIN for why
+    a fixed fraction cannot express this regime.
+    """
+    encoder = ClassicalEncoder()
+    half = BOARD_SIZE // 2
+    for fraction in np.arange(0.60, 0.96, 0.02):
+        rng = np.random.default_rng(seed)
+        kept: list[np.ndarray] = []
+        vectors: list[np.ndarray] = []
+        for _ in range(4000):
+            if len(kept) == BOARD_SIZE:
+                break
+            image = _draw_between(rng, 0.0 if len(kept) < half else float(fraction))
+            vector = encoder.embed([image]).astype(np.float64)[0]
+            if vectors:
+                distances = 1.0 - np.asarray(vectors) @ vector
+                if distances.min() < SEPARATION_MIN or distances.max() > SEPARATION_MAX:
+                    continue
+            kept.append(image)
+            vectors.append(vector)
+        if len(kept) < BOARD_SIZE:
+            continue
+        matrix = np.asarray(vectors)
+        separation = float(np.mean(1.0 - matrix[:half] @ matrix[half:].T))
+        if PARTITION_DISAGREEMENT_MIN <= separation <= PARTITION_DISAGREEMENT_MAX:
+            return kept, float(fraction), separation
+    raise AssertionError(
+        "no blend fraction in [0.60, 0.94] put the two looks in the disagreement window "
+        f"[{PARTITION_DISAGREEMENT_MIN}, {PARTITION_DISAGREEMENT_MAX}] for seed {seed}"
+    )
+
+
+def _partition_candidate_arrays(fraction: float, seed: int = 20260807) -> list[np.ndarray]:
+    """One candidate from each look, plus a BRIDGE candidate halfway between them.
+
+    The bridge is what makes the partition vary. Joining whichever look it is nearer, it adds
+    short cross-pairs to the average linkage between the two halves and pulls that average under
+    the 0.35 cut, so the board reads as one category for the bridge and as two for the others.
+
+    An EXTREME candidate is the intuitive choice and was measured NOT to work: five blend values
+    from -0.45 to +1.20 all left the partition standing, because a candidate joining a five-image
+    look is only a sixth of it and moves the cross-average the wrong way. That measurement is
+    what identified the bridge, so it is recorded here rather than left as a dead end.
+    """
+    rng = np.random.default_rng(seed + 500)
+    return [
+        _draw_between(rng, 0.0),
+        _draw_between(rng, fraction),
+        _draw_between(rng, fraction / 2.0),
+        _draw_between(rng, 0.0),
+    ]
+
+
 def _registry_alpha_for_quiet_board(count: int) -> float:
     thresholds = load_abstention_thresholds()
     row = next(
@@ -319,6 +413,48 @@ def ranked(workspace: Path, reference_dir: Path, board_path: Path) -> dict:
         "path": output,
         "document": json.loads(output.read_text(encoding="utf-8")),
         "stdout": out,
+    }
+
+
+@pytest.fixture(scope="module")
+def two_look_ranked(workspace: Path) -> dict:
+    """A second board, deliberately two-look, for the one test about partition disagreement.
+
+    The shared `reference_dir` board cannot serve that test. SEPARATION_MAX keeps it inside a
+    single category ON PURPOSE, so rule 1's reason is "resolution" rather than "multi_modality",
+    and under encoder revision 2 it is genuinely single-look rather than incidentally so. A
+    candidate cannot induce a second partition of a board that only has one, so the test was
+    asserting something the fixture had been quietly built to prevent.
+    """
+    arrays, fraction, separation = _two_look_board_arrays()
+    references = _write_images(workspace / "two_look_references", arrays, "ref")
+    board = workspace / "two_look.mb"
+    code, _, err = _run(["build", str(references), "-o", str(board)])
+    assert code == 0, err
+
+    output = workspace / "two_look_report.json"
+    candidates = _write_images(
+        workspace / "two_look_candidates", _partition_candidate_arrays(fraction), "cand"
+    )
+    code, _, err = _run(
+        [
+            "rank",
+            str(candidates),
+            "-b",
+            str(board),
+            "-r",
+            str(references),
+            "-o",
+            str(output),
+            "--alpha",
+            str(_registry_alpha_for_quiet_board(BOARD_SIZE)),
+        ]
+    )
+    assert code == 0, err
+    return {
+        "document": json.loads(output.read_text(encoding="utf-8")),
+        "separation": separation,
+        "fraction": fraction,
     }
 
 
@@ -569,9 +705,35 @@ def test_every_asset_category_id_resolves_and_agrees_with_its_own_size(ranked: d
     )
 
 
-def test_the_board_lists_a_category_for_every_partition_a_candidate_induced(ranked: dict):
+def test_the_two_look_board_is_in_the_regime_the_partition_test_assumes(two_look_ranked: dict):
+    """States the regime rather than assuming it, so drifting out of it fails here, and says why.
+
+    Without this, the only symptom of drift is a missing flag in the test below, which reads as
+    an engine defect and is not one.
+    """
+    document = two_look_ranked["document"]
+    sizes = {entry["n_local"] for entry in document["board"]["categories"]}
+    diagnosis = (
+        f"the two looks sit {two_look_ranked['separation']:.4f} apart at blend "
+        f"{two_look_ranked['fraction']:.2f}; below {PARTITION_DISAGREEMENT_MIN} they merge for "
+        f"every candidate and above {PARTITION_DISAGREEMENT_MAX} they split for every "
+        f"candidate, and in neither case can any candidate change the partition. Categories "
+        f"reported: {sorted(sizes)}"
+    )
+    # Asserted on the categories rather than on the separation, because the separation is what
+    # `_two_look_board_arrays` selects FOR and re-checking it here would be a guard that cannot
+    # fail. What the search does not guarantee is that both partitions actually got realised:
+    # BOARD_SIZE means some candidate saw the whole board as one category, and half of it means
+    # another saw it as two.
+    assert BOARD_SIZE in sizes, f"no candidate merged the two looks. {diagnosis}"
+    assert BOARD_SIZE // 2 in sizes, f"no candidate split the two looks. {diagnosis}"
+
+
+def test_the_board_lists_a_category_for_every_partition_a_candidate_induced(
+    two_look_ranked: dict,
+):
     """This fixture is deliberately one where the candidates disagree, so the flag fires."""
-    document = ranked["document"]
+    document = two_look_ranked["document"]
     assert "category_partition_varies_by_candidate" in document["board_stats"]["flags"]
     assigned = {asset["category_id"] for asset in document["assets"]}
     assert len(assigned) > 1
