@@ -103,7 +103,13 @@ observed one. The claim moves, not the measurement.
 ## Licence notes
 
 **PACS** is distributed for research use. The repository carries the manifest and the fetch
-script and no images.
+script and no images. The usual acquisition route is the download script in the DomainBed
+benchmark suite, `facebookresearch/DomainBed`, which places the set under a `kfold`
+directory. Availability of that link is an open question at the time of writing, since the
+project's own issue tracker carries a report of it failing, so the fetch script must verify
+what it downloaded against the committed checksums and fail loudly rather than proceeding with
+a partial set. If the route is dead, the alternative is the original authors' release, and
+whichever route is used gets recorded in `datasets/pacs/LICENCE.md` with the date it worked.
 
 **Unsplash Lite** is documented as free for commercial and non-commercial use, and the
 repository is explicit that it "cannot be used to redistribute the images contained within".
