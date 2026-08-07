@@ -1,5 +1,5 @@
-"""Independent property tests for the three guarantees `IMPLEMENTATION_CONTRACT.md` names for
-this pair of modules, checked against `moodboard.conformal` and `moodboard.abstain` rather than
+"""Independent property tests for the three guarantees this pair of modules must provide,
+checked against `moodboard.conformal` and `moodboard.abstain` rather than
 against either module's own inline test suite.
 
 1. The conformal p-value is a multiple of 1/(n_local+1) and is uniform on that grid under a

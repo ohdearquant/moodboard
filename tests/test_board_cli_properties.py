@@ -1035,7 +1035,7 @@ def test_the_html_refusal_is_not_swallowed_into_an_exit_code(ranked: dict, tmp_p
 
 
 def test_the_html_flag_is_the_only_unimplemented_surface_in_the_package():
-    """`IMPLEMENTATION_CONTRACT.md` allows exactly one `NotImplementedError` in the package.
+    """The package allows exactly one `NotImplementedError`, in the HTML renderer.
 
     Counting the sites rather than trusting the docstring: a stub added later would be caught
     here even if it was added with a plausible comment beside it.

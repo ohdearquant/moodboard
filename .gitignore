@@ -41,6 +41,7 @@ node_modules/
 .idea/
 .vscode/
 
-# Progress report required by IMPLEMENTATION_CONTRACT.md. It is written before any code and
-# overwritten as work proceeds; the contract requires it stay untracked.
+# Progress report from the implementation run. It is written before any code and overwritten
+# as work proceeds, and it stays untracked: it records how the engine got built, which is not
+# part of the engine.
 IMPLEMENTATION_REPORT.md

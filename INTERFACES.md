@@ -1,8 +1,8 @@
 # Interfaces
 
 This document pins the exact shared contract that every module in `moodboard/` builds
-against. It exists because the modules described in `IMPLEMENTATION_CONTRACT.md` are written
-against each other before any of them exist: `conformal.py` returns intervals that
+against. It exists because the modules in `moodboard/` were written against each other before
+any of them existed: `conformal.py` returns intervals that
 `report.py` embeds verbatim, `axes.py` and `encoders.py` both compute palette, tone and
 composition features and must not diverge on what those features are, and `abstain.py`
 consumes exactly the category partition `conformal.py` produces. A signature decided twice,
@@ -59,9 +59,8 @@ recomputes them. `board.py` and `cli.py` are the two modules that see the whole 
 
 ## Why `report.py`'s types are dataclasses, not pydantic
 
-`IMPLEMENTATION_CONTRACT.md` leaves the choice open and asks for it to be justified in a
-docstring. It is decided here, once, so the choice is not made twice: **plain, frozen,
-slotted `dataclasses`.** The pinned dependency list is `numpy`, `scipy`, `scikit-image` and
+Nothing upstream pins this choice, so it is decided here, once, rather than separately in
+each module that touches a report type: **plain, frozen, slotted `dataclasses`.** The pinned dependency list is `numpy`, `scipy`, `scikit-image` and
 `Pillow` for the computation, plus `pytest` and `ruff` for development. Pydantic would add a
 runtime dependency to carry a job the standard library already does for a fixed, fully-typed
 schema with no dynamic validation logic beyond one cross-field invariant. That invariant
@@ -392,11 +391,11 @@ class ClassicalEncoder:
         through that Protocol and never import ClassicalEncoder by name."""
 ```
 
-**A gap the contract leaves implicit, closed here.** Deliverable 2 says the classical encoder
-is "built from the palette/tone/composition features below, concatenated and L2-normalised",
-and deliverable 3 says each axis "returns a scalar distance in [0, 1]". A scalar distance
+**A gap left implicit in the specification, closed here.** The classical encoder is specified
+as "built from the palette/tone/composition features below, concatenated and L2-normalised",
+and each axis as returning "a scalar distance in [0, 1]". A scalar distance
 between two images and a fixed-length embedding of one image are not the same object, and nothing
-in the contract's own module list names a place a fixed-length per-image feature vector lives.
+in that module list names a place a fixed-length per-image feature vector lives.
 Earth mover's distance, which palette and composition both effectively need, does not in
 general reduce to a fixed-length vector under an L2 or cosine comparison, so the vector `axes.py`
 hands to the encoder is not the same computation as the distance `axes.py` hands to a caller

@@ -1,7 +1,7 @@
 """Properties of the encoder boundary and of the one encoder that needs no weights.
 
 Every fixture here is a synthetic array. No dataset download, no network access, and no
-learned checkpoint, per IMPLEMENTATION_CONTRACT.md deliverable 8.
+learned checkpoint: the suite reaches nothing outside this repository.
 
 The properties tested are the ones INTERFACES.md states as the Protocol's contract: the return
 shape and dtype, L2-normalised rows, input order preserved, determinism, and no mutation of the

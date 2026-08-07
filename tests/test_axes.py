@@ -1,10 +1,10 @@
 """Properties of the three classical style axes.
 
 Every image here is a synthetic array built from a seeded generator. No dataset download, no
-network access and no learned checkpoint, per IMPLEMENTATION_CONTRACT.md deliverable 8.
+network access and no learned checkpoint: the suite reaches nothing outside this repository.
 
-The central property is the one deliverable 3 states: each axis returns a scalar distance in
-[0, 1] and each must be genuinely computed. "Genuinely computed" is not directly assertable, so
+The central property is the one each axis is specified to have: it returns a scalar distance
+in [0, 1] and it must be genuinely computed. "Genuinely computed" is not directly assertable, so
 it is approached from four sides that together make a constant or a placeholder fail. Each axis
 must produce a wide spread of distinct values over a varied population rather than a fixed
 number. The three axes must not be strongly correlated with one another, since ADR-0003
@@ -59,9 +59,8 @@ FEATURE_FUNCTIONS = {
 def axis_intervention_thresholds() -> dict:
     """The pre-registered constants, read from the registry at runtime.
 
-    IMPLEMENTATION_CONTRACT.md forbids copying an acceptance-relevant number into Python
-    source, because a second copy of a pre-registered number can drift from the registry
-    without anything noticing.
+    An acceptance-relevant number is never copied into Python source, because a second copy
+    of a pre-registered number can drift from the registry without anything noticing.
     """
     with THRESHOLDS_PATH.open() as handle:
         return json.load(handle)["axis_intervention"]
@@ -258,7 +257,7 @@ def normalised_intervention_movements() -> dict[str, dict[str, float]]:
 
 
 class TestEachAxisReturnsAScalarInTheUnitInterval:
-    """Deliverable 3: each axis returns a scalar distance in [0, 1]."""
+    """Each axis returns a scalar distance in [0, 1]."""
 
     @pytest.mark.parametrize("axis", list(AXIS_FUNCTIONS))
     def test_every_pair_in_a_varied_population_lands_in_the_unit_interval(

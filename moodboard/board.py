@@ -7,7 +7,7 @@ rest of this package, and is safe to call from `report.py`'s `Board` constructio
 identical call.
 
 `build_board` and the `brand.mb` reader/writer below own the file format, which
-`IMPLEMENTATION_CONTRACT.md` and `INTERFACES.md` both leave to this module's own decision.
+`INTERFACES.md` leaves to this module's own decision.
 Everything they need (embeddings, the reference content hashes, the fitting parameters, the
 model identity, and the already-computed `n_eff`) is produced elsewhere and handed in;
 `cli.py`'s `build` command calls `encoders.py` to embed and `conformal.py` to fit before it

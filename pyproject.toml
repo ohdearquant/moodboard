@@ -11,7 +11,7 @@ dependencies = [
     "scikit-image>=0.22",
     "Pillow>=10.0",
     # Not in the module's own axis or encoder math: report.py needs a validator for the
-    # committed JSON Schema file (IMPLEMENTATION_CONTRACT.md deliverable 1), and hand-rolling
+    # committed JSON Schema file it validates its own output against, and hand-rolling
     # a JSON Schema validator duplicates a well-tested library rather than depending on one.
     # See INTERFACES.md for the full rationale.
     "jsonschema>=4.20",
