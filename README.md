@@ -74,4 +74,8 @@ DATASETS.md       one row per validation claim, with source, license and prepare
 
 ## Licence
 
-Apache-2.0. See `LICENSE`.
+MIT. See `LICENSE`.
+
+The code licence says nothing about the datasets. Those are third-party sources
+under their own terms, recorded per row in `DATASETS.md`, and at least one of them
+is restrictive enough that this repository cannot republish even its manifest.
