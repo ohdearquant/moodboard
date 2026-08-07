@@ -108,6 +108,19 @@ no spread, an asset far outside every reference, or fewer references than the es
 are all conditions where a number would still be produced and would still be meaningless.
 They get flags, and the viewer is required to surface them.
 
+**The axis vocabulary is defined once and asserted.** `board.representation.axes` lists the
+classical axes, and every entry of `assets[].axes` carries the style axis plus those. The
+invariant is exact:
+
+```
+set(assets[i].axes.keys()) == {"style"} | set(board.representation.axes)   for every i
+```
+
+The engine asserts it during the self-validation below, and a report that violates it is a
+failure rather than a warning. Without the assertion the schema holds two enumerations of one
+vocabulary in two places, and they drift in exactly the way the tie rule above predicts:
+silently, and in the direction where each side looks correct on its own.
+
 ### Compatibility policy
 
 `schema_version` is `major.minor`. A minor version may add fields. A major version may
@@ -123,9 +136,16 @@ Protocol. Take boards of size n in {10, 20, 50} sampled from a labelled group, h
 assets from the same group as the on-look population, resample the board B times, and record
 how often the interval computed from one board contains the score computed from an
 independent board drawn from the same group. Report coverage against the stated level, per
-board size. Acceptance is that the observed coverage does not fall below the stated level by
-more than a stated tolerance, and if it does, the reported level is corrected to the observed
-one rather than the claim being kept.
+board size.
+
+Acceptance is pre-registered in [`eval/thresholds.json`](../../eval/thresholds.json) and is
+fixed before the measurement runs: stated level 0.90, 1,000 resamples, board sizes 10, 20 and
+50, observed coverage at or above 0.85 for every board size. On a shortfall the report's
+stated level is corrected down to the observed coverage rather than the claim being kept. The
+reasoning for 0.85, which is roughly five standard errors below the stated level at this
+number of resamples, is in `eval/README.md`. A threshold chosen after seeing the result is a
+description of the result, so this one is written down first and any later change to it is a
+commit that has to say what was learned.
 
 Dataset: `interval-coverage` in `DATASETS.md`. It reuses the sets prepared for ADR-0003 and
 adds no new sources. The command that reproduces it is named in that row.

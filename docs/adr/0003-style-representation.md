@@ -65,8 +65,16 @@ reproducible by the command named in its dataset row.
 **1. Content invariance, coarse.** On a set with a full crossing of style and subject, embed
 every image and compare two families of pairs: same style with different subject, and
 different style with same subject. Report the area under the ROC curve for ranking the first
-family above the second, for CSD and for each baseline. Acceptance is that CSD separates
-them and does so by a clear margin over CLIP.
+family above the second, for CSD and for each baseline.
+
+Acceptance is pre-registered in [`eval/thresholds.json`](../../eval/thresholds.json) and is
+fixed before the measurement runs: CSD reaches an AUC of at least 0.80, and beats CLIP by at
+least 0.10 AUC. Both conditions, because either alone can be met by something useless. A wide
+margin over a baseline that is itself near chance would mean neither is usable, and a high
+absolute score with no margin would mean the property came from the data rather than from the
+representation. Both datasets yield tens of thousands of eligible pairs, so the standard error
+on an AUC is well under 0.01 and a margin of 0.10 clears it by an order of magnitude. The
+reasoning is in `eval/README.md`.
 
 If CLIP does just as well, this record is wrong and should be rejected rather than adjusted.
 That outcome is worth stating in advance, because the cheap and comfortable move at that
@@ -82,7 +90,10 @@ standing for content.
 
 Passing the coarse test and failing this one is a real possible outcome and it would change
 the product rather than end it, since the honest response is a narrower claim about what kind
-of look is measurable.
+of look is measurable. That response is written down in advance rather than improvised at the
+time: `content_invariance.on_partial_pass` in `eval/thresholds.json` says the record is not
+accepted as written, the claim narrows to the domain that passed, and the narrowing goes in
+the README where a reader sees it.
 
 **3. Off-style rejection.** Build a board from one group, score assets from that group and
 assets drawn from a deliberately different group, and require that every on-look asset ranks

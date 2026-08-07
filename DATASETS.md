@@ -4,6 +4,10 @@ Every architecture decision record that makes a measurable claim names its datas
 stays `Proposed` until that dataset row reaches `ready` and the measurement is committed. The
 rule and the reasoning are in [`docs/adr/README.md`](docs/adr/README.md).
 
+Acceptance thresholds for every measurement below are pre-registered in
+[`eval/thresholds.json`](eval/thresholds.json), fixed before the corresponding measurement is
+run for the first time, with the reasoning for each number in `eval/README.md`.
+
 ## What "ready" means
 
 A row is `ready` when all of the following exist in the repository:

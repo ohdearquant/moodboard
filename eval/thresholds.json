@@ -1,0 +1,41 @@
+{
+  "_comment": [
+    "PRE-REGISTERED ACCEPTANCE THRESHOLDS. Every number here is fixed BEFORE the",
+    "corresponding measurement is run for the first time. A threshold chosen after seeing",
+    "the result is not an acceptance criterion, it is a description of the result.",
+    "",
+    "Changing a number in this file is allowed and is a visible act: it requires a commit",
+    "that states what was learned and why the old value was wrong, and the git history of",
+    "this file is the record of whether the bar moved to meet a measurement.",
+    "",
+    "The rationale for each number is in eval/README.md. Each is chosen so that the",
+    "distance between pass and fail is large compared with the sampling error at the",
+    "sample sizes the datasets actually provide."
+  ],
+  "registered_on": "2026-08-07",
+  "interval_coverage": {
+    "adr": "0002",
+    "stated_level": 0.9,
+    "resamples": 1000,
+    "board_sizes": [10, 20, 50],
+    "min_observed_coverage": 0.85,
+    "on_shortfall": "report the observed coverage as the level, rounded down to the nearest 0.05, and change the report's stated level to it",
+    "applies_per": "board_size"
+  },
+  "content_invariance": {
+    "adr": "0003",
+    "metric": "auc_same_style_over_cross_style",
+    "min_auc_absolute": 0.8,
+    "min_margin_over_clip": 0.1,
+    "baselines": ["clip_vit_l_14", "dinov2_vit_l_14"],
+    "datasets": ["pacs", "unsplash-collections"],
+    "both_datasets_must_pass": false,
+    "on_partial_pass": "if the coarse dataset passes and the brand dataset does not, the record is NOT accepted as written; the claim is narrowed to the domain that passed and the narrowing is stated in the README"
+  },
+  "off_style_rejection": {
+    "adr": "0003",
+    "max_inversions": 0,
+    "inversion_reporting": "every inversion names both images so it can be looked at",
+    "scope": "smoke test at board size 20, one board per group"
+  }
+}
