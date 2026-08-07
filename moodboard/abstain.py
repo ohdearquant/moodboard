@@ -318,7 +318,17 @@ def check_resolution(
 
     measurement carries n_local, n_eff_local, n_eff_local_source, n_references, n_categories,
     resolution_alpha (1/(n_local + 1)), supported_alpha (the governing floor, 1/(n_eff_local + 1)),
-    requested_alpha and category_id.
+    binding_floor, requested_alpha and category_id.
+
+    `binding_floor` names which of ADR-0004's two floors is the larger, and so which one bound:
+    "effective" when supported_alpha > resolution_alpha, "achievability" when they coincide. It
+    is emitted because a refusal carrying only reason="resolution" cannot say which arm fired,
+    and the two arms mean different things to a person holding the board: one asks for more
+    files, the other for more distinct ones. Read it as a statement about the FLOORS and not
+    about the request: "effective" says the duplicate-aware floor is the higher of the two, not
+    that the file count alone would have honoured the request. Both arms refuse together
+    whenever requested_alpha also falls below resolution_alpha, and this field still reads
+    "effective" there, correctly, because it reports which floor is binding.
     """
     alpha = _validate_alpha(requested_alpha)
 
@@ -342,6 +352,8 @@ def check_resolution(
     is_whole_board = n_local == n_references
     reason: AbstentionReason = "resolution" if is_whole_board else "multi_modality"
 
+    binding_floor = "effective" if supported_alpha > resolution_alpha else "achievability"
+
     measurement = {
         "n_local": n_local,
         "n_eff_local": n_eff_local,
@@ -350,6 +362,7 @@ def check_resolution(
         "n_categories": n_categories,
         "resolution_alpha": resolution_alpha,
         "supported_alpha": supported_alpha,
+        "binding_floor": binding_floor,
         "requested_alpha": alpha,
         "category_id": partition.category_id,
     }

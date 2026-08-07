@@ -230,6 +230,16 @@ def test_threshold_below_resolution_fires_with_reason_resolution(thresholds):
     assert verdict.measurement["requested_alpha"] == case["alpha"]
     assert verdict.measurement["supported_alpha"] == pytest.approx(1.0 / (case["n"] + 1))
 
+    # The OTHER value of binding_floor, and this arm is why it is here rather than only in the
+    # duplicated-board test. This board carries no near-duplicates, so the two floors coincide
+    # and the achievability arm is the one that bound. An implementation emitting the constant
+    # "effective" satisfies every assertion in the duplicated-board case and is caught only
+    # here, which makes a single-valued field indistinguishable from a working one without it.
+    assert verdict.measurement["supported_alpha"] == pytest.approx(
+        verdict.measurement["resolution_alpha"]
+    )
+    assert verdict.measurement["binding_floor"] == "achievability"
+
 
 def test_two_disjoint_style_groups_fire_with_reason_multi_modality(thresholds):
     case = _must_fire_case(thresholds, "two_disjoint_style_groups")
@@ -292,7 +302,7 @@ def test_resolution_effective_size_arm_fires_only_because_of_n_eff(thresholds):
     floor, which admits the request here) from one reading `n_eff_local` (the admissibility
     floor, which does not); only the second is a conforming rule 1.
     """
-    case = _must_fire_case(thresholds, "resolution_effective_size_arm")
+    case = _must_fire_case(thresholds, "duplicated_board_below_effective_resolution")
     group_sizes = _expand_group_sizes(case["group_sizes"])
     assert sum(group_sizes) == case["n"]
 
@@ -318,6 +328,23 @@ def test_resolution_effective_size_arm_fires_only_because_of_n_eff(thresholds):
     assert verdict.measurement["resolution_alpha"] == pytest.approx(resolution_alpha)
     assert verdict.measurement["supported_alpha"] > case["alpha"]
 
+    # ADR-0004: "The report must name `effective` as the binding floor, since a refusal that
+    # says only 'resolution' cannot distinguish which arm fired." The registry's
+    # expect_binding_floor is asserted against an EMITTED FIELD rather than inferred from the
+    # two alphas by the reader, because a report a person has to do arithmetic on to learn
+    # which rule refused them is the same defect as not naming the rule.
+    emitted = verdict.measurement["binding_floor"]
+    derived = (
+        "effective"
+        if verdict.measurement["supported_alpha"] > verdict.measurement["resolution_alpha"]
+        else "achievability"
+    )
+    assert emitted == derived, (
+        "the emitted binding_floor must agree with the two floors it summarises; a field that "
+        "can disagree with its own measurement is worse than an absent one"
+    )
+    assert emitted == case["expect_binding_floor"] == "effective"
+
 
 def test_every_must_fire_case_in_the_registry_is_covered():
     """The registry is the list of cases, so a case added to it without a test here fails loudly
@@ -326,7 +353,7 @@ def test_every_must_fire_case_in_the_registry_is_covered():
         "threshold_below_resolution",
         "two_disjoint_style_groups",
         "asset_from_absent_domain",
-        "resolution_effective_size_arm",
+        "duplicated_board_below_effective_resolution",
     }
     registered = {case["case"] for case in load_abstention_thresholds().must_fire_cases}
     assert registered == covered
