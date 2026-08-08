@@ -23,8 +23,9 @@ the extra argument into a checked input rather than an unchecked assumption, and
 catches the case of a board scored against a directory that has since changed.
 
 **`n_local` is the number of references in the candidate's category, without the candidate.**
-`INTERFACES.md` pins it as `len(candidate_category_members) + 1`. That form is not adopted
-here, for the same reason `abstain.py` did not adopt it: the report schema states the score
+`INTERFACES.md` pinned it as `len(candidate_category_members) + 1` until that document was
+corrected on 2026-08-08 to match this module. That form was not adopted here, for the same
+reason `abstain.py` did not adopt it: the report schema states the score
 is `(1 + count) / (n_local + 1)`, `conformal_p_value` against `m` references returns
 `(1 + count) / (m + 1)`, and ADR-0004's own worked arithmetic reads `1/(8+1) = 0.111` for a
 sub-look of eight members. All three agree that `n_local` is the reference count. The pinned

@@ -513,8 +513,22 @@ def partition_categories(
 ```
 
 `Category.n_local` in `report.py` for the category the candidate landed in is
-`len(partition.candidate_category_members) + 1`, the references sharing the category plus the
-candidate itself. This is the same `n_local` `abstain.py`'s resolution check reads.
+`len(partition.candidate_category_members)`, the references sharing the category, **without the
+candidate**. This is the same `n_local` `abstain.py`'s resolution check reads.
+
+**Corrected 2026-08-08, and the correction is recorded rather than made silently.** This
+paragraph and the `check_resolution` docstring below both pinned `len(...) + 1`, "plus the
+candidate itself", and the implementation deliberately declined to adopt it. Three independent
+statements agree on the reference count alone: the committed schema's `pValue` description,
+`(1 + count) / (n_local + 1)`; `conformal_p_value`, which divides by the reference count plus
+one; and ADR-0004's worked arithmetic, `1/(8+1) = 0.111` for an eight-member sub-look. Under
+the withdrawn form a report would state `n_local = 11` beside a score of `10/11`, so the count
+printed in the report would disagree with the denominator of the score printed next to it.
+
+The document was wrong and the code was right, which is the direction that matters here: this
+file is the contract other modules are written against, so a module written from it rather than
+from the code would have inherited the off-by-one. Nothing was broken at runtime, because both
+modules that read this had already refused the pinned form and said so in their own source.
 
 ### Near-duplicate grouping and Kish n_eff (ADR-0005)
 
@@ -597,7 +611,9 @@ apart on a boundary case; they are pinned here as one function that chooses the 
 
 ```python
 def check_resolution(partition: CategoryPartition, requested_alpha: float) -> AbstentionVerdict | None:
-    """Covers ADR-0004 rules 1 and 2. n_local = len(partition.candidate_category_members) + 1.
+    """Covers ADR-0004 rules 1 and 2. n_local = len(partition.candidate_category_members),
+    the reference count WITHOUT the candidate (corrected 2026-08-08; this line pinned `+ 1`,
+    see the note beside Category.n_local above).
     Abstain (return a verdict) when requested_alpha < 1 / (n_local + 1); the comparison is
     strict, so requested_alpha exactly equal to 1 / (n_local + 1) is honoured and this returns
     None. When it abstains: reason is "resolution" if partition.candidate_category_members

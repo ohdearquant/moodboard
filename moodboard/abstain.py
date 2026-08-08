@@ -52,9 +52,13 @@ invented:
 
 Two departures from `INTERFACES.md`, recorded rather than worked around
 ------------------------------------------------------------------------
-**`n_local` counts references, and does not include the candidate.** `INTERFACES.md` pins
+**`n_local` counts references, and does not include the candidate.** `INTERFACES.md` USED TO pin
 `n_local = len(partition.candidate_category_members) + 1`, "the references sharing the category
-plus the candidate itself". Read with the rest of the specification that is off by one. ADR-0004's
+plus the candidate itself", which read with the rest of the specification is off by one. **That
+document was corrected on 2026-08-08 and now agrees with this module, so this is a resolved
+departure and no longer a live disagreement.** The reasoning below is kept rather than deleted,
+because the correction was made on the strength of it and because a reader landing here alone
+would otherwise have no way to tell which form was withdrawn. ADR-0004's
 own worked arithmetic is "Boards resampled to n = 10 with alpha = 0.05, where 1/(n+1) = 0.0909",
 and `eval/thresholds.json` registers `finest_expressible_by_board_size` as `{"10": 0.0909}`, so a
 board of ten references has floor 1/11 and the ten is a count of references. The committed schema
