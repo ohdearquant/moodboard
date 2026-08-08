@@ -25,10 +25,29 @@ permissions:
   contents: read
 
 jobs:
+  # LINT AND TESTS ARE SEPARATE JOBS, and this is not tidiness. When they shared a job the
+  # linter ran first, failed, and the suite never executed at all -- so the very first CI run
+  # this repository ever had reported a red that said nothing whatsoever about whether the
+  # tests pass. One cheap failure masked the expensive evidence that was the whole point of
+  # standing CI up. Split, each reports its own answer and neither can hide the other.
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install the pinned environment
+        run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check .
+
   test:
     # The job name is a promise about what it measures. This one runs the whole suite
     # uncapped, so it is named for that and not for something broader.
-    name: pytest (full suite, uncapped) + ruff
+    name: pytest (full suite, uncapped)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -49,9 +68,6 @@ jobs:
         # rather than quietly resolving something else and testing a dependency set that is
         # not the one committed.
         run: uv sync --locked --python ${{ matrix.python-version }}
-
-      - name: Lint
-        run: uv run ruff check .
 
       - name: Tests
         # No -x and no --maxfail. A first-failure read tells you one thing is broken; a
