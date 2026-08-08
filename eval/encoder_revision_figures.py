@@ -35,11 +35,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
-from moodboard import axes  # noqa: E402
-from moodboard.encoders import ClassicalEncoder, _feature_parts, _unit  # noqa: E402
-
 # Imported deliberately -- see the module docstring.
 from test_cli import FAMILIES, IMAGE_SIZE, _draw  # noqa: E402
+
+from moodboard import axes  # noqa: E402
+from moodboard.encoders import ClassicalEncoder, _feature_parts, _unit  # noqa: E402
 
 # Pinned population. Every figure below is a statement about THIS population and no other,
 # which is why the seed and the count are named here rather than passed in.
