@@ -1,0 +1,437 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/report_v1_0.schema.json",
+  "title": "moodboard report, schema version 1.0",
+  "description": "The document the engine emits, as specified in ADR-0002. The engine validates its own output against this file before writing it, and a report that fails is an error rather than a warning. One rule in ADR-0002 is deliberately not encoded here: the axis-vocabulary invariant is an equality between an asset's axes keys and board.representation.axes, which are two different parts of the same document, so it is checked separately by report.validate_axis_vocabulary.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "board",
+    "board_stats",
+    "references",
+    "assets",
+    "comparisons",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "description": "major.minor. A minor version may add fields. A major version may remove or change the meaning of one, and a consumer must refuse a major version it does not support rather than reading it partially."
+    },
+    "board": { "$ref": "#/$defs/board" },
+    "board_stats": { "$ref": "#/$defs/boardStats" },
+    "references": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/referenceEntry" },
+      "description": "The offline catalogue the viewer needs. Every assets[].exemplars[].reference_id resolves into it."
+    },
+    "assets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/asset" }
+    },
+    "comparisons": { "$ref": "#/$defs/comparisons" },
+    "provenance": { "$ref": "#/$defs/provenance" }
+  },
+  "$defs": {
+    "rfc3339": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})$",
+      "description": "An RFC 3339 timestamp. The pattern is what enforces this, because the format keyword is an annotation that only becomes a check when an optional validator dependency is installed, and a check that silently does nothing is worse than none."
+    },
+    "sha256Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "mime": {
+      "type": "string",
+      "pattern": "^[a-z]+/[a-z0-9+.-]+$"
+    },
+    "pValue": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1,
+      "description": "A conformal p-value, which is (1 + count) / (n_local + 1) and so is strictly positive and at most 1. A zero here is a defect rather than a low score."
+    },
+    "alpha": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "exclusiveMaximum": 1
+    },
+    "cosineCut": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 2,
+      "description": "A cut on cosine distance, which ranges over [0, 2]."
+    },
+    "flags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "How the report says something is wrong with the question. The vocabulary is open, because the ADRs name examples such as degenerate_board and abstained without closing the set."
+    },
+    "interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["low", "high", "level", "method"],
+      "properties": {
+        "low": { "type": "number", "minimum": 0, "maximum": 1 },
+        "high": { "type": "number", "minimum": 0, "maximum": 1 },
+        "level": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+        "method": {
+          "const": "loo-jackknife-plus",
+          "description": "The method is named and specified in ADR-0002, not labelled. A name is not an algorithm."
+        }
+      }
+    },
+    "exemplar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference_id", "similarity"],
+      "properties": {
+        "reference_id": { "type": "string", "minLength": 1 },
+        "similarity": { "type": "number", "minimum": -1, "maximum": 1 }
+      }
+    },
+    "thumbnail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mime", "width", "height", "data_base64"],
+      "properties": {
+        "mime": { "$ref": "#/$defs/mime" },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "data_base64": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+          "description": "The image inline, so the viewer needs no network access at view time."
+        }
+      }
+    },
+    "referenceEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference_id", "content_sha256", "mime", "width", "height", "thumbnail"],
+      "properties": {
+        "reference_id": { "type": "string", "minLength": 1 },
+        "content_sha256": { "$ref": "#/$defs/sha256Hex" },
+        "mime": { "$ref": "#/$defs/mime" },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "thumbnail": { "$ref": "#/$defs/thumbnail" }
+      }
+    },
+    "category": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category_id", "n_local", "member_ids"],
+      "properties": {
+        "category_id": { "type": "string", "minLength": 1 },
+        "n_local": { "type": "integer", "minimum": 1 },
+        "member_ids": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "board": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "n_references",
+        "n_eff",
+        "requested_alpha",
+        "supported_alpha",
+        "built_at",
+        "representation",
+        "fit",
+        "categories"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/sha256Hex",
+          "description": "The board hash defined once in ADR-0005 and computed once by board.board_hash. Two scores are comparable when their board hashes match and are not comparable otherwise."
+        },
+        "name": { "type": "string" },
+        "n_references": { "type": "integer", "minimum": 1 },
+        "n_eff": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Kish effective sample size over the near-duplicate groups. Real, never rounded before use, and never the conformal denominator: it is an admissibility floor per ADR-0005."
+        },
+        "requested_alpha": { "$ref": "#/$defs/alpha" },
+        "supported_alpha": {
+          "$ref": "#/$defs/alpha",
+          "description": "1 / (n_eff_local + 1), the finest honourable request."
+        },
+        "built_at": { "$ref": "#/$defs/rfc3339" },
+        "representation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["style", "axes"],
+          "properties": {
+            "style": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model", "revision", "dim"],
+              "properties": {
+                "model": { "type": "string", "minLength": 1 },
+                "revision": { "type": "string", "minLength": 1 },
+                "dim": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "axes": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true,
+              "description": "The classical axis vocabulary this report carries, today palette, tone and composition. It can shrink at runtime, per ADR-0003, which is why it is data here rather than three named fields."
+            }
+          }
+        },
+        "fit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["metric", "k", "cluster_cut", "dup_cut", "interval"],
+          "description": "Every parameter that can move a score. Any addition here belongs inside the board hash as well, per ADR-0005.",
+          "properties": {
+            "metric": { "const": "cosine" },
+            "k": { "type": "integer", "minimum": 1 },
+            "cluster_cut": { "$ref": "#/$defs/cosineCut" },
+            "dup_cut": { "$ref": "#/$defs/cosineCut" },
+            "interval": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["method", "replicates", "seed"],
+              "properties": {
+                "method": { "const": "loo-jackknife-plus" },
+                "replicates": {
+                  "type": "null",
+                  "description": "Always null. The method has no inner replicates and no seed dependence, which is why the interval is exactly reproducible."
+                },
+                "seed": { "type": "integer" }
+              }
+            }
+          }
+        },
+        "categories": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/category" },
+          "description": "ADR-0004 rule 2. One entry on a single-look board."
+        }
+      }
+    },
+    "boardStats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tightness", "leverage", "flags"],
+      "properties": {
+        "tightness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["loo_mean", "loo_sd", "loo_quantiles"],
+          "properties": {
+            "loo_mean": { "type": "number" },
+            "loo_sd": { "type": "number", "minimum": 0 },
+            "loo_quantiles": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["p10", "p50", "p90"],
+              "properties": {
+                "p10": { "type": "number" },
+                "p50": { "type": "number" },
+                "p90": { "type": "number" }
+              }
+            }
+          }
+        },
+        "leverage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["reference_id", "delta_tightness", "rank"],
+            "properties": {
+              "reference_id": { "type": "string", "minLength": 1 },
+              "delta_tightness": { "type": "number" },
+              "rank": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "description": "One reference sitting far from the others widens the fitted distribution and quietly raises everything. This is where the report says which one."
+        },
+        "flags": { "$ref": "#/$defs/flags" }
+      }
+    },
+    "axesScored": {
+      "type": "object",
+      "required": ["style"],
+      "properties": {
+        "style": {
+          "$ref": "#/$defs/pValue",
+          "description": "The style axis conformal p-value, which is the score itself. It is not a combination of the classical axes: ADR-0003 withdrew that promise rather than inventing the combining function."
+        }
+      },
+      "additionalProperties": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "description": "A classical axis value. ADR-0003 states each classical axis returns a scalar distance in [0, 1], so the bound is the axis contract rather than a convention chosen here."
+      }
+    },
+    "axesAbstained": {
+      "type": "object",
+      "required": ["style"],
+      "properties": {
+        "style": {
+          "type": "null",
+          "description": "Null on an abstained asset, per ADR-0002. The classical axes beside it are still computed and still worth reading: a designer told an asset is nothing like the references is helped by seeing that its palette matched."
+        }
+      },
+      "additionalProperties": {
+        "type": ["number", "null"],
+        "minimum": 0,
+        "maximum": 1
+      }
+    },
+    "scoredAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "asset_id",
+        "source",
+        "category_id",
+        "n_local",
+        "score",
+        "interval",
+        "rank",
+        "axes",
+        "exemplars",
+        "flags"
+      ],
+      "properties": {
+        "state": { "const": "scored" },
+        "asset_id": { "type": "string", "minLength": 1 },
+        "source": { "type": "string" },
+        "category_id": { "type": "string", "minLength": 1 },
+        "n_local": { "type": "integer", "minimum": 1 },
+        "score": { "$ref": "#/$defs/pValue" },
+        "interval": { "$ref": "#/$defs/interval" },
+        "rank": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Larger score ranks first. Equal scores take competition ranking and break ties on ascending asset_id. Abstained assets carry no rank at all."
+        },
+        "axes": { "$ref": "#/$defs/axesScored" },
+        "exemplars": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/exemplar" }
+        },
+        "flags": { "$ref": "#/$defs/flags" }
+      }
+    },
+    "abstainedAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "asset_id",
+        "source",
+        "reason",
+        "explanation",
+        "measurement",
+        "category_id",
+        "axes",
+        "exemplars",
+        "flags"
+      ],
+      "description": "The score key is absent rather than null, because a null in a numeric field is read as zero by something eventually, and zero is the most confident possible wrong answer here.",
+      "properties": {
+        "state": { "const": "abstained" },
+        "asset_id": { "type": "string", "minLength": 1 },
+        "source": { "type": "string" },
+        "reason": { "enum": ["resolution", "multi_modality", "far_outlier"] },
+        "explanation": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A full plain sentence built from the measurement, in the register of 'This board has 10 references, so the finest distinction it can express is about 9%, and you asked for 5%.'"
+        },
+        "measurement": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "The measurement that triggered the rule. Its keys depend on the reason, so the shape is open here and is pinned per rule in abstain.py."
+        },
+        "category_id": { "type": "string", "minLength": 1 },
+        "axes": { "$ref": "#/$defs/axesAbstained" },
+        "exemplars": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/exemplar" }
+        },
+        "flags": { "$ref": "#/$defs/flags" }
+      }
+    },
+    "asset": {
+      "description": "A discriminated union on state. A consumer switches on state before reading anything else, and cannot silently treat a refusal as a low score. Each branch closes additionalProperties, so an object carrying both a score and a reason matches neither branch and the oneOf fails.",
+      "oneOf": [
+        { "$ref": "#/$defs/scoredAsset" },
+        { "$ref": "#/$defs/abstainedAsset" }
+      ]
+    },
+    "comparisons": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ties", "note"],
+      "properties": {
+        "ties": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "description": "A list of pairs and never a partition. Two assets are tied when the interval around their score difference, computed over shared jackknife folds, contains zero. That test is not transitive, so it cannot define groups."
+        },
+        "note": { "type": "string" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine", "model", "command", "seed", "created_at"],
+      "properties": {
+        "engine": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "version": { "type": "string", "minLength": 1 }
+          }
+        },
+        "model": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repo", "revision", "sha256"],
+          "description": "A report is reproducible only if the exact weights are named.",
+          "properties": {
+            "repo": { "type": "string", "minLength": 1 },
+            "revision": { "type": "string", "minLength": 1 },
+            "sha256": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Not constrained to a hex digest. ADR-0003 says the checkpoint sha256 is compared against an authoritative published hash where one exists, and where none exists the claim is renamed rather than stretched, so this field has to be able to carry a non-digest value. An encoder with no downloaded checkpoint is exactly that case."
+            }
+          }
+        },
+        "command": { "type": "string" },
+        "seed": { "type": "integer" },
+        "created_at": { "$ref": "#/$defs/rfc3339" }
+      }
+    }
+  }
+}

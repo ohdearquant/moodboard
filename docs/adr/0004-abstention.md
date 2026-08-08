@@ -89,6 +89,41 @@ differently, which is the same defect as no rule at all.**
    that category's members only, by the same construction ADR-0003 specifies with n_local in
    place of n. The report names the category.
 
+   **Amendment: encoder revision 2 did not change this cut, it changed what the cut is
+   applied to.** 0.35 was pinned a priori and is unchanged, which is what makes the change
+   easy to miss: nothing in this record moved. Revision 1 unit-normalised the concatenated
+   descriptor once, so the block with the largest raw norm dominated the vector; revision 2
+   unit-normalises palette, tone and composition separately before concatenating, so each
+   carries a third. Measured by `eval/encoder_revision_figures.py`, over the 7,140 pairs among
+   the 120 synthetic images the two families in `tests/test_cli.py` draw at seed 20260808, the
+   fraction of pairs falling above this 0.35 cut goes from **21.3%** under revision 1 to
+   **48.9%** under revision 2, and the median pair distance from **0.2581** to **0.3414**.
+   Roughly half the pairs now land on the far side of a cut that about a fifth did. The 0.05
+   duplicate cut is barely touched by comparison, **93.6%** to **91.1%**, because
+   near-coincident pairs stay near-coincident under any reweighting.
+
+   **Those six figures were replaced on 2026-08-08 and the previous ones are withdrawn rather
+   than corrected, because they could not be reproduced.** This paragraph previously read 22.1%
+   to 49.8%, a median of 0.2546 to 0.3488, and 93.8% to 91.4%. Those came from an ad-hoc
+   measurement that was never committed, on a population whose seed and size were not recorded,
+   so there is no way to run it again and no way to tell whether the difference is the seed, the
+   count, or an error. The replacement is not a re-measurement of the same thing; it is the
+   first measurement of this kind that a reader can repeat, and every figure above now names the
+   command that produces it. The direction is worth stating plainly because it runs against the
+   author: the withdrawn numbers were slightly LARGER on the headline shift, so this record
+   previously overstated its own effect by about a point. The qualitative claim is unchanged and
+   is what the conclusion rests on.
+
+   The magnitude is population-dependent and should not be quoted as a constant. On the
+   pre-revision generator, which varied hue alone, the same comparison gave a much larger
+   shift; that generator no longer exists in the tree, having been replaced precisely because
+   it did not exercise revision 2. What is stable across both populations, and is the
+   substantive finding, is that composition contributed **0.0%** of revision-1 energy — the
+   axis was in the contract, in the report and in the vector, and was arithmetically incapable
+   of affecting any clustering decision. A reader deciding whether a revision-1 calibration
+   transfers should treat it as not transferring and re-derive, rather than reasoning from the
+   cut's unchanged value.
+
    The permutation symmetry is the load-bearing part and it is why the clustering runs on the
    augmented bag rather than on the references alone. Clustering the references, then
    assigning the candidate to the nearest resulting cluster, treats the candidate differently

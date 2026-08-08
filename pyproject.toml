@@ -1,0 +1,65 @@
+[project]
+name = "moodboard"
+version = "0.1.0"
+description = "Score how well a candidate image fits a reference moodboard, with a calibrated interval and a per-axis decomposition."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "scikit-image>=0.22",
+    "Pillow>=10.0",
+    # Not in the module's own axis or encoder math: report.py needs a validator for the
+    # committed JSON Schema file it validates its own output against, and hand-rolling
+    # a JSON Schema validator duplicates a well-tested library rather than depending on one.
+    # See INTERFACES.md for the full rationale.
+    "jsonschema>=4.20",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+moodboard = "moodboard.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["moodboard"]
+
+# The engine reads eval/thresholds.json at runtime and refuses to run without it, deliberately,
+# because an engine that cannot find its registry and proceeds on numbers compiled into its own
+# source is the failure that arrangement exists to prevent. The file lives outside the package,
+# so a wheel built from `packages = ["moodboard"]` alone did not carry it and every installed
+# copy raised FileNotFoundError on the first abstention call. Shipping it under the package
+# means `_default_thresholds_path`'s existing upward walk finds it at the first parent it
+# checks, so no code path changes: a source checkout has no moodboard/eval/ and keeps walking
+# up to the real registry, an installed copy stops at the packaged one.
+#
+# This is a build-time copy of a file the repository also carries, and the mirror contract is
+# that the build is the only thing that writes it. Editing the installed copy edits nothing
+# durable, and editing the repository copy reaches an installed environment only through a
+# rebuild. tests/test_packaging.py asserts the two are byte-identical in a freshly built wheel.
+
+[tool.hatch.build.targets.wheel.force-include]
+"eval/thresholds.json" = "moodboard/eval/thresholds.json"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# datasets/ predates this config and is not part of the moodboard package; its fetch scripts
+# are a separate concern from the engine this pyproject builds and are not linted here.
+extend-exclude = ["datasets"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

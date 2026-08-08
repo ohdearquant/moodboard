@@ -40,3 +40,8 @@ node_modules/
 .DS_Store
 .idea/
 .vscode/
+
+# Progress report from the implementation run. It is written before any code and overwritten
+# as work proceeds, and it stays untracked: it records how the engine got built, which is not
+# part of the engine.
+IMPLEMENTATION_REPORT.md
