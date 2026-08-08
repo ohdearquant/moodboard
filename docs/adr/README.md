@@ -42,3 +42,7 @@ validation claim.
 | [0004](0004-abstention.md) | The tool refuses to score when it cannot, and refusing is a first-class output | Proposed |
 | [0005](0005-reference-set.md) | The reference set is an input with properties, not a folder of images | Proposed |
 | [0006](0006-standalone.md) | Standalone tool, no design-application SDK dependency | Proposed |
+| [0007](0007-viewer-architecture.md) | The viewer has one report model, explicit outcome components, and one offline build | Proposed |
+| [0008](0008-report-contract-for-viewer.md) | Report version 1.1 carries the evidence the viewer presents | Proposed |
+| [0009](0009-measurement-and-evaluation-contract.md) | Every published measurement is an immutable, revision-bound result | Proposed |
+| [0010](0010-frontend-verification.md) | Frontend verification uses engine-generated fixtures and layered tests | Proposed |
