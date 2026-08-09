@@ -31,9 +31,11 @@ from PIL import Image, UnidentifiedImageError
 
 from .report import (
     THUMBNAIL_MAX_COMPRESSED_BYTES,
+    THUMBNAIL_MAX_COUNT,
     THUMBNAIL_MAX_DECODED_BYTES,
     THUMBNAIL_MAX_PIXELS,
     THUMBNAIL_MAX_SIDE,
+    THUMBNAIL_TOTAL_DECODED_BYTES,
     from_json_dict,
     read_report_bytes,
 )
@@ -58,6 +60,8 @@ _MAX_THUMBNAIL_COMPRESSED_BYTES: Final = THUMBNAIL_MAX_COMPRESSED_BYTES
 _MAX_THUMBNAIL_SIDE: Final = THUMBNAIL_MAX_SIDE
 _MAX_THUMBNAIL_PIXELS: Final = THUMBNAIL_MAX_PIXELS
 _MAX_THUMBNAIL_DECODED_BYTES: Final = THUMBNAIL_MAX_DECODED_BYTES
+_MAX_TOTAL_THUMBNAILS: Final = THUMBNAIL_MAX_COUNT
+_MAX_TOTAL_THUMBNAIL_DECODED_BYTES: Final = THUMBNAIL_TOTAL_DECODED_BYTES
 _STANDALONE_CSP: Final = (
     "default-src 'none'; script-src data:; style-src data:; img-src data:; "
     "connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
@@ -517,6 +521,38 @@ def _validate_cross_fields(
     assert isinstance(comparisons, Mapping)
     assert isinstance(provenance, Mapping)
 
+    thumbnails: list[tuple[Mapping[str, Any], str]] = []
+    for index, reference in enumerate(references):
+        assert isinstance(reference, Mapping)
+        thumbnail = reference["thumbnail"]
+        assert isinstance(thumbnail, Mapping)
+        thumbnails.append((thumbnail, f"/references/{index}/thumbnail"))
+    for index, asset in enumerate(assets):
+        assert isinstance(asset, Mapping)
+        image = asset.get("image")
+        if isinstance(image, Mapping):
+            thumbnail = image["thumbnail"]
+            assert isinstance(thumbnail, Mapping)
+            thumbnails.append((thumbnail, f"/assets/{index}/image/thumbnail"))
+    if len(thumbnails) > _MAX_TOTAL_THUMBNAILS:
+        raise ViewerPackagingError(
+            f"report carries {len(thumbnails)} thumbnails and exceeds the "
+            f"{_MAX_TOTAL_THUMBNAILS}-thumbnail decode limit"
+        )
+    declared_raster_bytes = 0
+    for thumbnail, path in thumbnails:
+        _thumbnail_limits(thumbnail, path)
+        width = thumbnail["width"]
+        height = thumbnail["height"]
+        assert isinstance(width, int) and not isinstance(width, bool)
+        assert isinstance(height, int) and not isinstance(height, bool)
+        declared_raster_bytes += width * height * 4
+    if declared_raster_bytes > _MAX_TOTAL_THUMBNAIL_DECODED_BYTES:
+        raise ViewerPackagingError(
+            "report thumbnails exceed the aggregate "
+            f"{_MAX_TOTAL_THUMBNAIL_DECODED_BYTES}-byte raster limit"
+        )
+
     reference_positions: dict[str, int] = {}
     for index, reference in enumerate(references):
         assert isinstance(reference, Mapping)
@@ -604,21 +640,6 @@ def _validate_cross_fields(
             raise ViewerPackagingError(f"duplicate unordered tie at /comparisons/ties/{index}")
         tie_pairs.add(key)
 
-    # Legacy thumbnails may remain diagnostic when their MIME or bytes are not renderable, but
-    # transport/decode resource ceilings are fatal in every supported report version.
-    for index, reference in enumerate(references):
-        assert isinstance(reference, Mapping)
-        thumbnail = reference["thumbnail"]
-        assert isinstance(thumbnail, Mapping)
-        _thumbnail_limits(thumbnail, f"/references/{index}/thumbnail")
-    for index, asset in enumerate(assets):
-        assert isinstance(asset, Mapping)
-        image = asset.get("image")
-        if isinstance(image, Mapping):
-            thumbnail = image["thumbnail"]
-            assert isinstance(thumbnail, Mapping)
-            _thumbnail_limits(thumbnail, f"/assets/{index}/image/thumbnail")
-
     if version != "1.1":
         return
 
@@ -634,18 +655,8 @@ def _validate_cross_fields(
     if [item["axis_id"] for item in definitions] != axis_ids:
         raise ViewerPackagingError("axis definition ids do not follow the declared vocabulary")
 
-    for index, reference in enumerate(references):
-        assert isinstance(reference, Mapping)
-        thumbnail = reference["thumbnail"]
-        assert isinstance(thumbnail, Mapping)
-        _thumbnail_bytes(thumbnail, f"/references/{index}/thumbnail")
-    for index, asset in enumerate(assets):
-        assert isinstance(asset, Mapping)
-        image = asset.get("image")
-        if isinstance(image, Mapping):
-            thumbnail = image["thumbnail"]
-            assert isinstance(thumbnail, Mapping)
-            _thumbnail_bytes(thumbnail, f"/assets/{index}/image/thumbnail")
+    for thumbnail, path in thumbnails:
+        _thumbnail_bytes(thumbnail, path)
 
 
 def _validate_report_bytes(

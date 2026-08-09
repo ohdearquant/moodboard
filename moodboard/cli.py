@@ -547,6 +547,19 @@ def _engine_source_provenance() -> EngineSourceProvenance | None:
 
     checkout = Path(__file__).resolve().parent.parent
     try:
+        repository = subprocess.run(
+            ["git", "-C", str(checkout), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if repository.returncode != 0:
+            return None
+        repository_root = Path(repository.stdout.strip()).resolve()
+        if repository_root != checkout:
+            # Git searches parent directories. An installed wheel can therefore sit below an
+            # unrelated checkout; never label that checkout's HEAD as Moodboard provenance.
+            return None
         revision = subprocess.run(
             ["git", "-C", str(checkout), "rev-parse", "HEAD"],
             capture_output=True,

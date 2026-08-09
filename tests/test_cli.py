@@ -30,6 +30,7 @@ import io
 import json
 import shlex
 import struct
+import subprocess
 import zipfile
 import zlib
 from pathlib import Path
@@ -1527,6 +1528,61 @@ def test_report_size_preflight_rejects_before_open_or_html_output_mutation(
     assert "exceeds the 1-byte report limit" in err
     assert opened_report is False
     assert destination.read_bytes() == b"sentinel"
+
+
+def _git(repository: Path, *arguments: str) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(repository), *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _committed_repository(repository: Path) -> str:
+    repository.mkdir()
+    _git(repository, "init")
+    _git(repository, "config", "user.name", "Moodboard Test")
+    _git(repository, "config", "user.email", "moodboard@example.invalid")
+    marker = repository / "marker.txt"
+    marker.write_text("source\n", encoding="utf-8")
+    _git(repository, "add", "marker.txt")
+    _git(repository, "commit", "-m", "source")
+    return _git(repository, "rev-parse", "HEAD")
+
+
+def test_engine_source_provenance_requires_the_exact_git_toplevel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    repository = tmp_path / "moodboard-source"
+    _committed_repository(repository)
+    package = repository / "moodboard"
+    package.mkdir()
+    fake_module = package / "cli.py"
+    fake_module.write_text("# source fixture\n", encoding="utf-8")
+    _git(repository, "add", "moodboard/cli.py")
+    _git(repository, "commit", "-m", "add package")
+    revision = _git(repository, "rev-parse", "HEAD")
+    monkeypatch.setattr(cli, "__file__", str(fake_module))
+
+    source = cli._engine_source_provenance()
+
+    assert source is not None
+    assert source.source_revision == revision
+    assert source.source_dirty is False
+
+
+def test_installed_wheel_below_an_unrelated_repo_omits_source_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    repository = tmp_path / "unrelated"
+    _committed_repository(repository)
+    installed = repository / ".venv" / "lib" / "python3.14" / "site-packages" / "moodboard"
+    installed.mkdir(parents=True)
+    monkeypatch.setattr(cli, "__file__", str(installed / "cli.py"))
+
+    assert cli._engine_source_provenance() is None
 
 
 # ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import json
 import re
@@ -14,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from moodboard import report as report_module
+from moodboard import viewer as viewer_module
 from moodboard.viewer import (
     ViewerPackagingError,
     inline_report,
@@ -223,3 +225,76 @@ def test_compressed_bomb_thumbnail_is_rejected_before_decode(tmp_path, viewer_pa
         inline_report(report_path, destination, package_root=viewer_package.root)
 
     assert destination.read_bytes() == b"sentinel"
+
+
+def test_thumbnail_count_preflight_rejects_before_any_pillow_work(
+    tmp_path, viewer_package, monkeypatch
+):
+    report = json.loads(SHOWCASE_REPORT.read_text(encoding="utf-8"))
+    prototype = report["references"][0]
+    target_references = report_module.THUMBNAIL_MAX_COUNT - len(report["assets"]) + 1
+    for index in range(len(report["references"]), target_references):
+        reference = copy.deepcopy(prototype)
+        reference["reference_id"] = f"preflight-{index:04d}"
+        report["references"].append(reference)
+    report["board"]["n_references"] = len(report["references"])
+    report_path = tmp_path / "too-many-thumbnails.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    destination = tmp_path / "existing.html"
+    destination.write_bytes(b"sentinel")
+    pillow_calls = 0
+
+    def forbidden_pillow(*args, **kwargs):
+        nonlocal pillow_calls
+        pillow_calls += 1
+        raise AssertionError("Pillow must not run before the count preflight")
+
+    monkeypatch.setattr(viewer_module.Image, "open", forbidden_pillow)
+
+    with pytest.raises(ViewerPackagingError, match="512-thumbnail decode limit"):
+        inline_report(report_path, destination, package_root=viewer_package.root)
+
+    assert pillow_calls == 0
+    assert destination.read_bytes() == b"sentinel"
+
+
+def test_declared_aggregate_preflight_rejects_before_any_pillow_work(
+    tmp_path, viewer_package, monkeypatch
+):
+    report_path = tmp_path / "aggregate.json"
+    report_path.write_bytes(SHOWCASE_REPORT.read_bytes())
+    destination = tmp_path / "existing.html"
+    destination.write_bytes(b"sentinel")
+    monkeypatch.setattr(viewer_module, "_MAX_TOTAL_THUMBNAIL_DECODED_BYTES", 1)
+    pillow_calls = 0
+
+    def forbidden_pillow(*args, **kwargs):
+        nonlocal pillow_calls
+        pillow_calls += 1
+        raise AssertionError("Pillow must not run before the aggregate preflight")
+
+    monkeypatch.setattr(viewer_module.Image, "open", forbidden_pillow)
+
+    with pytest.raises(ViewerPackagingError, match="aggregate 1-byte raster limit"):
+        inline_report(report_path, destination, package_root=viewer_package.root)
+
+    assert pillow_calls == 0
+    assert destination.read_bytes() == b"sentinel"
+
+
+def test_shared_report_aggregate_preflight_rejects_before_pillow(monkeypatch):
+    document = json.loads(SHOWCASE_REPORT.read_text(encoding="utf-8"))
+    monkeypatch.setattr(report_module, "THUMBNAIL_TOTAL_DECODED_BYTES", 1)
+    pillow_calls = 0
+
+    def forbidden_pillow(*args, **kwargs):
+        nonlocal pillow_calls
+        pillow_calls += 1
+        raise AssertionError("Pillow must not run before the shared aggregate preflight")
+
+    monkeypatch.setattr(report_module.Image, "open", forbidden_pillow)
+
+    with pytest.raises(ValueError, match="aggregate 1-byte raster limit"):
+        report_module.from_json_dict(document)
+
+    assert pillow_calls == 0

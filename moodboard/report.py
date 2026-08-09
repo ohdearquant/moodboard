@@ -1759,13 +1759,37 @@ def _validate_cross_fields(
 ) -> None:
     validate_axis_vocabulary(report)
     _validate_unique_exemplars(report)
-    thumbnail_count = len(report.references) + sum(
-        1 for asset in report.assets if isinstance(asset, (ScoredAssetV1_1, AbstainedAssetV1_1))
-    )
-    if thumbnail_count > THUMBNAIL_MAX_COUNT:
+    thumbnails: list[tuple[Thumbnail, str]] = [
+        (reference.thumbnail, f"references[{index}]")
+        for index, reference in enumerate(report.references)
+    ]
+    if isinstance(report, ReportV1_1):
+        thumbnails.extend(
+            (asset.image.thumbnail, f"assets[{index}].image")
+            for index, asset in enumerate(report.assets)
+        )
+    if len(thumbnails) > THUMBNAIL_MAX_COUNT:
         raise ValueError(
-            f"report carries {thumbnail_count} thumbnails and exceeds the "
+            f"report carries {len(thumbnails)} thumbnails and exceeds the "
             f"{THUMBNAIL_MAX_COUNT}-thumbnail decode limit"
+        )
+    # Count and declared geometry are available without opening an image. Refuse aggregate work
+    # here so an over-budget document reaches neither Pillow header processing nor native decode.
+    declared_raster_bytes = sum(
+        _validate_thumbnail_limits(
+            width=thumbnail.width,
+            height=thumbnail.height,
+            encoded_length=len(thumbnail.data_base64)
+            if isinstance(thumbnail.data_base64, str)
+            else 0,
+            field=field,
+        )
+        for thumbnail, field in thumbnails
+    )
+    if declared_raster_bytes > THUMBNAIL_TOTAL_DECODED_BYTES:
+        raise ValueError(
+            "report thumbnails exceed the aggregate "
+            f"{THUMBNAIL_TOTAL_DECODED_BYTES}-byte raster limit"
         )
     if isinstance(report, ReportV1_1):
         _validate_v1_1_cross_fields(report, schema_path)
