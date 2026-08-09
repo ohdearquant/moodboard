@@ -83,7 +83,7 @@ class TestPValueGrid:
             dim = 4 + (trial % 5)
             refs = _iid_gaussian_bag(rng, n, dim)
             candidate = _iid_gaussian_bag(rng, 1, dim)[0]
-            p = conformal_p_value(refs, candidate)
+            p = conformal_p_value(refs, candidate, 5)
             grid_position = p * (n + 1)
             assert grid_position == pytest.approx(round(grid_position), abs=1e-9), (
                 f"n={n}, trial={trial}: p={p!r} is not a multiple of 1/{n + 1}"
@@ -118,7 +118,7 @@ class TestPValueGrid:
         for _ in range(trials):
             bag = generator(rng, m, dim)
             refs, candidate = bag[:n], bag[n]
-            p = conformal_p_value(refs, candidate)
+            p = conformal_p_value(refs, candidate, 5)
             grid_index = round(p * m) - 1
             buckets[grid_index] += 1
 
@@ -385,7 +385,7 @@ class TestMustDetectAndScore:
             assert len(partition.candidate_category_members) == sub_look
             assert len(partition.all_categories) == 2
             score = conformal_p_value(
-                references[list(partition.candidate_category_members)], candidate
+                references[list(partition.candidate_category_members)], candidate, 5
             )
             assert 0.0 < score <= 1.0
 

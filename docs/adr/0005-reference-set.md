@@ -36,12 +36,31 @@ and there is currently nothing in the system that would notice.
 
 **The board is a versioned artifact with a content hash, and every score names it.** The
 `brand.mb` file carries the hash and ADR-0002's report echoes the same value under
-`board.id`. One definition, used in both places: sha256 over a canonical JSON serialisation,
+`board.id`. One definition, used in both places: SHA-256 over a canonical JSON serialisation,
 with sorted keys and no insignificant whitespace, of the object
 
-    {"v": 1, "refs": [sorted reference content hashes],
+    {"v": 2, "refs": [sorted reference content hashes],
+     "reference_embeddings": {
+       "sha256": …, "shape": [n, dim], "dtype": "float32-le"},
      "model": {"repo": …, "revision": …},
-     "fit": {"metric": "cosine", "k": …, "cluster_cut": …, "dup_cut": …}}
+     "fit": {"schema_version": "moodboard-fit-policy.v1",
+             "metric": "cosine", "k": …, "k_cap": …,
+             "cluster_cut": …, "dup_cut": …,
+             "min_category_size": …, "interval_level": …,
+             "far_outlier_iqr_multiplier": …}}
+
+The reference-embedding digest is itself SHA-256 over canonical JSON
+
+    {"v": 1, "dtype": "float32-le", "shape": [n, dim],
+     "entries": sorted [[source_content_sha256, sha256(little_endian_f32_row)], …]}
+
+where rows are finite, L2-normalized, C-order little-endian float32 and signed zero is
+canonicalized to positive zero. Sorting the content/row pairs keeps board identity invariant
+when the references and their rows are reordered together. Keeping duplicates in the list
+preserves multiset semantics. Binding each row to its source hash is load-bearing: a global
+orthogonal rotation preserves every reference-reference distance and `n_eff` but changes every
+future candidate score. The old v1 payload did not bind `embeddings.npy`, so it could not make
+the comparability claim this record assigns to `board.id`.
 
 Two scores are comparable when their board hashes match and are not comparable otherwise.
 Including the fitting parameters is the load-bearing part: an earlier version had ADR-0002
@@ -50,6 +69,32 @@ means changing k or a clustering cut would have preserved the identifier under o
 changed it under the other, and scores fitted under incompatible parameters would have been
 put side by side under a matching id. Any parameter that can change a score belongs inside
 this hash, and adding one bumps `v`.
+
+The persisted fit policy is the sole scoring source after build. `k` is the effective fitted
+value `min(k_cap, n - 1)`; `k_cap` records the configured policy that produced it. Ranking
+uses the stored `k` for candidate p-values, category-local clamping, leave-one-out tightness,
+leverage and intervals; it uses the stored category size, interval level and far-outlier
+multiplier as well. It does not rediscover those values from a mutable threshold registry.
+An explicitly supplied rank-time registry is an assertion and must match the board or ranking
+fails. The far-outlier source string is stored for report provenance but excluded from the
+score hash because the numeric multiplier, not the machine-local path that supplied it, moves
+the computation.
+
+Current artifacts are `brand.mb` format version 3 and carry the embedding digest explicitly.
+The reader verifies the exact matrix shape/dtype/canonical form, row norms, explicit digest,
+and then the board id before returning it. Format versions 1 and 2 predate this binding. They
+fail by default; an explicit migration-only `allow_legacy_unverified=True` read marks the
+returned object `integrity_verified=False`, and the writer refuses to recertify it. Rebuilding
+from the reference files is the path to a verified current artifact.
+
+Board-hash v2 and artifact format 3 are one unreleased change from the repository's v1/format-1
+baseline: the intermediate working-tree drafts of v2/format 3 were never published. Their
+final definitions therefore include both embedding integrity and the complete fit policy above
+rather than spending another version number on a transient draft. If a v2 or format-3 artifact
+is ever published, this exception ends and the ordinary "new score input bumps the version"
+rule applies. Current verified artifacts also require at least two references, enforce
+`1 <= n_eff <= n`, and reject a fit whose effective `k` does not match its configured cap and
+reference count.
 
 **The tool reports effective sample size, not just file count.** At build time, group the
 references by near-duplication and report both n, the number of files, and n_eff, an estimate

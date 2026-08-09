@@ -1,0 +1,24 @@
+{
+  "format_version": 1,
+  "writer_schema_versions": ["1.0", "1.1"],
+  "supported_minor_versions": ["1.0", "1.1"],
+  "strict_triptych_since": "1.1",
+  "utf8_policy": "fatal-no-replacement",
+  "maximum_safe_integer": 9007199254740991,
+  "thumbnail_mime_allowlist": ["image/png", "image/jpeg", "image/webp"],
+  "payload_element_id": "moodboard-report",
+  "payload_token": "__MOODBOARD_REPORT_BASE64__",
+  "structural_rules": [
+    "unique-asset-id",
+    "unique-reference-id",
+    "unique-exemplar-id-per-asset",
+    "interval-order",
+    "score-style-equality",
+    "axis-vocabulary-equality",
+    "tie-distinct-scored-endpoints",
+    "tie-unique-unordered-pair",
+    "safe-json-integer",
+    "legacy-exemplar-diagnostic",
+    "strict-triptych-evidence"
+  ]
+}

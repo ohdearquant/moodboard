@@ -124,7 +124,7 @@ def _exemplars(rng: np.random.Generator, reference_ids: list[str]) -> tuple[Exem
     if not reference_ids:
         return ()
     n = int(rng.integers(0, min(3, len(reference_ids)) + 1))
-    chosen = [reference_ids[int(rng.integers(0, len(reference_ids)))] for _ in range(n)]
+    chosen = [str(value) for value in rng.choice(reference_ids, size=n, replace=False)]
     return tuple(
         Exemplar(reference_id=rid, similarity=float(rng.uniform(-1.0, 1.0))) for rid in chosen
     )
@@ -266,9 +266,7 @@ def _random_report(
 def test_schema_invariant_holds_on_random_reports_of_scored_assets_only():
     for seed in range(40):
         axis_order = _AXIS_SETS[seed % len(_AXIS_SETS)]
-        report = _random_report(
-            seed, axis_order=axis_order, n_scored=1 + seed % 5, n_abstained=0
-        )
+        report = _random_report(seed, axis_order=axis_order, n_scored=1 + seed % 5, n_abstained=0)
         assert {asset.state for asset in report.assets} == {"scored"}
         validate_report(report)
 
@@ -276,9 +274,7 @@ def test_schema_invariant_holds_on_random_reports_of_scored_assets_only():
 def test_schema_invariant_holds_on_random_reports_of_abstained_assets_only():
     for seed in range(40):
         axis_order = _AXIS_SETS[seed % len(_AXIS_SETS)]
-        report = _random_report(
-            seed, axis_order=axis_order, n_scored=0, n_abstained=1 + seed % 5
-        )
+        report = _random_report(seed, axis_order=axis_order, n_scored=0, n_abstained=1 + seed % 5)
         assert {asset.state for asset in report.assets} == {"abstained"}
         validate_report(report)
 

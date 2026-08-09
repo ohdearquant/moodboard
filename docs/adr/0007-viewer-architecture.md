@@ -61,9 +61,9 @@ presentation is a permanent legacy path rather than a placeholder waiting on a s
 The engine validates a report against JSON Schema and the cross-field axis invariant immediately
 before it writes the file (`moodboard/report.py:759-782`). A viewer must still treat a file handed
 to it as untrusted input. The browser may receive a report from another producer, an older release,
-or an edited attachment. The `moodboard report --html` entry point is named but currently raises
-`NotImplementedError` (`moodboard/cli.py:1029-1042`, `moodboard/cli.py:1151-1161`), so that entry
-point has no implemented path whose internal structure this record has to preserve.
+or an edited attachment. The implemented `moodboard report --html` entry point validates the
+report and manifest-owned viewer package, then atomically inserts the report bytes into the built
+offline shell. It adds no statistical computation path.
 
 ## Decision
 
@@ -93,10 +93,10 @@ refuses an unsupported major
 (`docs/adr/0008-report-contract-for-viewer.md:289-308`). This record's decoder follows ADR-0008's rule,
 not ADR-0002's original one — see "Report loading and version handling" below for the exact
 consequence. The closed schema therefore governs v1.0 writers, while the named-minor compatibility rule
-governs readers of every other supported minor. The current unconstrained exemplar array cannot prove
-that a report contains `min(3, references.length)` distinct, resolvable closest references in
-closest-first order. Legacy v1.0 reports receive visible compatibility diagnostics. ADR-0008 must add
-the missing producer guarantee before release. Remote report URLs, servers, report editing, and model
+governs readers of every other supported minor. The v1.0 exemplar array cannot prove that a report
+contains `min(3, references.length)` distinct, resolvable closest references in closest-first order.
+Legacy v1.0 reports receive visible compatibility diagnostics. ADR-0008 adds the missing producer
+guarantee in report v1.1. Remote report URLs, servers, report editing, and model
 execution remain outside v1 because ADR-0001 fixes a local report file and static viewer boundary
 (`docs/adr/0001-engine-and-viewer-split.md:28-47`).
 

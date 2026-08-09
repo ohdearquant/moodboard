@@ -1,0 +1,36 @@
+{
+  "name": "moodboard-view",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.17.0",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "validators:check": "node scripts/generate-validators.mjs --check",
+    "validators:write": "node scripts/generate-validators.mjs --write",
+    "fixture:check": "uv run python scripts/generate_showcase_fixture.py --check tests/fixtures/showcase",
+    "fixture:write": "uv run python scripts/generate_showcase_fixture.py --write tests/fixtures/showcase",
+    "build:vite": "vite build",
+    "package": "node scripts/package-artifacts.mjs",
+    "build": "npm run validators:check && npm run typecheck && npm run build:vite && npm run package",
+    "test:ci": "npm run fixture:check && npm run validators:check && npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "lossless-json": "4.3.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@testing-library/react": "16.3.2",
+    "@types/node": "26.2.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@vitejs/plugin-react": "6.0.5",
+    "jsdom": "30.0.1",
+    "typescript": "7.0.2",
+    "vite": "8.2.1",
+    "vitest": "4.1.10"
+  }
+}

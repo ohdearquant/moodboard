@@ -394,7 +394,9 @@ def test_large_sub_looks_are_scored_and_carry_their_category(thresholds):
         assert len(partition.candidate_category_members) == sub_look
         assert len(partition.all_categories) == 2
         assert partition.category_id in partition.all_categories
-        score = conformal_p_value(references[list(partition.candidate_category_members)], candidate)
+        score = conformal_p_value(
+            references[list(partition.candidate_category_members)], candidate, 5
+        )
         assert 0.0 < score <= 1.0
 
     rate = abstained / TRIALS

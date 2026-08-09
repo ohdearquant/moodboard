@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/viewer/artifact-manifest.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "viewer_version",
+    "hash_algorithm",
+    "manifest_schema",
+    "verification_toolchain",
+    "consumer_contract",
+    "writer_schemas",
+    "static_entry",
+    "template",
+    "assets"
+  ],
+  "properties": {
+    "format_version": {"const": 1},
+    "viewer_version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+    "hash_algorithm": {"const": "sha256"},
+    "manifest_schema": {"$ref": "#/$defs/file"},
+    "verification_toolchain": {"$ref": "#/$defs/file"},
+    "consumer_contract": {"$ref": "#/$defs/file"},
+    "writer_schemas": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema_version", "path", "sha256"],
+        "properties": {
+          "schema_version": {"enum": ["1.0", "1.1"]},
+          "path": {"type": "string", "pattern": "^[A-Za-z0-9._/-]+$"},
+          "sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    "static_entry": {"$ref": "#/$defs/file"},
+    "template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "payload_element_id",
+        "payload_token",
+        "payload_token_count",
+        "content_security_policy"
+      ],
+      "properties": {
+        "path": {"const": "standalone-template.html"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "payload_element_id": {"const": "moodboard-report"},
+        "payload_token": {"const": "__MOODBOARD_REPORT_BASE64__"},
+        "payload_token_count": {"const": 1},
+        "content_security_policy": {
+          "const": "default-src 'none'; script-src data:; style-src data:; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
+        }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "path", "sha256"],
+        "properties": {
+          "role": {"enum": ["application-js", "application-css"]},
+          "path": {"type": "string", "pattern": "^assets/[A-Za-z0-9._-]+$"},
+          "sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^[A-Za-z0-9._/-]+$"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

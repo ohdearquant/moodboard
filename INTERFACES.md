@@ -83,12 +83,14 @@ These are defined once, in `report.py`, and imported by every module that needs 
 from dataclasses import dataclass
 from typing import Literal, Mapping, Any
 
+
 @dataclass(frozen=True, slots=True)
 class Interval:
     low: float
     high: float
     level: float
     method: Literal["loo-jackknife-plus"]
+
 
 @dataclass(frozen=True, slots=True)
 class Exemplar:
@@ -124,6 +126,7 @@ class Thumbnail:
     height: int
     data_base64: str
 
+
 @dataclass(frozen=True, slots=True)
 class ReferenceEntry:
     reference_id: str
@@ -143,16 +146,19 @@ class StyleModelInfo:
     revision: str
     dim: int
 
+
 @dataclass(frozen=True, slots=True)
 class Representation:
     style: StyleModelInfo
-    axes: tuple[str, ...]          # today: the three names in AXES, in that order
+    axes: tuple[str, ...]  # today: the three names in AXES, in that order
+
 
 @dataclass(frozen=True, slots=True)
 class IntervalMethod:
     method: Literal["loo-jackknife-plus"]
-    replicates: None                # always None; the method has no inner replicates
+    replicates: None  # always None; the method has no inner replicates
     seed: int
+
 
 @dataclass(frozen=True, slots=True)
 class BoardFit:
@@ -162,21 +168,23 @@ class BoardFit:
     dup_cut: float
     interval: IntervalMethod
 
+
 @dataclass(frozen=True, slots=True)
 class Category:
     category_id: str
     n_local: int
     member_ids: tuple[str, ...]
 
+
 @dataclass(frozen=True, slots=True)
 class Board:
-    id: str                         # board_hash(...) from board.py; computed once, echoed here
+    id: str  # board_hash(...) from board.py; computed once, echoed here
     name: str
     n_references: int
-    n_eff: float                    # real, never rounded before use
+    n_eff: float  # real, never rounded before use
     requested_alpha: float
-    supported_alpha: float          # 1 / (n_eff_local + 1) for the category the request lands in
-    built_at: str                   # RFC 3339
+    supported_alpha: float  # 1 / (n_eff_local + 1) for the category the request lands in
+    built_at: str  # RFC 3339
     representation: Representation
     fit: BoardFit
     categories: tuple[Category, ...]
@@ -186,6 +194,13 @@ class Board:
 It is computed once, by `board_hash` in `board.py`, and both the report and the `brand.mb`
 artifact echo that one value.
 
+`report_v1_0`'s `BoardFit` is a frozen compatibility projection, not the complete persisted
+runtime policy. Report v1.1 adds a distinct `BoardFitV1_1` whose closed shape also requires
+configured `k_cap`, `min_category_size`, `interval_level`, `far_outlier_iqr_multiplier`, and
+`far_outlier_iqr_multiplier_source`. Rank copies those values from verified `brand.mb`; it never
+reloads mutable defaults. The source string is provenance and does not enter `board_id`, while
+every numeric field does. The v1.0 type and schema remain unchanged and valid forever.
+
 ### Board statistics
 
 ```python
@@ -193,13 +208,15 @@ artifact echo that one value.
 class Tightness:
     loo_mean: float
     loo_sd: float
-    loo_quantiles: Mapping[str, float]   # {"p10": ..., "p50": ..., "p90": ...}
+    loo_quantiles: Mapping[str, float]  # {"p10": ..., "p50": ..., "p90": ...}
+
 
 @dataclass(frozen=True, slots=True)
 class Leverage:
     reference_id: str
     delta_tightness: float
     rank: int
+
 
 @dataclass(frozen=True, slots=True)
 class BoardStats:
@@ -227,9 +244,10 @@ class ScoredAsset:
     score: float
     interval: Interval
     rank: int
-    axes: Mapping[str, float]              # keys checked against AXES invariant, below
+    axes: Mapping[str, float]  # keys checked against AXES invariant, below
     exemplars: tuple[Exemplar, ...]
     flags: tuple[str, ...]
+
 
 @dataclass(frozen=True, slots=True)
 class AbstainedAsset:
@@ -237,12 +255,13 @@ class AbstainedAsset:
     asset_id: str
     source: str
     reason: Literal["resolution", "multi_modality", "far_outlier"]
-    explanation: str                        # a full sentence, see abstain.py below
-    measurement: Mapping[str, Any]          # shape depends on reason; see abstain.py
+    explanation: str  # a full sentence, see abstain.py below
+    measurement: Mapping[str, Any]  # shape depends on reason; see abstain.py
     category_id: str
-    axes: Mapping[str, float | None]        # style is None; classical axes are still computed
+    axes: Mapping[str, float | None]  # style is None; classical axes are still computed
     exemplars: tuple[Exemplar, ...]
     flags: tuple[str, ...]
+
 
 Asset = ScoredAsset | AbstainedAsset
 ```
@@ -261,16 +280,19 @@ class Comparisons:
     ties: tuple[tuple[str, str], ...]
     note: str
 
+
 @dataclass(frozen=True, slots=True)
 class ModelProvenance:
     repo: str
     revision: str
     sha256: str
 
+
 @dataclass(frozen=True, slots=True)
 class EngineProvenance:
     name: str
     version: str
+
 
 @dataclass(frozen=True, slots=True)
 class Provenance:
@@ -278,7 +300,7 @@ class Provenance:
     model: ModelProvenance
     command: str
     seed: int
-    created_at: str                          # RFC 3339
+    created_at: str  # RFC 3339
 ```
 
 ### The report itself
@@ -295,10 +317,99 @@ class Report:
     provenance: Provenance
 ```
 
+### Report v1.1 additive types
+
+Report v1.0 is not widened. Version 1.1 has distinct typed objects, and reuses only the shared
+v1.0 primitives whose wire paths, types, and meanings are unchanged:
+
+```python
+@dataclass(frozen=True, slots=True)
+class CandidateImage:
+    content_sha256: str
+    mime: str
+    width: int
+    height: int
+    thumbnail: Thumbnail
+
+
+@dataclass(frozen=True, slots=True)
+class AxisDefinition:
+    axis_id: str
+    label: str
+    value_kind: Literal["conformal_p_value", "normalized_distance"]
+    direction: Literal["higher_is_better_fit", "lower_is_closer"]
+    aggregation: Literal["full_conformal_category", "mean_over_exemplars"]
+    availability: Literal["scored_only", "all_assets"]
+    uncertainty: Literal["asset_interval", "none"]
+    method: AxisMethod
+
+
+@dataclass(frozen=True, slots=True)
+class BoardFitV1_1:
+    metric: Literal["cosine"]
+    k: int
+    k_cap: int
+    cluster_cut: float
+    dup_cut: float
+    min_category_size: int
+    interval_level: float
+    far_outlier_iqr_multiplier: float
+    far_outlier_iqr_multiplier_source: str
+    interval: IntervalMethod
+
+
+@dataclass(frozen=True, slots=True)
+class RepresentationV1_1:
+    style: StyleModelInfo
+    axes: tuple[str, ...]
+    axis_definitions: tuple[AxisDefinition, ...]
+```
+
+`BoardV1_1` has the same board-level fields as `Board`, with `RepresentationV1_1` and
+`BoardFitV1_1` at the two widened paths. `ScoredAssetV1_1` and `AbstainedAssetV1_1` keep their
+respective v1.0 branch fields and each adds the required `image: CandidateImage`. The branches
+remain separate dataclasses; abstained assets still cannot represent a score.
+
+```python
+@dataclass(frozen=True, slots=True)
+class EngineSourceProvenance:
+    source_repository: str
+    source_revision: str
+    source_dirty: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ProvenanceV1_1:
+    engine: EngineProvenanceV1_1  # source fields serialize flat in engine, all present or absent
+    model: ModelProvenance
+    command: str  # exactly shlex.join(argv)
+    argv: tuple[str, ...]
+    seed: int
+    created_at: str
+    schema: SchemaProvenance
+
+
+@dataclass(frozen=True, slots=True)
+class ReportV1_1:
+    schema_version: Literal["1.1"]
+    board: BoardV1_1
+    board_stats: BoardStats
+    references: tuple[ReferenceEntry, ...]
+    assets: tuple[AssetV1_1, ...]
+    comparisons: Comparisons
+    provenance: ProvenanceV1_1
+```
+
+`axis_definitions_for(axes)` is the sole constructor for the fixed ADR-0008 definitions. It
+returns `style` first and then the registered classical definitions in declared order. A v1.1
+report requires exactly `min(3, len(references))` distinct, resolving exemplars per asset, ordered
+by descending similarity and then reference-catalogue position. Candidate and reference thumbnails
+are strict base64 JPEG, PNG, or WebP whose decoded type and dimensions must match their metadata.
+
 ### The axis-vocabulary invariant, exactly
 
 ```python
-def validate_axis_vocabulary(report: Report) -> None:
+def validate_axis_vocabulary(report: Report | ReportV1_1) -> None:
     """Raise ValueError, listing every offending asset_id, unless
 
         set(asset.axes.keys()) == {"style"} | set(report.board.representation.axes)
@@ -318,37 +429,50 @@ def validate_axis_vocabulary(report: Report) -> None:
 ```python
 from pathlib import Path
 
-SCHEMA_PATH: Path = Path(__file__).parent / "schema" / "report_v1_0.schema.json"
+SCHEMA_PATH_V1_0: Path = Path(__file__).parent / "schema" / "report_v1_0.schema.json"
+SCHEMA_PATH_V1_1: Path = Path(__file__).parent / "schema" / "report_v1_1.schema.json"
+SCHEMA_PATH: Path = SCHEMA_PATH_V1_0  # frozen compatibility alias
 
-def to_json_dict(report: Report) -> dict[str, Any]:
-    """Serialise report to a plain JSON-compatible dict matching schema_version "1.0" exactly:
-    field names and nesting as in ADR-0002, tuples as JSON arrays, and no key present for a
-    field the dataclass in question does not have (score/interval/rank absent on an
-    abstained asset; reason/explanation/measurement absent on a scored one)."""
 
-def from_json_dict(data: dict[str, Any]) -> Report:
-    """Parse an already schema-valid dict into a typed Report, dispatching each entry of
-    data["assets"] to ScoredAsset or AbstainedAsset by its "state" key."""
+def to_json_dict(report: Report | ReportV1_1) -> dict[str, Any]:
+    """Serialize either exact minor without projecting, stripping, or relabeling fields."""
 
-def validate_report(report: Report, schema_path: Path = SCHEMA_PATH) -> None:
-    """to_json_dict(report), validate the result against the JSON Schema at schema_path with
-    jsonschema.validate, then validate_axis_vocabulary(report). Raise on any failure. This is
-    the function the engine calls on every report before writing it; a failure here is an
-    error the caller must not catch and continue past, per the contract's 'a report that
-    fails its own schema is an error, not a warning.'"""
 
-def write_report(report: Report, path: Path, schema_path: Path = SCHEMA_PATH) -> None:
-    """validate_report(report, schema_path), then write to_json_dict(report) as indented JSON
-    to path. There is no path through this module that writes a report which has not just
-    passed validate_report in the same call."""
+def from_json_dict(data: dict[str, Any]) -> Report | ReportV1_1:
+    """Inspect the complete version first, validate against its exact schema, and construct
+    that version's typed object. Raise UnsupportedSchemaVersionError for every unnamed version
+    before interpreting payload content."""
+
+
+def validate_report(report: Report | ReportV1_1, schema_path: Path | None = None) -> None:
+    """Select the schema from the typed version, validate it, then enforce shared and
+    version-specific cross-field assertions. A failure is an error, not a warning."""
+
+
+def write_report(
+    report: Report | ReportV1_1,
+    path: Path,
+    schema_path: Path | None = None,
+    *,
+    candidate_inputs: Sequence[CandidateImageInput] | None = None,
+) -> None:
+    """Validate before writing. Version 1.1 additionally requires independent original-input
+    identity facts for every candidate; these must equal image hash, MIME, width, and height."""
 ```
 
-The JSON Schema file lives at `moodboard/schema/report_v1_0.schema.json`, is committed, and
-encodes the discriminated union as a `oneOf` on two branches keyed by `state`, each branch
-listing its own `required` properties exactly as the two dataclasses above list their fields.
-The axis-vocabulary invariant is not expressible in JSON Schema, since it is an equality
-between two different parts of the same document; that is why `validate_report` runs it as a
-second, explicit step rather than folding it into the schema file.
+Both JSON Schemas are committed. The v1.0 path remains exact and closed forever. Version dispatch
+names only `1.0` and `1.1`; unknown minor versions do not receive a best-effort projection. Both
+schemas encode the discriminated union as a `oneOf` keyed by `state`. Cross-object equalities,
+reference resolution, exemplar ordering, decoded thumbnail truth, command/argv equality, and the
+v1.1 schema-byte hash run as explicit second-stage validation because JSON Schema cannot express
+them. `report_schema_sha256(SCHEMA_PATH_V1_1)` is pinned in report provenance and in a golden test.
+
+Every path-based report consumer first calls
+`read_report_bytes(path: Path) -> bytes` under `REPORT_MAX_BYTES = 128 * 1024 * 1024`. The helper
+uses file size as a preflight, refuses an oversized report before opening it, then reads no more
+than the ceiling plus one byte so a file that grows after preflight still cannot allocate without
+bound. The CLI validator and offline HTML inliner share this exact helper. This is a transport and
+availability bound only; it does not change report values or scoring semantics.
 
 ## `encoders.py`
 
@@ -356,6 +480,7 @@ second, explicit step rather than folding it into the schema file.
 from typing import Protocol, runtime_checkable
 from collections.abc import Sequence
 import numpy as np
+
 
 @runtime_checkable
 class Encoder(Protocol):
@@ -375,21 +500,118 @@ built. A real CSD, CLIP or DINOv2 encoder implements this Protocol with `dim` fi
 published architecture and `revision` naming the pinned weight revision; none of that changes
 anything below `Encoder` itself.
 
-### The one concrete implementation this pass builds
+### The offline implementation and the opt-in Khive implementation
 
 ```python
 class ClassicalEncoder:
     name: str = "classical-v1"
-    revision: str = "1"
-    dim: int   # = the fixed sum of the three feature-vector lengths below
+    revision: str = "2"
+    dim: int  # = the fixed sum of the three feature-vector lengths below
 
     def embed(self, images: Sequence[np.ndarray]) -> np.ndarray:
         """For each image: concatenate axes.palette_feature_vector(image),
         axes.tone_feature_vector(image) and axes.composition_feature_vector(image), in that
-        order, then L2-normalise the concatenation. Returns (len(images), self.dim) float32.
+        order; L2-normalise each nonzero block; then L2-normalise the concatenation. Returns
+        (len(images), self.dim) float32.
         Implements the Encoder Protocol above; conformal.py, board.py and report.py see it
         through that Protocol and never import ClassicalEncoder by name."""
 ```
+
+ADR-0011 adds a second implementation without changing `Encoder`:
+
+```python
+class KhiveLatticeEncoder:
+    name: str  # "khive:" plus the descriptor's model_name
+    revision: str  # "<descriptor fingerprint>+moodboard-khive-adapter-v1"
+    dim: int  # descriptor dimensions
+    descriptor: VisualDescriptor
+    last_assets: tuple[KhiveAsset, ...]
+
+    def embed(self, images: Sequence[np.ndarray]) -> np.ndarray:
+        """Encode each array as a deterministic RGB8/RGBA8 PNG rendition, submit ordered
+        moodboard.ingest operations, and return only a complete validated float32 matrix."""
+```
+
+Construction first calls `moodboard.model()` and validates the closed
+`moodboard.visual-descriptor.v1` object. Its SHA-256 `fingerprint` is recomputed over compact,
+recursively key-sorted JSON excluding `fingerprint` and `model_key`; `model_key` must then equal
+`moodboard_<fingerprint>_<dimensions>`. The v1 descriptor pins Lattice 0.7.1, Qwen3.5 visual
+token mean pooling, sRGB/Lanczos preprocessing padded to the model's 32-pixel spatial-merge
+alignment at a maximum side of 448, the prompt identity, checkpoint SHA-256, dimension and L2
+normalisation. Root and nested key sets are closed. Every ingest repeats the same descriptor,
+and any drift, malformed vector, non-finite value, dimension mismatch, or norm outside `1e-5`
+of one fails the complete call without returning a partial matrix.
+
+`embed_source_assets(...)` is the CLI-only stronger seam. It rereads each path, verifies its
+SHA-256 against the value already used for `board_hash`, and submits the exact file bytes and
+MIME. `embed(...)` cannot recover source bytes from an array, so its returned `KhiveAsset`
+metadata labels the BlobStore object `canonical-png-rendition`; the path-aware call labels it
+`source-bytes`. RGBA stays RGBA so the descriptor-pinned Khive matte owns compositing. The v1
+path-aware source contract admits PNG, JPEG, and WebP and rejects another MIME before dispatch.
+The adapter revision and a byte-exact RGBA PNG golden freeze array conversion as part of the
+encoder identity; a conversion change must bump that revision. The encoder is internal and
+byte-frozen: filter-0 scanlines, a fixed zlib wrapper, manually framed DEFLATE stored blocks,
+fixed PNG chunks/CRC, and Adler-32. It does not delegate canonical byte identity to a ranged
+Pillow or compressor implementation.
+
+`moodboard/khive.py` is an application adapter, not a general SDK. Every invocation uses
+`kkernel exec --ops-file ... --save-file ... --strict` with explicit `--actor`, identical
+`--expect-actor`, and explicit `--namespace`. An optional config path is passed as `--config`;
+when absent, Khive's normal environment/discovery fallback remains active. It verifies the saved JSONL manifest, byte
+checksum, row count, per-row tool/order, success flag, and strict JSON before releasing any
+result. Image base64 never appears in argv.
+
+Its retrieval surface is equally narrow and typed:
+
+```python
+@dataclass(frozen=True)
+class KhiveSearchRequest:
+    asset_id: str
+    top_k: int | None = None
+
+
+@dataclass(frozen=True)
+class KhiveSearchHit:
+    asset_id: str
+    score: float
+    rank: int
+    name: str
+    content_ref: str
+
+
+@dataclass(frozen=True)
+class KhiveSearchResult:
+    query_asset_id: str
+    descriptor: VisualDescriptor
+    experimental: Literal[True]
+    hits: tuple[KhiveSearchHit, ...]
+
+
+class KhiveClient:
+    def search(self, asset_id: str, top_k: int | None = None) -> KhiveSearchResult: ...
+```
+
+`top_k` is absent for the pack default or a plain integer in `[1,100]`. Query and hit asset ids
+are bare canonical UUIDs. Search discovers and validates the model descriptor before the first
+query; the response descriptor must match it exactly. The result and each hit are closed objects.
+Hits are self-excluded, unique by asset id, ranked contiguously from one, and ordered by
+non-increasing finite cosine similarity in `[-1,1]`. Names are required non-empty UTF-8 strings
+within the pack limit, and content references are raw 64-character lowercase BLAKE3 hex. The
+`moodboard retrieve` CLI prints those ranked locators and calls the value `cosine`; it does not
+label retrieval as style fit, coherence, or a calibrated score. It renders each name as a JSON
+string so control characters cannot forge terminal rows.
+
+For each ingest, it also recomputes the Khive BlobStore v1 BLAKE3-256 `content_ref` over the
+submitted bytes and requires the same row to return that value. This detects swapped successful
+rows even though every operation has the identical `moodboard.ingest` tool name.
+Byte-identical inputs are submitted once and fanned back to every original position, preventing
+parallel duplicate-creation races and duplicate inference. First-occurrence name/caption wins;
+later occurrence metadata carries `created=False`.
+One logical call admits at most 64 total asset occurrences and 32 MiB of decoded bytes across
+those occurrences before deduplication. Source reads are bounded to remaining budget plus one;
+array geometry is checked against exact canonical-PNG size before encoding. Khive-mode CLI
+loading applies the same occurrence/source-byte gate before decode, caps either side at 8192,
+and retains at most 256 MiB of matte-composited RGB arrays. Classical loading is unchanged.
 
 **A gap left implicit in the specification, closed here.** The classical encoder is specified
 as "built from the palette/tone/composition features below, concatenated and L2-normalised",
@@ -416,8 +638,10 @@ def palette_distance(image_a: np.ndarray, image_b: np.ndarray) -> float:
     normalising against the maximum transport cost the comparison admits, so values are
     comparable across image pairs. Deterministic: any internal clustering uses a fixed seed."""
 
+
 def tone_distance(image_a: np.ndarray, image_b: np.ndarray) -> float:
     """A distance between luminance and local-contrast distributions, in [0, 1]."""
+
 
 def composition_distance(image_a: np.ndarray, image_b: np.ndarray) -> float:
     """Saliency placement and negative-space ratio, compared coarsely, in [0, 1]."""
@@ -440,8 +664,10 @@ def palette_feature_vector(image: np.ndarray) -> np.ndarray:
     what makes concatenation and a single L2 normalisation in ClassicalEncoder well-defined.
     Unnormalised; ClassicalEncoder normalises the full concatenation once, not each part."""
 
+
 def tone_feature_vector(image: np.ndarray) -> np.ndarray:
     """A fixed-length luminance/local-contrast histogram descriptor."""
+
 
 def composition_feature_vector(image: np.ndarray) -> np.ndarray:
     """A fixed-length descriptor of saliency placement and negative-space ratio, for example a
@@ -459,18 +685,23 @@ chosen at construction time.
 def nonconformity_scores(embeddings: np.ndarray, k: int) -> np.ndarray:
     """embeddings is (n, dim), L2-normalised rows. For every row i, the mean cosine distance
     (1 - cosine similarity) to its k nearest neighbours among the OTHER n - 1 rows. Returns
-    shape (n,). The caller computes k = min(5, n - 1) for whichever bag it is scoring and
-    passes it in; this function does not choose k. Ties in neighbour selection are broken by
+    shape (n,). Build computes the effective board k = min(configured k_cap, n - 1). Every
+    downstream caller passes that stored value, clamping only when a smaller local/fold bag has
+    fewer available neighbours; this function does not choose k. Ties are broken by
     ascending row index, so the result is deterministic for a fixed embeddings array."""
 ```
 
 ### The symmetric full-conformal p-value
 
 ```python
-def conformal_p_value(reference_embeddings: np.ndarray, candidate_embedding: np.ndarray) -> float:
+def conformal_p_value(
+    reference_embeddings: np.ndarray,
+    candidate_embedding: np.ndarray,
+    k: int,
+) -> float:
     """ADR-0003's construction, exactly. Let n = reference_embeddings.shape[0]. Form the
     augmented bag of n + 1 rows (the n references, then the candidate). Compute
-    nonconformity_scores over that bag with k = min(5, n), giving alpha_1 .. alpha_n for the
+    nonconformity_scores over that bag with k = min(k, n), giving alpha_1 .. alpha_n for the
     references and alpha_cand for the candidate. The references' own alphas are computed
     WITH the candidate present in their neighbour pool, never against each other alone.
     Return
@@ -488,8 +719,9 @@ def conformal_p_value(reference_embeddings: np.ndarray, candidate_embedding: np.
 @dataclass(frozen=True, slots=True)
 class CategoryPartition:
     category_id: str
-    candidate_category_members: tuple[int, ...]   # indices into reference_embeddings
+    candidate_category_members: tuple[int, ...]  # indices into reference_embeddings
     all_categories: Mapping[str, tuple[int, ...]]  # every category_id -> its reference indices
+
 
 def partition_categories(
     reference_embeddings: np.ndarray,
@@ -541,6 +773,7 @@ def duplicate_groups(reference_embeddings: np.ndarray, cut: float) -> tuple[tupl
     sub-looks are far apart (average-linkage, cut 0.35) and duplicates are nearly coincident
     (single-linkage, cut 0.05). One cut cannot serve both purposes."""
 
+
 def kish_n_eff(group_sizes: Sequence[int]) -> float:
     """Kish's effective sample size: (sum(group_sizes)) ** 2 / sum(s ** 2 for s in
     group_sizes), returned as a real, unrounded float. Equals len(group_sizes) when every
@@ -572,6 +805,7 @@ def loo_jackknife_plus_interval(
     Interval with method="loo-jackknife-plus" and replicates left to the caller building the
     surrounding IntervalMethod record (this function has no seed dependence and produces an
     exactly reproducible result for a fixed category_embeddings and candidate_embedding)."""
+
 
 def paired_score_difference_interval(
     category_embeddings: np.ndarray,
@@ -610,7 +844,9 @@ board. Implementing them as two independently-invoked functions risks two formul
 apart on a boundary case; they are pinned here as one function that chooses the reason.
 
 ```python
-def check_resolution(partition: CategoryPartition, requested_alpha: float) -> AbstentionVerdict | None:
+def check_resolution(
+    partition: CategoryPartition, requested_alpha: float
+) -> AbstentionVerdict | None:
     """Covers ADR-0004 rules 1 and 2. n_local = len(partition.candidate_category_members),
     the reference count WITHOUT the candidate (corrected 2026-08-08; this line pinned `+ 1`,
     see the note beside Category.n_local above).
@@ -624,7 +860,10 @@ def check_resolution(partition: CategoryPartition, requested_alpha: float) -> Ab
     register of 'This board has 10 references, so the finest distinction it can express is
     about 9%, and you asked for 5%.'"""
 
-def check_multi_modality(partition: CategoryPartition, requested_alpha: float) -> AbstentionVerdict | None:
+
+def check_multi_modality(
+    partition: CategoryPartition, requested_alpha: float
+) -> AbstentionVerdict | None:
     """Rule 2, given its own name because ADR-0004 names it separately and a reader looking
     for "the multi-modality check" should find one. Delegates entirely to
     check_resolution(partition, requested_alpha) and returns exactly what that call returns;
@@ -632,6 +871,7 @@ def check_multi_modality(partition: CategoryPartition, requested_alpha: float) -
     single-look board this legitimately returns a "resolution"-reasoned verdict or None,
     never a "multi_modality" one, since there is only one category to check."""
     return check_resolution(partition, requested_alpha)
+
 
 def check_far_outlier(
     candidate_alpha: float,
@@ -649,11 +889,15 @@ def check_far_outlier(
     that the candidate is nothing like these references, in plain language, never in terms of
     a medium or file-type classification. ADR-0004 withdraws that framing explicitly."""
 
+
 def evaluate_abstention(
     partition: CategoryPartition,
     requested_alpha: float,
     candidate_alpha: float,
     board_reference_alphas: Sequence[float],
+    *,
+    far_outlier_iqr_multiplier: float | None = None,
+    far_outlier_iqr_multiplier_source: str | None = None,
 ) -> AbstentionVerdict | None:
     """Runs check_resolution first. If it abstains, returns that verdict; an asset that
     cannot be scored at the requested resolution is reported as exactly one reason, not
@@ -669,24 +913,41 @@ def evaluate_abstention(
 ```python
 def board_hash(
     reference_content_hashes: Sequence[str],
+    reference_embeddings: np.ndarray,
     model_repo: str,
     model_revision: str,
     metric: str,
     k: int,
     cluster_cut: float,
     dup_cut: float,
+    *,
+    k_cap: int,
+    min_category_size: int,
+    interval_level: float,
+    far_outlier_iqr_multiplier: float,
 ) -> str:
     """ADR-0005's board hash, computed in exactly one place. sha256 hex digest over the
     canonical JSON serialisation (sorted keys, no insignificant whitespace) of
 
-        {"v": 1, "refs": sorted(reference_content_hashes),
+        {"v": 2, "refs": sorted(reference_content_hashes),
+         "reference_embeddings": {
+             "sha256": canonical_source_to_row_digest,
+             "shape": [n, dim], "dtype": "float32-le"},
          "model": {"repo": model_repo, "revision": model_revision},
-         "fit": {"metric": metric, "k": k, "cluster_cut": cluster_cut, "dup_cut": dup_cut}}
+         "fit": {"schema_version": "moodboard-fit-policy.v1",
+                 "metric": metric, "k": k, "k_cap": k_cap,
+                 "cluster_cut": cluster_cut, "dup_cut": dup_cut,
+                 "min_category_size": min_category_size,
+                 "interval_level": interval_level,
+                 "far_outlier_iqr_multiplier": far_outlier_iqr_multiplier}}
 
-    Stable under reordering the references, since refs is sorted before hashing. report.py's
+    The embedding digest frames shape/dtype and sorts [content_sha256,
+    sha256(little-endian-float32-row)] pairs. Stable when references and their rows reorder
+    together. report.py's
     Board.id and the brand.mb artifact's own id both call this function; neither recomputes
     it independently. Any new fitting parameter that can move a score is added inside "fit"
-    and the literal "v" is bumped, both in the same change."""
+    and the literal "v" is bumped, both in the same change. The present v2/format-3 shape is
+    the single unpublished migration from v1/format 1 and includes all fields above."""
 ```
 
 `board.py` also builds the `brand.mb` artifact (the fitted board plus the reference embeddings
@@ -695,12 +956,39 @@ own decision; the one constraint pinned here is that the artifact's own board id
 `Report.board.id` are both `board_hash(...)` called with the same arguments, never two values
 that happen to agree.
 
+Verified artifacts use `brand.mb` format version 3. The reader validates the canonical
+little-endian float32 matrix, unit norms, source-to-row digest, shape/model dimension, and board
+id. Versions 1 and 2 fail by default; an explicit migration-only legacy read returns
+`integrity_verified=False` and cannot be re-written as verified.
+
+A complete ordered tuple of
+`ReferenceAssetLocation(asset_id, content_ref, byte_identity)` values is written as
+`reference_asset_locations`, exactly one per reference. `byte_identity` is closed to
+`source-bytes|canonical-png-rendition`. Locations are excluded from `board_hash`: the hash binds
+source SHA-256, exact embedding rows, descriptor plus adapter identity, and fit identity, while
+an entity id can be republished without changing a computed score. A separate catalogue digest
+binds sorted `(source_sha256, content_ref, byte_identity)` tuples and excludes only `asset_id`.
+Any future hydration must verify fetched bytes against both BLAKE3 `content_ref` and source
+SHA-256; this module currently performs no hydration.
+
 ## `cli.py`
 
 `moodboard build`, `moodboard rank` and `moodboard report --html` are the three entry points
 named in the contract and in `README.md`. They are thin: `build` calls `encoders.py` to embed
 a reference directory, `conformal.py` to partition and fit, and `board.py` to write
 `brand.mb`; `rank` loads a `brand.mb`, calls `conformal.py` and `abstain.py` per candidate, and
-calls `report.write_report`; `report --html` is out of scope for this pass and raises
-`NotImplementedError` with a message naming the separate viewer artifact, per the contract.
-No new type is introduced at this layer; every object `cli.py` touches is defined above.
+calls `report.write_report`; `report --html` validates the selected report minor and invokes
+`viewer.inline_report`, which verifies the packaged viewer manifest before an atomic write. It
+does not recompute or project report values. No new type is introduced at this layer; every
+engine object `cli.py` touches is defined above.
+
+`build` resolves the complete fit policy once and persists it in `brand.mb`. `rank` scores from
+that verified policy, including effective/configured k, category-size rule, interval level and
+far-outlier multiplier; threshold registry discovery cannot move an existing board's results.
+Supplying `rank --thresholds PATH` is an explicit compatibility assertion and refuses when the
+file disagrees with the board rather than overriding it.
+
+Both `build` and `rank` take `--encoder classical|khive-lattice`; `classical` remains the
+default. The Khive executable, optional config path, actor and namespace are explicit options shared by both
+commands. Supplying Khive configuration alone does not opt in, and a selected encoder whose
+name/revision does not match the board fails before candidate scoring.

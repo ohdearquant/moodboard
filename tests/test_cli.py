@@ -25,8 +25,10 @@ would silently turn a scored-path test into an abstained-path test that still pa
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
+import shlex
 import zipfile
 from pathlib import Path
 
@@ -35,11 +37,12 @@ import pytest
 from PIL import Image
 
 from moodboard import cli
+from moodboard import report as report_module
 from moodboard.abstain import load_abstention_thresholds
 from moodboard.board import board_hash, read_board
 from moodboard.conformal import conformal_p_value, duplicate_groups, kish_n_eff
 from moodboard.encoders import ClassicalEncoder
-from moodboard.report import AXIS_ORDER, from_json_dict, validate_report
+from moodboard.report import AXIS_ORDER, SCHEMA_PATH_V1_1, from_json_dict, validate_report
 
 IMAGE_SIZE = (96, 128)
 
@@ -216,9 +219,9 @@ def _spread_candidate_arrays(
 
     by_score: dict[float, list[np.ndarray]] = {}
     for image, vector in zip(drawn, embeddings, strict=True):
-        by_score.setdefault(round(conformal_p_value(reference_embeddings, vector), 9), []).append(
-            image
-        )
+        by_score.setdefault(
+            round(conformal_p_value(reference_embeddings, vector, 5), 9), []
+        ).append(image)
 
     ordered = sorted(by_score, reverse=True)
     if len(ordered) < distinct:
@@ -498,18 +501,27 @@ def test_build_writes_a_board_whose_id_is_the_board_hash(reference_dir: Path, bo
     board = read_board(board_path)
     assert board.board_id == board_hash(
         board.reference_content_hashes,
+        board.reference_embeddings,
         board.model_repo,
         board.model_revision,
         board.metric,
         board.k,
         board.cluster_cut,
         board.dup_cut,
+        k_cap=board.k_cap,
+        min_category_size=board.min_category_size,
+        interval_level=board.interval_level,
+        far_outlier_iqr_multiplier=board.far_outlier_iqr_multiplier,
     )
     assert board.reference_ids == tuple(sorted(p.name for p in reference_dir.glob("*.png")))
     assert board.model_repo == ClassicalEncoder.name
     assert board.model_revision == ClassicalEncoder.revision
     assert board.model_dim == ClassicalEncoder.dim
     assert board.k == min(5, BOARD_SIZE - 1)
+    assert board.k_cap == 5
+    assert board.min_category_size == 5
+    assert board.interval_level == 0.9
+    assert board.far_outlier_iqr_multiplier == 1.5
     assert board.n_eff == BOARD_SIZE
 
 
@@ -557,6 +569,8 @@ def test_fit_parameters_prefer_the_registry_over_the_records(tmp_path: Path):
     assert from_records.dup_cut == 0.05
     assert from_records.sources["cluster_cut"].endswith(".md")
     assert from_records.sources["interval_level"] == str(registry_path)
+    assert from_records.far_outlier_iqr_multiplier == 1.5
+    assert from_records.far_outlier_iqr_multiplier_source.endswith("0004-abstention.md")
 
     registry["fit"] = {"cluster_cut": 0.41, "dup_cut": 0.07, "k_cap": 4, "min_category_size": 3}
     override = tmp_path / "thresholds.json"
@@ -570,6 +584,171 @@ def test_fit_parameters_prefer_the_registry_over_the_records(tmp_path: Path):
     assert from_registry.sources["cluster_cut"] == str(override)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("k_cap", 4.9),
+        ("k_cap", True),
+        ("k_cap", "4"),
+        ("min_category_size", True),
+        ("cluster_cut", "0.35"),
+        ("dup_cut", False),
+        ("interval_level", "0.9"),
+        ("far_outlier_iqr_multiplier", "1.5"),
+    ],
+)
+def test_fit_registry_rejects_coercible_but_mistyped_json_values(tmp_path, field, value):
+    source = load_abstention_thresholds().path
+    registry = json.loads(source.read_text(encoding="utf-8"))
+    registry["fit"] = {
+        "k_cap": 5,
+        "cluster_cut": 0.35,
+        "dup_cut": 0.05,
+        "min_category_size": 5,
+    }
+    if field == "interval_level":
+        registry["interval_coverage"]["stated_level"] = value
+    elif field == "far_outlier_iqr_multiplier":
+        registry["abstention"]["far_outlier"] = {"iqr_multiplier": value}
+    else:
+        registry["fit"][field] = value
+    path = tmp_path / f"invalid-{field}.json"
+    path.write_text(json.dumps(registry), encoding="utf-8")
+
+    message = {
+        "interval_level": "stated_level",
+        "far_outlier_iqr_multiplier": "iqr_multiplier",
+    }.get(field, field)
+    with pytest.raises(ValueError, match=message):
+        cli.load_fit_parameters(path)
+
+
+def _fit_registry_override(tmp_path: Path, *, k_cap: int) -> Path:
+    source = load_abstention_thresholds().path
+    registry = json.loads(source.read_text(encoding="utf-8"))
+    registry["fit"] = {
+        "k_cap": k_cap,
+        "cluster_cut": 0.35,
+        "dup_cut": 0.05,
+        "min_category_size": 5,
+    }
+    path = tmp_path / f"thresholds-k{k_cap}.json"
+    path.write_text(json.dumps(registry), encoding="utf-8")
+    return path
+
+
+def test_custom_k_cap_is_hashed_stored_and_declared_by_rank(
+    tmp_path: Path, reference_dir: Path, board_path: Path
+):
+    registry = _fit_registry_override(tmp_path, k_cap=4)
+    custom_board_path = tmp_path / "k4.mb"
+    code, _, err = _run(
+        [
+            "build",
+            str(reference_dir),
+            "-o",
+            str(custom_board_path),
+            "--thresholds",
+            str(registry),
+        ]
+    )
+    assert code == 0, err
+    custom_board = read_board(custom_board_path)
+    default_board = read_board(board_path)
+    assert custom_board.k_cap == 4
+    assert custom_board.k == 4
+    assert custom_board.board_id != default_board.board_id
+
+    output = tmp_path / "k4-report.json"
+    candidates = _candidate_dir(tmp_path / "k4-candidates", 1, seed=818)
+    code, out, err = _run(
+        [
+            "rank",
+            str(candidates),
+            "-b",
+            str(custom_board_path),
+            "-r",
+            str(reference_dir),
+            "-o",
+            str(output),
+            "--alpha",
+            "0.1",
+            "--thresholds",
+            str(registry),
+        ]
+    )
+    assert code == 0, err
+    document = json.loads(output.read_text(encoding="utf-8"))
+    assert document["board"]["fit"]["k"] == custom_board.k == 4
+    assert "configured k cap   4" in out
+
+
+def test_rank_ignores_mutable_registry_discovery_but_refuses_an_explicit_mismatch(
+    tmp_path: Path,
+    reference_dir: Path,
+    board_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    registry = _fit_registry_override(tmp_path, k_cap=4)
+    candidates = _candidate_dir(tmp_path / "policy-candidates", 1, seed=919)
+
+    baseline_path = tmp_path / "baseline.json"
+    code, _, err = _run(
+        [
+            "rank",
+            str(candidates),
+            "-b",
+            str(board_path),
+            "-r",
+            str(reference_dir),
+            "-o",
+            str(baseline_path),
+            "--alpha",
+            "0.1",
+        ]
+    )
+    assert code == 0, err
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+
+    monkeypatch.setenv("MOODBOARD_THRESHOLDS", str(registry))
+    discovered_path = tmp_path / "discovered.json"
+    code, _, err = _run(
+        [
+            "rank",
+            str(candidates),
+            "-b",
+            str(board_path),
+            "-r",
+            str(reference_dir),
+            "-o",
+            str(discovered_path),
+            "--alpha",
+            "0.1",
+        ]
+    )
+    assert code == 0, err
+    discovered = json.loads(discovered_path.read_text(encoding="utf-8"))
+    for field in ("board", "board_stats", "assets", "comparisons"):
+        assert discovered[field] == baseline[field]
+
+    code, _, err = _run(
+        [
+            "rank",
+            str(candidates),
+            "-b",
+            str(board_path),
+            "-r",
+            str(reference_dir),
+            "-o",
+            str(tmp_path / "must-not-write.json"),
+            "--thresholds",
+            str(registry),
+        ]
+    )
+    assert code == 1
+    assert "different fit policy" in err
+
+
 # ---------------------------------------------------------------------------
 # rank: the report it emits
 # ---------------------------------------------------------------------------
@@ -578,8 +757,91 @@ def test_fit_parameters_prefer_the_registry_over_the_records(tmp_path: Path):
 def test_rank_emits_a_report_that_passes_its_own_validator(ranked: dict):
     report = from_json_dict(ranked["document"])
     validate_report(report)
-    assert report.schema_version == "1.0"
+    assert report.schema_version == "1.1"
     assert len(report.assets) == 5
+
+
+def test_rank_v1_1_carries_complete_fit_axis_media_and_provenance(ranked: dict):
+    document = ranked["document"]
+    fit = document["board"]["fit"]
+    assert set(fit) == {
+        "metric",
+        "k",
+        "k_cap",
+        "cluster_cut",
+        "dup_cut",
+        "min_category_size",
+        "interval_level",
+        "far_outlier_iqr_multiplier",
+        "far_outlier_iqr_multiplier_source",
+        "interval",
+    }
+    assert [
+        entry["axis_id"] for entry in document["board"]["representation"]["axis_definitions"]
+    ] == [
+        "style",
+        *AXIS_ORDER,
+    ]
+    for asset in document["assets"]:
+        image = asset["image"]
+        source_bytes = Path(asset["source"]).read_bytes()
+        assert image["content_sha256"] == hashlib.sha256(source_bytes).hexdigest()
+        assert image["mime"].startswith("image/")
+        assert image["width"] > 0 and image["height"] > 0
+        assert image["thumbnail"]["mime"] == "image/png"
+        assert len(asset["exemplars"]) == min(3, len(document["references"]))
+        similarities = [entry["similarity"] for entry in asset["exemplars"]]
+        assert similarities == sorted(similarities, reverse=True)
+
+    provenance = document["provenance"]
+    assert provenance["command"] == shlex.join(provenance["argv"])
+    schema_bytes = SCHEMA_PATH_V1_1.read_bytes()
+    assert provenance["schema"] == {
+        "id": "https://github.com/ohdearquant/moodboard/schema/report_v1_1.schema.json",
+        "sha256": hashlib.sha256(schema_bytes).hexdigest(),
+    }
+    source_fields = {
+        "source_repository",
+        "source_revision",
+        "source_dirty",
+    } & provenance["engine"].keys()
+    assert source_fields in (set(), {"source_repository", "source_revision", "source_dirty"})
+
+
+def test_rank_refuses_an_exemplar_count_that_cannot_satisfy_report_v1_1(
+    tmp_path: Path, reference_dir: Path, board_path: Path
+):
+    output = tmp_path / "wrong-exemplar-count.json"
+    code, _, err = _run(
+        [
+            "rank",
+            str(_candidate_dir(tmp_path / "wrong-count-candidates", 1, seed=1201)),
+            "-b",
+            str(board_path),
+            "-r",
+            str(reference_dir),
+            "-o",
+            str(output),
+            "--alpha",
+            "0.1",
+            "--exemplars",
+            "2",
+        ]
+    )
+    assert code == 1
+    assert "report 1.1 requires --exemplars 3" in err
+    assert not output.exists()
+
+
+def test_exemplar_similarity_clamping_preserves_catalogue_tie_order():
+    references = np.array([[1.0000001, 0.0], [1.0000002, 0.0]], dtype=np.float64)
+
+    exemplars = cli._exemplars(references, ("r0", "r1"), np.array([1.0, 0.0]), 2)
+
+    assert [(entry.reference_id, entry.similarity) for entry in exemplars] == [
+        ("r0", 1.0),
+        ("r1", 1.0),
+    ]
 
 
 def test_rank_stays_quiet_on_assets_drawn_from_the_board_own_group(
@@ -797,12 +1059,17 @@ def test_the_fit_recorded_in_the_report_is_the_fit_the_board_was_hashed_under(
     assert (
         board_hash(
             board.reference_content_hashes,
+            board.reference_embeddings,
             board.model_repo,
             board.model_revision,
             fit["metric"],
             fit["k"],
             fit["cluster_cut"],
             fit["dup_cut"],
+            k_cap=board.k_cap,
+            min_category_size=board.min_category_size,
+            interval_level=board.interval_level,
+            far_outlier_iqr_multiplier=board.far_outlier_iqr_multiplier,
         )
         == ranked["document"]["board"]["id"]
     )
@@ -1070,7 +1337,7 @@ def test_rank_refuses_a_missing_input_without_a_traceback(tmp_path: Path, board_
 def test_report_validates_an_emitted_report_and_summarises_it(ranked: dict):
     code, out, err = _run(["report", str(ranked["path"])])
     assert code == 0, err
-    assert "is a valid schema 1.0 report" in out
+    assert "is a valid schema 1.1 report" in out
     assert ranked["document"]["board"]["id"] in out
     for asset in ranked["document"]["assets"]:
         assert asset["asset_id"] in out
@@ -1093,18 +1360,44 @@ def test_report_rejects_a_document_that_violates_the_contract(tmp_path: Path, ra
     assert document["assets"][0]["asset_id"] in err
 
 
-def test_report_html_raises_not_implemented(ranked: dict, tmp_path: Path):
-    """The one unimplemented surface in the package, and it refuses rather than half-writing.
+def test_report_html_writes_the_verified_offline_viewer(ranked: dict, tmp_path: Path):
+    destination = tmp_path / "out.html"
 
-    It is deliberately not caught into an exit code: a flag that is documented as not built
-    should not be indistinguishable from a flag that broke.
-    """
-    with pytest.raises(NotImplementedError) as excinfo:
-        _run(["report", str(ranked["path"]), "--html", str(tmp_path / "out.html")])
-    message = str(excinfo.value)
-    assert "viewer" in message
-    assert "moodboard rank" in message
-    assert not (tmp_path / "out.html").exists()
+    code, out, err = _run(["report", str(ranked["path"]), "--html", str(destination)])
+
+    assert code == 0, err
+    assert "valid schema 1.1 report" in out
+    payload = destination.read_bytes()
+    assert payload.startswith(b"<!doctype html>")
+    assert b'id="moodboard-report"' in payload
+    assert b"https://" not in payload
+
+
+def test_report_size_preflight_rejects_before_open_or_html_output_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    oversized = tmp_path / "oversized.json"
+    oversized.write_bytes(b"{}")
+    destination = tmp_path / "existing.html"
+    destination.write_bytes(b"sentinel")
+    monkeypatch.setattr(report_module, "REPORT_MAX_BYTES", 1)
+    original_open = Path.open
+    opened_report = False
+
+    def tracked_open(path: Path, *args, **kwargs):
+        nonlocal opened_report
+        if path == oversized:
+            opened_report = True
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+
+    code, _, err = _run(["report", str(oversized), "--html", str(destination)])
+
+    assert code == 1
+    assert "exceeds the 1-byte report limit" in err
+    assert opened_report is False
+    assert destination.read_bytes() == b"sentinel"
 
 
 # ---------------------------------------------------------------------------

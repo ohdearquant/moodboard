@@ -1,4 +1,4 @@
-"""The command line surface: `moodboard build`, `moodboard rank`, `moodboard report`.
+"""The command line surface: build, rank, retrieve, and report.
 
 This module is the only one that sees the whole engine, and it introduces no new type. It
 loads images, calls `encoders.py` to embed them, `conformal.py` to partition and score,
@@ -6,9 +6,9 @@ loads images, calls `encoders.py` to embed them, `conformal.py` to partition and
 artifact, and `report.py` to validate and write the JSON document. Everything it emits is a
 type defined in `report.py`.
 
-`report --html` raises `NotImplementedError`. The viewer is a separate artifact under
-ADR-0001 and this pass does not build it; that one refusal is the only one in the package.
-The JSON path is complete.
+`report --html` validates the named report contract and the manifest-owned viewer package, then
+atomically publishes one self-contained offline HTML artifact. The browser bundle remains a
+separate build artifact under ADR-0001; this module only invokes its verified Python inliner.
 
 Decisions this layer had to make, because no record makes them
 --------------------------------------------------------------
@@ -38,7 +38,8 @@ cut, the neighbourhood cap and the minimum category size are not in that file, s
 read from an optional `fit` object there if present and otherwise taken from the record that
 states it, with the source printed at run time beside the value. This follows the arrangement
 `abstain.py` already uses for the Tukey multiplier. A number whose source cannot be named is
-worse than a number in the wrong place.
+worse than a number in the wrong place. Build resolves these values once and stores the complete
+numeric policy in `brand.mb`; rank consumes the board policy and never reloads mutable defaults.
 
 **The classical axis values on an asset are distances to that asset's exemplars.** ADR-0003
 defines the three axes as distances between two images and says nothing about how an asset
@@ -74,6 +75,7 @@ import io
 import json
 import math
 import shlex
+import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -83,17 +85,25 @@ from importlib.metadata import version as _distribution_version
 from pathlib import Path
 
 import numpy as np
+from jsonschema import ValidationError as JsonSchemaValidationError
 from PIL import Image
 
 from . import axes as axes_module
 from .abstain import (
-    AbstentionThresholds,
     AbstentionVerdict,
     category_n_eff,
     evaluate_abstention,
     load_abstention_thresholds,
 )
-from .board import BrandBoard, build_board, read_board, write_board
+from .board import (
+    DEFAULT_FAR_OUTLIER_IQR_MULTIPLIER,
+    DEFAULT_FAR_OUTLIER_IQR_MULTIPLIER_SOURCE,
+    BrandBoard,
+    ReferenceAssetLocation,
+    build_board,
+    read_board,
+    write_board,
+)
 from .conformal import (
     CategoryPartition,
     conformal_p_value,
@@ -104,39 +114,57 @@ from .conformal import (
     paired_score_difference_interval,
     partition_categories,
 )
-from .encoders import ClassicalEncoder
+from .encoders import (
+    KHIVE_REQUEST_MAX_BYTES,
+    KHIVE_REQUEST_MAX_IMAGES,
+    KHIVE_VISUAL_MATTE_RGB,
+    ClassicalEncoder,
+    Encoder,
+    KhiveLatticeEncoder,
+)
+from .khive import KhiveClient
 from .report import (
     AXIS_ORDER,
-    SCHEMA_VERSION,
-    AbstainedAsset,
-    Asset,
-    Board,
-    BoardFit,
+    SCHEMA_PATH_V1_1,
+    SCHEMA_VERSION_V1_1,
+    AbstainedAssetV1_1,
+    AssetV1_1,
+    BoardFitV1_1,
     BoardStats,
+    BoardV1_1,
+    CandidateImage,
+    CandidateImageInput,
     Category,
     Comparisons,
-    EngineProvenance,
+    EngineProvenanceV1_1,
+    EngineSourceProvenance,
     Exemplar,
     Interval,
     IntervalMethod,
     Leverage,
     ModelProvenance,
-    Provenance,
+    ProvenanceV1_1,
     ReferenceEntry,
-    Report,
-    Representation,
-    ScoredAsset,
+    ReportV1_1,
+    RepresentationV1_1,
+    SchemaProvenance,
+    ScoredAssetV1_1,
     StyleModelInfo,
     Thumbnail,
     Tightness,
+    axis_definitions_for,
     from_json_dict,
+    read_report_bytes,
+    report_schema_sha256,
     validate_report,
     write_report,
 )
+from .viewer import inline_report
 
 __all__ = ["main", "build_parser"]
 
 ENGINE_NAME = "moodboard"
+ENGINE_SOURCE_REPOSITORY = "https://github.com/ohdearquant/moodboard.git"
 
 # The metric is `cosine` everywhere in the ADRs and the report schema pins it as a constant,
 # so it is not a parameter a caller can move.
@@ -151,6 +179,10 @@ IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".
 # the viewer, small enough that a fifty-reference report stays a file someone can attach to a
 # message.
 THUMBNAIL_MAX_SIDE = 128
+KHIVE_SOURCE_MAX_SIDE = 8192
+"""The pack's source-header side ceiling, enforced before pixel conversion."""
+KHIVE_RETAINED_VISUAL_MAX_BYTES = 256 * 1024 * 1024
+"""Maximum cumulative RGB diagnostic arrays retained by one Khive-mode load."""
 
 # `provenance.model.sha256` for an encoder with no downloaded checkpoint. The report schema
 # deliberately does not constrain this field to a hex digest, because ADR-0003 says a claim
@@ -167,6 +199,10 @@ _FIT_FALLBACKS: Mapping[str, tuple[float | int, str]] = {
     "min_category_size": (5, "docs/adr/0004-abstention.md"),
 }
 
+DEFAULT_KHIVE_EXECUTABLE = "kkernel"
+DEFAULT_KHIVE_ACTOR = "lambda:moodboard"
+DEFAULT_KHIVE_NAMESPACE = "local"
+
 
 # ---------------------------------------------------------------------------
 # Fitting parameters
@@ -177,8 +213,8 @@ _FIT_FALLBACKS: Mapping[str, tuple[float | int, str]] = {
 class FitParameters:
     """Every parameter that can move a score, with where each one came from.
 
-    `sources` maps each field name to the file the value was read from, so `build` and `rank`
-    can print the provenance of a number beside the number itself.
+    `sources` maps each field name to the file or ADR the value was read from, so `build` can
+    print the provenance before freezing the policy in the board.
     """
 
     metric: str
@@ -187,13 +223,15 @@ class FitParameters:
     dup_cut: float
     min_category_size: int
     interval_level: float
+    far_outlier_iqr_multiplier: float
+    far_outlier_iqr_multiplier_source: str
     sources: Mapping[str, str]
 
 
 def load_fit_parameters(thresholds_path: Path) -> FitParameters:
     """Read the fitting parameters, preferring `eval/thresholds.json` over the records.
 
-    `interval_coverage.stated_level` is in the registry and is read from it. The four fitting
+    `interval_coverage.stated_level` is in the registry and is read from it. Four fitting
     constants are not, so each is read from an optional `fit` object in the same file if one
     is present and otherwise from the record that states it. Nothing here silently invents a
     number: every value carries the path or record it came from in `sources`.
@@ -202,6 +240,11 @@ def load_fit_parameters(thresholds_path: Path) -> FitParameters:
         registry = json.load(handle)
 
     registry_fit = registry.get("fit", {})
+    if not isinstance(registry_fit, dict):
+        raise ValueError("fit must be a JSON object when present")
+    unknown_fit = set(registry_fit) - set(_FIT_FALLBACKS)
+    if unknown_fit:
+        raise ValueError(f"fit has unknown keys {sorted(unknown_fit)}")
     values: dict[str, float | int] = {}
     sources: dict[str, str] = {}
     for key, (fallback, record) in _FIT_FALLBACKS.items():
@@ -212,16 +255,65 @@ def load_fit_parameters(thresholds_path: Path) -> FitParameters:
             values[key] = fallback
             sources[key] = record
 
-    interval_level = float(registry["interval_coverage"]["stated_level"])
+    def plain_positive_integer(value, field: str) -> int:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ValueError(f"{field} must be a positive plain JSON integer")
+        return value
+
+    def finite_number(
+        value, field: str, *, minimum: float, maximum: float, strict: bool = False
+    ) -> float:
+        try:
+            is_finite = math.isfinite(value)
+            numeric = float(value)
+        except (OverflowError, TypeError, ValueError):
+            is_finite = False
+            numeric = math.nan
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not is_finite:
+            raise ValueError(f"{field} must be a finite plain JSON number")
+        in_range = minimum < numeric < maximum if strict else minimum <= numeric <= maximum
+        if not in_range:
+            brackets = "strictly between" if strict else "in"
+            raise ValueError(f"{field} must be {brackets} {minimum} and {maximum}")
+        return numeric
+
+    k_cap = plain_positive_integer(values["k_cap"], "fit.k_cap")
+    min_category_size = plain_positive_integer(values["min_category_size"], "fit.min_category_size")
+    cluster_cut = finite_number(values["cluster_cut"], "fit.cluster_cut", minimum=0, maximum=2)
+    dup_cut = finite_number(values["dup_cut"], "fit.dup_cut", minimum=0, maximum=2)
+    interval_level = finite_number(
+        registry["interval_coverage"]["stated_level"],
+        "interval_coverage.stated_level",
+        minimum=0,
+        maximum=1,
+        strict=True,
+    )
     sources["interval_level"] = str(thresholds_path)
+    far_outlier = registry.get("abstention", {}).get("far_outlier", {})
+    if not isinstance(far_outlier, dict):
+        raise ValueError("abstention.far_outlier must be a JSON object when present")
+    if "iqr_multiplier" in far_outlier:
+        far_outlier_iqr_multiplier = finite_number(
+            far_outlier["iqr_multiplier"],
+            "abstention.far_outlier.iqr_multiplier",
+            minimum=0,
+            maximum=float("inf"),
+        )
+        far_outlier_iqr_multiplier_source = str(thresholds_path)
+    else:
+        far_outlier_iqr_multiplier = DEFAULT_FAR_OUTLIER_IQR_MULTIPLIER
+        far_outlier_iqr_multiplier_source = DEFAULT_FAR_OUTLIER_IQR_MULTIPLIER_SOURCE
+    sources["far_outlier_iqr_multiplier"] = far_outlier_iqr_multiplier_source
 
     return FitParameters(
         metric=METRIC,
-        k_cap=int(values["k_cap"]),
-        cluster_cut=float(values["cluster_cut"]),
-        dup_cut=float(values["dup_cut"]),
-        min_category_size=int(values["min_category_size"]),
+        k_cap=k_cap,
+        cluster_cut=cluster_cut,
+        dup_cut=dup_cut,
+        min_category_size=min_category_size,
         interval_level=interval_level,
+        far_outlier_iqr_multiplier=far_outlier_iqr_multiplier,
+        far_outlier_iqr_multiplier_source=far_outlier_iqr_multiplier_source,
         sources=sources,
     )
 
@@ -280,27 +372,60 @@ def _assign_ids(paths: Sequence[Path]) -> list[str]:
     return [str(path) for path in paths]
 
 
-def _load_image(path: Path, item_id: str) -> LoadedImage:
+def _load_image(
+    path: Path,
+    item_id: str,
+    *,
+    khive_visual: bool = False,
+    source_data: bytes | None = None,
+    khive_visual_bytes_remaining: int | None = None,
+) -> LoadedImage:
     """Read one image, hashing the bytes on disk rather than the decoded pixels.
 
     The content hash enters the board hash, and ADR-0005 defines the board over the reference
     files' content, so the digest is of the file exactly as it sits on disk.
     """
-    data = path.read_bytes()
+    data = path.read_bytes() if source_data is None else source_data
     digest = hashlib.sha256(data).hexdigest()
 
     Image.init()
     with Image.open(io.BytesIO(data)) as handle:
         image_format = handle.format
-        converted = handle.convert("RGB")
+        width, height = handle.size
+        if khive_visual:
+            if max(width, height) > KHIVE_SOURCE_MAX_SIDE:
+                raise ValueError(
+                    f"{path} is {width}x{height}; Khive accepts at most "
+                    f"{KHIVE_SOURCE_MAX_SIDE} pixels on either side"
+                )
+            required_visual_bytes = width * height * 3
+            if (
+                khive_visual_bytes_remaining is not None
+                and required_visual_bytes > khive_visual_bytes_remaining
+            ):
+                raise ValueError(
+                    f"loading {path} would require {required_visual_bytes} retained RGB bytes, "
+                    f"but only {khive_visual_bytes_remaining} remain in the Khive visual-array "
+                    "budget"
+                )
+            rgba = np.asarray(handle.convert("RGBA"), dtype=np.uint8)
+            matte = np.asarray(KHIVE_VISUAL_MATTE_RGB, dtype=np.uint32)
+            array = np.empty((height, width, 3), dtype=np.uint8)
+            for row_start in range(0, height, 32):
+                row_end = min(row_start + 32, height)
+                foreground = rgba[row_start:row_end, ..., :3].astype(np.uint32)
+                alpha = rgba[row_start:row_end, ..., 3].astype(np.uint32)[..., None]
+                array[row_start:row_end] = (
+                    (foreground * alpha + matte * (255 - alpha) + 127) // 255
+                ).astype(np.uint8)
+        else:
+            array = np.asarray(handle.convert("RGB"), dtype=np.uint8)
     if image_format is None:
         raise ValueError(f"{path} has no identifiable image format")
     mime = Image.MIME.get(image_format)
     if mime is None:
         raise ValueError(f"{path} is a {image_format} image, which has no registered MIME type")
 
-    width, height = converted.size
-    array = np.asarray(converted, dtype=np.uint8)
     return LoadedImage(
         path=path,
         item_id=item_id,
@@ -312,12 +437,55 @@ def _load_image(path: Path, item_id: str) -> LoadedImage:
     )
 
 
-def _load_all(paths: Sequence[Path], stream) -> list[LoadedImage]:
+def _load_all(paths: Sequence[Path], stream, *, khive_visual: bool = False) -> list[LoadedImage]:
     resolved = _collect_image_paths(paths, stream)
     if not resolved:
         raise ValueError(f"no image files found under {', '.join(str(p) for p in paths)}")
     ids = _assign_ids(resolved)
-    return [_load_image(path, item_id) for path, item_id in zip(resolved, ids, strict=True)]
+    if khive_visual:
+        if len(resolved) > KHIVE_REQUEST_MAX_IMAGES:
+            raise ValueError(
+                f"Khive loading has {len(resolved)} images; at most "
+                f"{KHIVE_REQUEST_MAX_IMAGES} asset occurrences are allowed"
+            )
+        source_bytes = 0
+        retained_visual_bytes = 0
+        loaded: list[LoadedImage] = []
+        for index, (path, item_id) in enumerate(zip(resolved, ids, strict=True)):
+            visual_remaining = KHIVE_RETAINED_VISUAL_MAX_BYTES - retained_visual_bytes
+            if visual_remaining <= 0:
+                raise ValueError(
+                    f"Khive loading would exceed its retained RGB visual-array budget before "
+                    f"image at index {index}; no bytes remain"
+                )
+            source_remaining = KHIVE_REQUEST_MAX_BYTES - source_bytes
+            if source_remaining <= 0:
+                raise ValueError(
+                    f"Khive loading would exceed its decoded source-byte budget before image "
+                    f"at index {index}; no bytes remain"
+                )
+            with path.open("rb") as handle:
+                data = handle.read(source_remaining + 1)
+            if len(data) > source_remaining:
+                raise ValueError(
+                    f"Khive loading would exceed {KHIVE_REQUEST_MAX_BYTES} decoded source "
+                    f"bytes while reading image at index {index}"
+                )
+            image = _load_image(
+                path,
+                item_id,
+                khive_visual=True,
+                source_data=data,
+                khive_visual_bytes_remaining=visual_remaining,
+            )
+            source_bytes += len(data)
+            retained_visual_bytes += image.array.nbytes
+            loaded.append(image)
+        return loaded
+    return [
+        _load_image(path, item_id, khive_visual=khive_visual)
+        for path, item_id in zip(resolved, ids, strict=True)
+    ]
 
 
 def _thumbnail(image: LoadedImage, max_side: int = THUMBNAIL_MAX_SIDE) -> Thumbnail:
@@ -340,6 +508,18 @@ def _thumbnail(image: LoadedImage, max_side: int = THUMBNAIL_MAX_SIDE) -> Thumbn
     )
 
 
+def _candidate_image(image: LoadedImage) -> CandidateImage:
+    """Bind a candidate's original identity to its separately encoded report preview."""
+
+    return CandidateImage(
+        content_sha256=image.content_sha256,
+        mime=image.mime,
+        width=image.width,
+        height=image.height,
+        thumbnail=_thumbnail(image),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
@@ -355,6 +535,46 @@ def _engine_version() -> str:
         return _distribution_version(ENGINE_NAME)
     except PackageNotFoundError:
         return "0+unknown"
+
+
+def _engine_source_provenance() -> EngineSourceProvenance | None:
+    """Resolve source identity in a checkout; installed wheels honestly omit it.
+
+    ADR-0008 permits runtime source resolution as one complete arm. A Git command failure or a
+    directory that is not a checkout is absence, not guessed provenance. When it is a checkout,
+    tracked and untracked changes both make the recorded source dirty.
+    """
+
+    checkout = Path(__file__).resolve().parent.parent
+    try:
+        revision = subprocess.run(
+            ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if revision.returncode != 0:
+            return None
+        digest = revision.stdout.strip()
+        if len(digest) not in {40, 64} or any(
+            character not in "0123456789abcdef" for character in digest
+        ):
+            return None
+        status = subprocess.run(
+            ["git", "-C", str(checkout), "status", "--porcelain", "--untracked-files=normal"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if status.returncode != 0:
+            return None
+    except OSError:
+        return None
+    return EngineSourceProvenance(
+        source_repository=ENGINE_SOURCE_REPOSITORY,
+        source_revision=digest,
+        source_dirty=bool(status.stdout),
+    )
 
 
 def _finite_float(text: str) -> float:
@@ -384,11 +604,46 @@ def _quantiles(values: Sequence[float]) -> dict[str, float]:
 # ---------------------------------------------------------------------------
 
 
+def _make_encoder(args: argparse.Namespace) -> Encoder:
+    """Construct only the explicitly selected representation.
+
+    Keeping this selection in one function makes `build` and `rank` use the identical Khive
+    attribution and namespace rules.  Merely supplying Khive configuration does not opt in;
+    `classical` remains a zero-service default.
+    """
+    if args.encoder == "classical":
+        return ClassicalEncoder()
+    if args.encoder == "khive-lattice":
+        return KhiveLatticeEncoder(_make_khive_client(args))
+    raise ValueError(f"unknown encoder {args.encoder!r}")
+
+
+def _make_khive_client(args: argparse.Namespace) -> KhiveClient:
+    """Construct the one app-specific process client shared by inference and retrieval."""
+    return KhiveClient(
+        executable=args.khive_executable,
+        actor=args.khive_actor,
+        namespace=args.khive_namespace,
+        config=args.khive_config,
+    )
+
+
+def _embed_loaded(encoder: Encoder, images: Sequence[LoadedImage]) -> np.ndarray:
+    if isinstance(encoder, KhiveLatticeEncoder):
+        return encoder.embed_source_assets(
+            tuple(image.path for image in images),
+            expected_sha256=tuple(image.content_sha256 for image in images),
+            media_types=tuple(image.mime for image in images),
+            names=tuple(image.item_id for image in images),
+        )
+    return encoder.embed([image.array for image in images])
+
+
 def _cmd_build(args: argparse.Namespace, out, err) -> int:
     thresholds = load_abstention_thresholds(args.thresholds)
     fit = load_fit_parameters(thresholds.path)
 
-    references = _load_all([args.reference_dir], err)
+    references = _load_all([args.reference_dir], err, khive_visual=args.encoder == "khive-lattice")
     n = len(references)
     if n < 2:
         raise ValueError(
@@ -399,8 +654,18 @@ def _cmd_build(args: argparse.Namespace, out, err) -> int:
     if len(set(ids)) != n:
         raise ValueError("two references resolved to the same id; rename one of the files")
 
-    encoder = ClassicalEncoder()
-    embeddings = encoder.embed([image.array for image in references])
+    encoder = _make_encoder(args)
+    embeddings = _embed_loaded(encoder, references)
+    locations: tuple[ReferenceAssetLocation, ...] = ()
+    if isinstance(encoder, KhiveLatticeEncoder):
+        locations = tuple(
+            ReferenceAssetLocation(
+                asset_id=asset.asset_id,
+                content_ref=asset.content_ref,
+                byte_identity=asset.byte_identity,
+            )
+            for asset in encoder.last_assets
+        )
 
     groups = duplicate_groups(embeddings, fit.dup_cut)
     n_eff = kish_n_eff([len(group) for group in groups])
@@ -415,10 +680,16 @@ def _cmd_build(args: argparse.Namespace, out, err) -> int:
         model_revision=encoder.revision,
         metric=fit.metric,
         k=k,
+        k_cap=fit.k_cap,
         cluster_cut=fit.cluster_cut,
         dup_cut=fit.dup_cut,
+        min_category_size=fit.min_category_size,
+        interval_level=fit.interval_level,
+        far_outlier_iqr_multiplier=fit.far_outlier_iqr_multiplier,
+        far_outlier_iqr_multiplier_source=fit.far_outlier_iqr_multiplier_source,
         n_eff=n_eff,
         built_at=_rfc3339_now(),
+        reference_asset_locations=locations,
     )
     write_board(board, args.output)
 
@@ -444,6 +715,29 @@ def _print_fit(fit: FitParameters, out) -> None:
     )
     print(
         f"  interval level     {fit.interval_level}  ({fit.sources['interval_level']})",
+        file=out,
+    )
+    print(
+        "  far-outlier IQR    "
+        f"{fit.far_outlier_iqr_multiplier}  "
+        f"({fit.sources['far_outlier_iqr_multiplier']})",
+        file=out,
+    )
+
+
+def _print_board_fit(board: BrandBoard, out) -> None:
+    """Print the immutable policy rank actually consumed from ``brand.mb``."""
+    print("fit policy loaded from the verified board artifact:", file=out)
+    print(f"  metric             {board.metric}", file=out)
+    print(f"  effective k        {board.k}", file=out)
+    print(f"  configured k cap   {board.k_cap}", file=out)
+    print(f"  cluster cut        {board.cluster_cut}", file=out)
+    print(f"  duplicate cut      {board.dup_cut}", file=out)
+    print(f"  min category size  {board.min_category_size}", file=out)
+    print(f"  interval level     {board.interval_level}", file=out)
+    print(
+        f"  far-outlier IQR    {board.far_outlier_iqr_multiplier}  "
+        f"({board.far_outlier_iqr_multiplier_source})",
         file=out,
     )
 
@@ -509,11 +803,14 @@ def _exemplars(
     similarity = np.asarray(reference_embeddings, dtype=np.float64) @ np.asarray(
         candidate_embedding, dtype=np.float64
     )
+    # The wire is closed to [-1, 1]. Clamp before ordering so values that become the same
+    # transmitted similarity retain catalogue order, exactly as ADR-0008 requires for ties.
+    similarity = np.clip(similarity, -1.0, 1.0)
     order = np.argsort(-similarity, kind="stable")[:count]
     return tuple(
         Exemplar(
             reference_id=reference_ids[int(index)],
-            similarity=float(np.clip(similarity[int(index)], -1.0, 1.0)),
+            similarity=float(similarity[int(index)]),
         )
         for index in order
     )
@@ -550,12 +847,10 @@ def _score_candidate(
     image: LoadedImage,
     embedding: np.ndarray,
     board: BrandBoard,
-    fit: FitParameters,
     reference_embeddings: np.ndarray,
     references: Sequence[LoadedImage],
     board_groups: Sequence[Sequence[int]],
     requested_alpha: float,
-    thresholds: AbstentionThresholds,
     exemplar_count: int,
 ) -> _Candidate:
     """Partition, judge and (if the judgement allows) prepare one candidate for scoring."""
@@ -566,14 +861,14 @@ def _score_candidate(
         embedding,
         image.content_sha256,
         board.cluster_cut,
-        fit.min_category_size,
+        board.min_category_size,
     )
 
     # Rule 3's nonconformity values come from the board-wide augmented bag: the rule asks
     # whether the candidate resembles the references at all, which is a board question even
     # though the score itself is category-local.
     bag = np.vstack([reference_embeddings, np.asarray(embedding, dtype=np.float64).reshape(1, -1)])
-    board_alphas = nonconformity_scores(bag, min(fit.k_cap, n_references))
+    board_alphas = nonconformity_scores(bag, min(board.k, n_references))
     reference_alphas = board_alphas[:n_references]
     candidate_alpha = float(board_alphas[n_references])
 
@@ -583,7 +878,8 @@ def _score_candidate(
         candidate_alpha,
         reference_alphas,
         board_groups,
-        thresholds,
+        far_outlier_iqr_multiplier=board.far_outlier_iqr_multiplier,
+        far_outlier_iqr_multiplier_source=board.far_outlier_iqr_multiplier_source,
     )
 
     exemplars = _exemplars(
@@ -689,7 +985,7 @@ def _tie_note(mode: str, pair_count: int) -> str:
     )
 
 
-def _board_tightness(reference_embeddings: np.ndarray) -> tuple[Tightness, list[float]]:
+def _board_tightness(reference_embeddings: np.ndarray, k: int) -> tuple[Tightness, list[float]]:
     """The board's own spread, by leaving each reference out and scoring it against the rest.
 
     This is the quantity ADR-0002 calls the board's leave-one-out distribution and the reason
@@ -698,7 +994,7 @@ def _board_tightness(reference_embeddings: np.ndarray) -> tuple[Tightness, list[
     n = reference_embeddings.shape[0]
     loo = [
         conformal_p_value(
-            np.delete(reference_embeddings, index, axis=0), reference_embeddings[index]
+            np.delete(reference_embeddings, index, axis=0), reference_embeddings[index], k
         )
         for index in range(n)
     ]
@@ -712,7 +1008,10 @@ def _board_tightness(reference_embeddings: np.ndarray) -> tuple[Tightness, list[
 
 
 def _board_leverage(
-    reference_embeddings: np.ndarray, reference_ids: Sequence[str], baseline_mean: float
+    reference_embeddings: np.ndarray,
+    reference_ids: Sequence[str],
+    baseline_mean: float,
+    k: int,
 ) -> tuple[Leverage, ...]:
     """Per-reference leverage: how much the board tightens when that reference is removed.
 
@@ -729,7 +1028,7 @@ def _board_leverage(
     for removed in range(n):
         reduced = np.delete(reference_embeddings, removed, axis=0)
         loo = [
-            conformal_p_value(np.delete(reduced, index, axis=0), reduced[index])
+            conformal_p_value(np.delete(reduced, index, axis=0), reduced[index], k)
             for index in range(reduced.shape[0])
         ]
         deltas.append((reference_ids[removed], float(np.mean(loo)) - baseline_mean))
@@ -797,23 +1096,49 @@ def _board_categories(
 
 
 def _cmd_rank(args: argparse.Namespace, out, err) -> int:
-    thresholds = load_abstention_thresholds(args.thresholds)
-    fit = load_fit_parameters(thresholds.path)
+    if args.exemplars != 3:
+        raise ValueError(
+            "report 1.1 requires --exemplars 3 so every asset carries exactly "
+            "min(3, references.length) closest references"
+        )
     board = read_board(args.board)
+    if args.thresholds is not None:
+        asserted_thresholds = load_abstention_thresholds(args.thresholds)
+        asserted_fit = load_fit_parameters(asserted_thresholds.path)
+        asserted_policy = (
+            asserted_fit.metric,
+            asserted_fit.k_cap,
+            asserted_fit.cluster_cut,
+            asserted_fit.dup_cut,
+            asserted_fit.min_category_size,
+            asserted_fit.interval_level,
+            asserted_fit.far_outlier_iqr_multiplier,
+        )
+        stored_policy = (
+            board.metric,
+            board.k_cap,
+            board.cluster_cut,
+            board.dup_cut,
+            board.min_category_size,
+            board.interval_level,
+            board.far_outlier_iqr_multiplier,
+        )
+        if asserted_policy != stored_policy:
+            raise ValueError(
+                f"{args.thresholds} describes a different fit policy than {args.board}; "
+                "ranking always uses the immutable policy stored in the board"
+            )
 
-    references = _load_all([args.references], err)
+    references = _load_all([args.references], err, khive_visual=args.encoder == "khive-lattice")
     _verify_references(board, references)
 
-    encoder = ClassicalEncoder()
+    encoder = _make_encoder(args)
     if (encoder.name, encoder.revision) != (board.model_repo, board.model_revision):
         raise ValueError(
             f"this build of the engine encodes with {encoder.name}/{encoder.revision}, but the "
             f"board was fitted with {board.model_repo}/{board.model_revision}; scores from two "
             "representations are not comparable"
         )
-
-    candidates_loaded = _load_all(list(args.candidates), err)
-    candidate_embeddings = encoder.embed([image.array for image in candidates_loaded])
 
     reference_embeddings = np.asarray(board.reference_embeddings, dtype=np.float64)
     n_references = reference_embeddings.shape[0]
@@ -825,17 +1150,20 @@ def _cmd_rank(args: argparse.Namespace, out, err) -> int:
             f"{recomputed_n_eff!r}; the artifact is inconsistent with itself"
         )
 
+    candidates_loaded = _load_all(
+        list(args.candidates), err, khive_visual=args.encoder == "khive-lattice"
+    )
+    candidate_embeddings = _embed_loaded(encoder, candidates_loaded)
+
     candidates = [
         _score_candidate(
             image,
             candidate_embeddings[index],
             board,
-            fit,
             reference_embeddings,
             references,
             board_groups,
             args.alpha,
-            thresholds,
             args.exemplars,
         )
         for index, image in enumerate(candidates_loaded)
@@ -855,10 +1183,10 @@ def _cmd_rank(args: argparse.Namespace, out, err) -> int:
             )
         category_embeddings = reference_embeddings[members]
         scores[candidate.image.item_id] = conformal_p_value(
-            category_embeddings, candidate.embedding
+            category_embeddings, candidate.embedding, board.k
         )
         intervals[candidate.image.item_id] = loo_jackknife_plus_interval(
-            category_embeddings, candidate.embedding, board.k, fit.interval_level
+            category_embeddings, candidate.embedding, board.k, board.interval_level
         )
 
     ranks = _competition_ranks([(asset_id, score) for asset_id, score in scores.items()])
@@ -873,22 +1201,24 @@ def _cmd_rank(args: argparse.Namespace, out, err) -> int:
             by_id[first].embedding,
             by_id[second].embedding,
             board.k,
-            fit.interval_level,
+            board.interval_level,
         )
         if difference.low <= 0.0 <= difference.high:
             ties.append((first, second))
 
     categories, category_ids, partition_varies = _board_categories(candidates, board.reference_ids)
     assets = _build_assets(candidates, scores, intervals, ranks, category_ids)
-    tightness, loo = _board_tightness(reference_embeddings)
-    leverage = _board_leverage(reference_embeddings, board.reference_ids, tightness.loo_mean)
+    tightness, loo = _board_tightness(reference_embeddings, board.k)
+    leverage = _board_leverage(
+        reference_embeddings, board.reference_ids, tightness.loo_mean, board.k
+    )
 
     flags: list[str] = []
     if tightness.loo_sd == 0.0:
         flags.append("degenerate_board")
     if recomputed_n_eff < n_references:
         flags.append("near_duplicate_references")
-    if n_references <= fit.k_cap:
+    if n_references <= board.k_cap:
         flags.append("fewer_references_than_the_estimator_wants")
     if not leverage:
         flags.append("leverage_unavailable_on_a_two_reference_board")
@@ -897,9 +1227,9 @@ def _cmd_rank(args: argparse.Namespace, out, err) -> int:
 
     supported_alpha = max(candidate.supported_alpha for candidate in candidates)
 
-    report = Report(
-        schema_version=SCHEMA_VERSION,
-        board=Board(
+    report = ReportV1_1(
+        schema_version=SCHEMA_VERSION_V1_1,
+        board=BoardV1_1(
             id=board.board_id,
             name=board.name,
             n_references=n_references,
@@ -907,17 +1237,23 @@ def _cmd_rank(args: argparse.Namespace, out, err) -> int:
             requested_alpha=args.alpha,
             supported_alpha=supported_alpha,
             built_at=board.built_at,
-            representation=Representation(
+            representation=RepresentationV1_1(
                 style=StyleModelInfo(
                     model=board.model_repo, revision=board.model_revision, dim=board.model_dim
                 ),
                 axes=AXIS_ORDER,
+                axis_definitions=axis_definitions_for(AXIS_ORDER),
             ),
-            fit=BoardFit(
-                metric=METRIC,
+            fit=BoardFitV1_1(
+                metric=board.metric,
                 k=board.k,
+                k_cap=board.k_cap,
                 cluster_cut=board.cluster_cut,
                 dup_cut=board.dup_cut,
+                min_category_size=board.min_category_size,
+                interval_level=board.interval_level,
+                far_outlier_iqr_multiplier=board.far_outlier_iqr_multiplier,
+                far_outlier_iqr_multiplier_source=board.far_outlier_iqr_multiplier_source,
                 interval=IntervalMethod(
                     method="loo-jackknife-plus", replicates=None, seed=args.seed
                 ),
@@ -938,20 +1274,48 @@ def _cmd_rank(args: argparse.Namespace, out, err) -> int:
         ),
         assets=assets,
         comparisons=Comparisons(ties=tuple(ties), note=_tie_note(args.tie_pairs, len(pairs))),
-        provenance=Provenance(
-            engine=EngineProvenance(name=ENGINE_NAME, version=_engine_version()),
+        provenance=ProvenanceV1_1(
+            engine=EngineProvenanceV1_1(
+                name=ENGINE_NAME,
+                version=_engine_version(),
+                source=_engine_source_provenance(),
+            ),
             model=ModelProvenance(
-                repo=board.model_repo, revision=board.model_revision, sha256=NO_CHECKPOINT
+                repo=board.model_repo,
+                revision=board.model_revision,
+                sha256=(
+                    encoder.descriptor.checkpoint_sha256
+                    if isinstance(encoder, KhiveLatticeEncoder)
+                    else NO_CHECKPOINT
+                ),
             ),
             command=args.command_line,
+            argv=args.argv,
             seed=args.seed,
             created_at=_rfc3339_now(),
+            schema=SchemaProvenance(
+                id="https://github.com/ohdearquant/moodboard/schema/report_v1_1.schema.json",
+                sha256=report_schema_sha256(SCHEMA_PATH_V1_1),
+            ),
         ),
     )
 
-    write_report(report, args.output)
+    write_report(
+        report,
+        args.output,
+        candidate_inputs=tuple(
+            CandidateImageInput(
+                asset_id=image.item_id,
+                content_sha256=image.content_sha256,
+                mime=image.mime,
+                width=image.width,
+                height=image.height,
+            )
+            for image in candidates_loaded
+        ),
+    )
 
-    _print_fit(fit, out)
+    _print_board_fit(board, out)
     abstained = len(candidates) - len(scores)
     print(f"board {board.board_id}", file=out)
     print(f"  references     {n_references}, n_eff {board.n_eff:.4f}", file=out)
@@ -970,7 +1334,7 @@ def _build_assets(
     intervals: Mapping[str, Interval],
     ranks: Mapping[str, int],
     category_ids: Mapping[str, str],
-) -> tuple[Asset, ...]:
+) -> tuple[AssetV1_1, ...]:
     """Scored assets in rank order, then abstained assets by ascending id.
 
     Abstained assets are not sorted to the end of the ranking, they are outside it: ADR-0002
@@ -980,17 +1344,18 @@ def _build_assets(
     `category_ids` comes from `_board_categories`, so an asset's `category_id` names an entry
     of `board.categories` whose members really are the references it was compared against.
     """
-    scored: list[Asset] = []
-    abstained: list[Asset] = []
+    scored: list[ScoredAssetV1_1] = []
+    abstained: list[AbstainedAssetV1_1] = []
     for candidate in candidates:
         asset_id = candidate.image.item_id
         source = str(candidate.image.path)
         if candidate.verdict is None:
             scored.append(
-                ScoredAsset(
+                ScoredAssetV1_1(
                     state="scored",
                     asset_id=asset_id,
                     source=source,
+                    image=_candidate_image(candidate.image),
                     category_id=category_ids[asset_id],
                     n_local=candidate.n_local,
                     score=scores[asset_id],
@@ -1003,10 +1368,11 @@ def _build_assets(
             )
         else:
             abstained.append(
-                AbstainedAsset(
+                AbstainedAssetV1_1(
                     state="abstained",
                     asset_id=asset_id,
                     source=source,
+                    image=_candidate_image(candidate.image),
                     reason=candidate.verdict.reason,
                     explanation=candidate.verdict.explanation,
                     measurement=candidate.verdict.measurement,
@@ -1022,29 +1388,43 @@ def _build_assets(
 
 
 # ---------------------------------------------------------------------------
-# report
+# retrieve and report
 # ---------------------------------------------------------------------------
 
 
-def _cmd_report(args: argparse.Namespace, out, err) -> int:
-    """Re-read a report, prove it still satisfies its own contract, and summarise it.
-
-    `--html` is the one unimplemented surface in this package. It raises rather than writing a
-    partial file, because a viewer that renders some of the report is worse than no viewer: a
-    reader cannot tell which part they are looking at.
-    """
-    if args.html is not None:
-        raise NotImplementedError(
-            "moodboard report --html is not implemented in this engine. The self-contained "
-            "HTML file is produced by the separate viewer artifact described in ADR-0001, "
-            "which inlines a report JSON into a built viewer bundle. Produce the JSON with "
-            "moodboard rank and hand that file to the viewer."
+def _cmd_retrieve(args: argparse.Namespace, out, err) -> int:
+    """Print Khive's ranked visual locators without interpreting them as calibrated fit."""
+    result = _make_khive_client(args).search(args.asset_id, args.top_k)
+    print(f"query          {result.query_asset_id}", file=out)
+    print(f"descriptor     {result.descriptor.model_key}", file=out)
+    print("experimental   true", file=out)
+    print(f"hits           {len(result.hits)}", file=out)
+    print("rank  cosine    asset_id                              content_ref", file=out)
+    for hit in result.hits:
+        # JSON string syntax is a compact deterministic terminal escape. A stored newline,
+        # tab, or control byte remains data inside one row instead of forging CLI output.
+        name = json.dumps(hit.name, ensure_ascii=True)
+        print(
+            f"{hit.rank:>4}  {hit.score:>+9.6f}  {hit.asset_id}  {hit.content_ref}  {name}",
+            file=out,
         )
+    return 0
 
-    with Path(args.report).open(encoding="utf-8") as handle:
-        document = json.load(handle)
-    report = from_json_dict(document)
+
+def _cmd_report(args: argparse.Namespace, out, err) -> int:
+    """Re-read a report, prove its contract, optionally inline it, and summarise it."""
+
+    document = json.loads(read_report_bytes(Path(args.report)))
+    try:
+        report = from_json_dict(document)
+    except JsonSchemaValidationError as error:
+        location = "/" + "/".join(str(part) for part in error.absolute_path)
+        raise ValueError(
+            f"{args.report} fails its report schema at {location}: {error.message}"
+        ) from error
     validate_report(report)
+    if args.html is not None:
+        inline_report(Path(args.report), Path(args.html))
 
     scored = [asset for asset in report.assets if asset.state == "scored"]
     abstained = [asset for asset in report.assets if asset.state == "abstained"]
@@ -1056,6 +1436,8 @@ def _cmd_report(args: argparse.Namespace, out, err) -> int:
     print(f"  scored         {len(scored)}", file=out)
     print(f"  abstained      {len(abstained)}", file=out)
     print(f"  ties           {len(report.comparisons.ties)}", file=out)
+    if args.html is not None:
+        print(f"  HTML written   {args.html}", file=out)
     for asset in scored:
         print(
             f"  {asset.rank:>4}  {asset.score:.4f}  "
@@ -1097,6 +1479,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="path to eval/thresholds.json; found by walking up from the package by default",
     )
+    _add_encoder_arguments(build)
     build.set_defaults(handler=_cmd_build)
 
     rank = subparsers.add_parser(
@@ -1130,7 +1513,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--exemplars",
         type=int,
         default=3,
-        help="how many nearest references each asset carries, and the set its axes measure against",
+        help=(
+            "report 1.1 fixes this at 3; each asset carries min(3, reference_count) nearest "
+            "references and its classical axes measure against that set"
+        ),
     )
     rank.add_argument(
         "--tie-pairs",
@@ -1144,45 +1530,99 @@ def build_parser() -> argparse.ArgumentParser:
         "--thresholds",
         type=Path,
         default=None,
-        help="path to eval/thresholds.json; found by walking up from the package by default",
+        help=(
+            "optional fit-policy assertion; rank uses the immutable policy in brand.mb and "
+            "refuses when this registry disagrees"
+        ),
     )
+    _add_encoder_arguments(rank)
     rank.set_defaults(handler=_cmd_rank)
 
+    retrieve = subparsers.add_parser(
+        "retrieve",
+        help="return exact Khive cosine neighbours and their immutable asset locators",
+    )
+    retrieve.add_argument("asset_id", help="bare canonical UUID of an ingested Khive visual_asset")
+    retrieve.add_argument(
+        "--top-k",
+        type=int,
+        default=20,
+        help="number of non-self exact-cosine neighbours to return (1 through 100)",
+    )
+    _add_khive_arguments(retrieve)
+    retrieve.set_defaults(handler=_cmd_retrieve)
+
     report = subparsers.add_parser(
-        "report", help="validate and summarise a report; --html is not implemented"
+        "report", help="validate and summarise a report, optionally writing offline HTML"
     )
     report.add_argument("report", type=Path, help="a JSON report written by moodboard rank")
     report.add_argument(
         "--html",
         type=Path,
         default=None,
-        help="not implemented in this engine; the viewer is a separate artifact",
+        help="atomically write the validated report into the verified offline viewer package",
     )
     report.set_defaults(handler=_cmd_report)
 
     return parser
 
 
+def _add_encoder_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--encoder",
+        choices=("classical", "khive-lattice"),
+        default="classical",
+        help=(
+            "representation backend; classical is offline and remains the default, while "
+            "khive-lattice publishes assets and obtains Lattice embeddings through Khive"
+        ),
+    )
+    _add_khive_arguments(parser)
+
+
+def _add_khive_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--khive-executable",
+        default=DEFAULT_KHIVE_EXECUTABLE,
+        help="kkernel executable used for the explicit Khive operation",
+    )
+    parser.add_argument(
+        "--khive-actor",
+        default=DEFAULT_KHIVE_ACTOR,
+        help="explicit Khive actor, also pinned with --expect-actor",
+    )
+    parser.add_argument(
+        "--khive-namespace",
+        default=DEFAULT_KHIVE_NAMESPACE,
+        help="explicit Khive namespace for visual assets and retrieval",
+    )
+    parser.add_argument(
+        "--khive-config",
+        type=Path,
+        default=None,
+        help=(
+            "optional khive.toml passed explicitly to kkernel; when absent, Khive's normal "
+            "KHIVE_CONFIG/discovery fallback remains active"
+        ),
+    )
+
+
 def main(argv: Sequence[str] | None = None, out=None, err=None) -> int:
     """The console entry point.
 
-    Returns 0 on success and 1 on a failure the engine can describe. `NotImplementedError`
-    from `report --html` is deliberately not caught: it is the documented behaviour of that
-    flag rather than a runtime failure, and swallowing it into an exit code would make the one
-    unimplemented surface in this package look like a broken one.
+    Returns 0 on success and 1 on a failure the engine can describe.
     """
     parser = build_parser()
     args = parser.parse_args(argv)
     # `provenance.command` records the moodboard invocation, which is not the same string as
     # the host process's argv whenever this is called in-process with an explicit argv. A
     # report that named the calling process's arguments would be describing a different run.
-    args.command_line = shlex.join(sys.argv) if argv is None else shlex.join([ENGINE_NAME, *argv])
+    args.argv = tuple(sys.argv) if argv is None else (ENGINE_NAME, *argv)
+    args.command_line = shlex.join(args.argv)
     out = sys.stdout if out is None else out
     err = sys.stderr if err is None else err
     try:
         return args.handler(args, out, err)
-    except NotImplementedError:
-        raise
     except (ValueError, OSError, KeyError) as error:
         print(f"{ENGINE_NAME}: {error}", file=err)
         return 1

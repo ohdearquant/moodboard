@@ -6,10 +6,14 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
+    # Bind each ordered Khive ingest result to the exact bytes submitted for that row. Khive's
+    # BlobStore v1 ContentRef is BLAKE3-256; checking it is what detects a successful batch whose
+    # same-verb result rows were reordered.
+    "blake3>=1.0",
     "numpy>=1.26",
     "scipy>=1.11",
     "scikit-image>=0.22",
-    "Pillow>=10.0",
+    "Pillow>=12.3.0",
     # Not in the module's own axis or encoder math: report.py needs a validator for the
     # committed JSON Schema file it validates its own output against, and hand-rolling
     # a JSON Schema validator duplicates a well-tested library rather than depending on one.
@@ -32,6 +36,14 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["moodboard"]
+
+# `npm --prefix viewer run build` stages a manifest-verified, byte-reproducible viewer here.
+# The directory is generated and gitignored; artifacts override VCS exclusion when it is present
+# without making an unstaged viewer a prerequisite for ordinary source-only engine builds.
+artifacts = ["moodboard/viewer_dist/**"]
+
+[tool.hatch.build.targets.sdist]
+artifacts = ["moodboard/viewer_dist/**"]
 
 # The engine reads eval/thresholds.json at runtime and refuses to run without it, deliberately,
 # because an engine that cannot find its registry and proceeds on numbers compiled into its own

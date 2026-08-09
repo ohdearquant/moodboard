@@ -2,8 +2,10 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-08
-- **Amends:** [ADR-0002](0002-report-contract.md). This record does not supersede it. ADR-0002 is
-  `Proposed`, and this repository has twice chosen amendment over supersession for exactly that
+- **Amends:** [ADR-0002](0002-report-contract.md), and incorporates the complete immutable fit
+  identity later decided by [ADR-0005](0005-reference-set.md) into the viewer-facing contract.
+  This record does not supersede either record. ADR-0002 is `Proposed`, and this repository has
+  twice chosen amendment over supersession for exactly that
   reason and said so in as many words: `docs/adr/0004-abstention.md:243` ("ADR-0002's schema is not
   yet accepted, so this is an amendment to a proposal rather than a break of a contract") and
   `docs/adr/0005-reference-set.md:199-200`. The immutability rule that makes supersession the right
@@ -40,8 +42,9 @@ remote URI in `source` is not a portable image inside a self-contained HTML file
 array also has no count, uniqueness, ordering, or reference-resolution constraint
 (`moodboard/schema/report_v1_0.schema.json:88-95,330-332,370-372`). A conforming v1.0 report can
 therefore leave the viewer unable to show the candidate beside the three references that ADR-0001
-names as its central interaction. The current CLI defaults to three exemplars but accepts another
-count, which is behavior rather than a report guarantee (`moodboard/cli.py:1130-1134`).
+names as its central interaction. Before report v1.1, the CLI defaulted to three exemplars but
+accepted another count, which was behavior rather than a report guarantee. The v1.1 writer now
+refuses any other setting and enforces the cardinality in the typed contract.
 
 The axis values have a second gap. Version 1.0 places a conformal p-value and classical distances
 in one scalar-or-null mapping. Only the overall style score has an interval, and the mapping does
@@ -58,6 +61,15 @@ for each axis (`moodboard/schema/report_v1_0.schema.json:#/$defs/provenance`;
 `moodboard/report.py:293-313,549-562`). Reference content hashes identify the board inputs, but
 candidate content hashes are absent.
 
+Version 1.0 also predates ADR-0005's complete persisted fit identity. Its `board.fit` projects
+`metric`, effective `k`, the two distance cuts, and interval method metadata, but omits configured
+`k_cap`, `min_category_size`, `interval_level`, and `far_outlier_iqr_multiplier`. Those values can
+move scores, intervals, category admission, or abstention and are now immutable fields of verified
+`brand.mb` format 3 and its board hash. The report must disclose that complete numeric policy rather
+than reload mutable registry defaults or leave a viewer unable to explain it. The multiplier's
+source string is provenance: it is recorded beside the numeric value but, as ADR-0005 specifies,
+does not enter the score-bearing board hash.
+
 This record amends ADR-0002 rather than superseding it, and amends rather than merely extends it,
 because the implemented compatibility behavior contradicts ADR-0002's policy. Amendment is the
 instrument this repository uses against a `Proposed` record, following
@@ -67,11 +79,11 @@ one specific rule of ADR-0002 and leaves the rest of that record live and author
 ADR-0002 says a consumer must ignore fields added by an unknown minor version (`docs/adr/0002-report-contract.md:209-213`). The implemented schema fixes the
 version to `1.0`, closes the root and most fixed-shape nested objects, and deliberately rejects both
 `1.1` and an unknown root field (`moodboard/schema/report_v1_0.schema.json:7-20,74-125,300-405`;
-`tests/test_report.py:468-489`). The parser says it expects an already schema-valid mapping, while
-the current report command constructs the typed object and validates its serialized form afterward
-(`moodboard/report.py:614-619,759-771`; `moodboard/cli.py:1044-1047`). The pinned version still
-causes a v1.1 document to fail before output is rendered. Both compatibility rules cannot remain
-authoritative, and v1.1 needs version dispatch before either parse sequence.
+`tests/test_report.py:468-489`). Before this amendment, the parser expected an already schema-valid
+mapping and the report command constructed the typed object before validating its serialized form.
+That implementation still refused v1.1 before rendering, but it did not provide the required
+version-first dispatch. The v1.1 reader now selects the exact named schema from the root version
+token before interpreting any other report content.
 
 ADR-0002 was written before the engine existed (`docs/adr/0002-report-contract.md:267-277`). The
 original author could know that reference thumbnails and versioning were necessary, but could not
@@ -84,8 +96,8 @@ policy below. The scope remains the one file boundary already chosen by ADR-0001
 
 Report version 1.1 is the complete viewer-facing contract. It retains every v1.0 field with the
 same path, type, and meaning, then adds candidate display media, explicit axis details, stronger
-exemplar assertions, and structured provenance. The engine remains the only producer of
-statistical meaning.
+exemplar assertions, the complete immutable fit policy, and structured provenance. The engine
+remains the only producer of statistical meaning.
 
 This record carries forward the unaffected decisions from ADR-0002. The report remains a closed,
 versioned JSON document. `state` remains the discriminator between scored and abstained assets.
@@ -97,10 +109,10 @@ against the v1.1 JSON Schema and the cross-field assertions in this record befor
 
 ADR-0002's interval-coverage and sharpness acceptance criterion remains in force unchanged. It
 still requires the pre-registered coverage, width, and all-tied measurements at
-`docs/adr/0002-report-contract.md:215-252` and `eval/thresholds.json:16-47`. The
-`Measurable claim: none` header in this record applies to the new media, metadata, and compatibility
-decisions. It does not remove the predecessor's empirical gate for the interval this record carries
-forward.
+`docs/adr/0002-report-contract.md:215-252` and `eval/thresholds.json:16-47`. This record's inherited
+measurable claim applies to that interval. The new media, fit-disclosure, metadata, and compatibility
+decisions are deterministic contract assertions and add no separate dataset claim. They do not
+remove the predecessor's empirical gate for the interval this record carries forward.
 
 ### Current v1.0 and viewer-required v1.1 fields
 
@@ -110,6 +122,7 @@ forward.
 | The viewer shows the candidate offline. | `#/assets[]/source` | The string is provenance only. It supplies no portable bytes, hash, or dimensions. | `#/assets[]/image` is required in both asset states and has the exact image shape defined below. `source` remains unchanged and is never fetched by the viewer. | The viewer shows a candidate placeholder reading "Candidate image was not included in report version 1.0." |
 | The viewer shows three closest references together. | `#/assets[]/exemplars[]/{reference_id,similarity}` | The values exist, but their count, uniqueness, order, and reference resolution are not enforced. The engine currently selects them board-wide (`moodboard/cli.py:497-519,589-595`). | The existing array contains exactly `min(3, references.length)` distinct entries, ordered by descending similarity and then by earlier position in `references`, preserving the implemented stable tie break. Every id resolves into `#/references`, whose `reference_id` values are unique. | The viewer uses at most the first three resolvable entries in transmitted order. Missing, dangling, or extra legacy entries produce placeholders or a v1.0 compatibility notice rather than invented references. A DUPLICATE id is fatal in every version and refuses the report; it is never silently deduplicated into a placeholder. |
 | The viewer knows the current axis vocabulary. | `#/board/representation/axes` and `#/assets[]/axes` | The vocabulary exists, and Python asserts the exact key set (`moodboard/report.py:723-751`). | Both fields remain unchanged. `#/board/representation/axis_definitions` has exactly `style` followed by the ids in `axes`, in the same order. | The existing key set remains authoritative. |
+| The viewer discloses every immutable scoring-policy value. | `#/board/fit/{metric,k,cluster_cut,dup_cut,interval}` | This is only the report-v1.0 compatibility projection; it omits four numeric policy values later bound by ADR-0005. | `#/board/fit` is the exact closed object below, adding `k_cap`, `min_category_size`, `interval_level`, `far_outlier_iqr_multiplier`, and `far_outlier_iqr_multiplier_source`. | The viewer labels the v1.0 object as a legacy fit projection and does not invent the omitted values. |
 | The viewer distinguishes a p-value from a distance. | `#/assets[]/axes/*` | Values are scalar or null without a machine-readable kind or direction. | Every axis definition requires `value_kind` and `direction`. Style is `conformal_p_value` with `higher_is_better_fit`; each current classical axis is `normalized_distance` with `lower_is_closer`. | The viewer may show the documented v1.0 values, but labels the section "Legacy axis values" and states that axis metadata was not recorded. |
 | The viewer renders availability without turning missing data into zero. | `#/assets[]/axes/style` is null on abstention. | Style has an explicit null convention. The implemented engine still computes every classical axis for an abstained asset (`moodboard/cli.py:1004-1016`). | Each definition requires `availability`. Style is `scored_only`; current classical axes are `all_assets`. A v1.1 classical value is numeric in both asset states. | The overall abstention renders from the existing union. Missing metadata remains visibly unavailable. |
 | The viewer presents uncertainty without implying that every scalar has an interval. | `#/assets[]/interval` exists only for a scored style result. | Style uncertainty is available at the asset level. Classical-axis uncertainty is not estimated. | Each definition requires `uncertainty`. Style is `asset_interval`, which points to the existing asset interval. Current classical axes are `none`; the viewer states that no interval is reported. | The overall style interval renders normally. Classical values are labelled "Interval not reported in version 1.0." |
@@ -126,6 +139,41 @@ from private user files rather than a named evaluation dataset. Reference and ca
 hashes identify the actual image inputs, while a published evaluation result must identify its
 dataset in the separate measurement artifact. Adding a misleading optional dataset label here would
 not make a private input reproducible.
+
+### The v1.1 complete fit-policy shape
+
+ADR-0005's later board-integrity amendment makes every score-moving numeric fit value immutable.
+Version 1.1 therefore replaces the v1.0 fit projection with this required, closed object:
+
+```jsonc
+"fit": {
+  "metric": "cosine",
+  "k": 5,
+  "k_cap": 5,
+  "cluster_cut": 0.35,
+  "dup_cut": 0.05,
+  "min_category_size": 5,
+  "interval_level": 0.9,
+  "far_outlier_iqr_multiplier": 1.5,
+  "far_outlier_iqr_multiplier_source":
+    "eval/thresholds.json#/abstention/far_outlier_iqr_multiplier",
+  "interval": {
+    "method": "loo-jackknife-plus",
+    "replicates": null,
+    "seed": 0
+  }
+}
+```
+
+`k` is the effective value and equals `min(k_cap, references.length - 1)`. `k_cap` and
+`min_category_size` are positive integers. Both cuts are finite cosine distances in `[0, 2]`.
+`interval_level` is finite and strictly between zero and one. The far-outlier multiplier is finite
+and non-negative. Its source is a non-empty provenance string naming where the frozen numeric value
+was selected; changing only that string does not change `board.id`, while changing the numeric value
+does. Every scored asset's `interval.level` equals `board.fit.interval_level`. Rank copies these
+values from a verified `brand.mb`; it does not consult the current threshold registry to fill or
+override them. Requested alpha, exemplar count, and tie-pair mode remain invocation/report-request
+identity rather than board-fit fields.
 
 ### The v1.1 image shape
 
@@ -166,9 +214,9 @@ are functional contract assertions and impose no empirical quality thresholds.
 The exemplar assertion requires three entries whenever the board has at least three references.
 `min(3, references.length)` covers every board carrying fewer than three references, in either asset
 state, and inventing a third reference would be worse than showing every reference the board actually
-contains. It is not confined to abstention. The engine's floor is one reference
-(`moodboard/board.py:141`) and any requested alpha at or above 1/(n_eff+1) is honoured, so a two
-reference board returns a **scored** asset. Measured 2026-08-08 through the public CLI with the
+contains. It is not confined to abstention. A verified board's floor is two references, and any
+requested alpha at or above 1/(n_eff+1) is honoured, so a two-reference board returns a **scored**
+asset. Measured 2026-08-08 through the public CLI with the
 classical encoder, on a board of two structurally distinct references and a candidate that is a copy
 of the first: `references 2, n_eff 2.0000 | requested a 0.5 | supported a 0.3333 | scored 1 |
 abstained 0`, and the written report carries `state: scored`, two exemplars, `score: 1.0`, `rank: 1`.
@@ -290,19 +338,18 @@ hexadecimal characters identifying the engine source used to build the executabl
 `source_dirty` value is valid but requires the viewer to state that the report cannot be reproduced
 from the named revision alone.
 
-**The producer is named here, and the field is conditional because today nothing produces it.**
-`EngineProvenance` currently carries `name` and `version` only (`moodboard/report.py:299-303`), and
-no build step stamps a commit: the packaging is plain hatchling with one force-include and no
-version or metadata hook (`pyproject.toml:28-51`). An installed wheel has no `.git` to interrogate
-at report time. So this record cannot make the object unconditionally required without requiring a
-field that no code path can emit. Two arms, exactly one of which a given build takes:
+**The producer is named here, and the field is conditional because not every installation can
+resolve it.** The engine implements runtime resolution from a source checkout. An installed wheel
+has no `.git` to interrogate at report time, so the object cannot be unconditionally required
+without inventing provenance. Two valid producer arms remain, exactly one of which a given build
+takes:
 
 - **Build-time stamp.** The packaging writes the revision and dirty state into the distribution at
   build time. This requires a `pyproject.toml` change and a record that decides it; that record owns
   the change, not this one. Under this arm the object is present in every report the build produces.
-- **Runtime resolution.** The engine resolves the revision from a source checkout when it is running
-  from one. Under this arm the object is present for a source install and ABSENT for a wheel, which
-  is why absence must be valid rather than a defect.
+- **Runtime resolution.** The implemented engine resolves `HEAD` and tracked or untracked dirty
+  state from a source checkout. Under this arm the object is present for a source install and absent
+  for a wheel or a failed Git query, which is why absence is valid rather than a defect.
 
 A consumer therefore treats an absent engine-source object as "not recorded" and says so, using the
 same unavailable notice it uses for a v1.0 report. It never treats absence as a validation failure. These fields record source identity and modified state; they do not
@@ -328,17 +375,16 @@ The required matrix is exact:
 | Consumer | Report | Required behavior |
 |---|---|---|
 | v1.0 | v1.0 | It validates with the v1.0 schema and consumes the report normally. |
-| v1.0 | v1.1 | It refuses the document and renders nothing. The current implementation may construct its v1.0 typed object before the pinned schema rejects `1.1`; the externally observable result is still refusal. It does not strip fields, rewrite the version, or render a partial score. |
+| v1.0 | v1.1 | It refuses the document and renders nothing. It does not strip fields, rewrite the version, or render a partial score. |
 | v1.1 | v1.0 | It validates with the v1.0 schema and enters declared legacy mode. It does not relabel or serialize the report as v1.1. |
 | v1.1 | v1.1 | It validates with the v1.1 schema and every cross-field assertion, then consumes the full contract. |
 | v1.1 | v1.2 or any other unknown minor | It returns `unsupported_schema_version` before interpreting report content. |
 | Any version-aware v1.1 consumer | v2.x, a malformed version, or a missing version | It returns `unsupported_schema_version` before interpreting report content. An existing v1.0 consumer may surface its schema or parse error, but it still renders nothing. |
 
-Calling `from_json_dict` directly on an unvalidated object is outside its stated precondition; the
-function explicitly expects an already schema-valid mapping (`moodboard/report.py:614-619`). The
-current command's reversed call order is an implementation gap and supplies no evidence of tolerant
-consumption. A v1.1 consumer reads and validates the version token before choosing either exact
-schema and typed decoder.
+`from_json_dict` reads only the root object and complete version token before selecting the exact
+v1.0 or v1.1 schema. It validates against that schema before constructing the corresponding typed
+object. It never projects one minor into the other. Unknown, malformed, and missing versions raise
+`unsupported_schema_version` before malformed score or asset content can influence the error.
 
 Legacy mode has one defined presentation. The v1.1 viewer shows the v1.0 overall score, interval,
 rank, abstention, ties, flags, safely decodable reference thumbnails, and recorded provenance without
@@ -383,6 +429,7 @@ unmodified generated baseline passes, then applies the named single-purpose muta
 |---|---|
 | A v1.1 reader dispatches before content interpretation, and no reader renders an unsupported version. | Give a v1.1 reader an unknown-version report whose first asset also contains a malformed score. The result must be `unsupported_schema_version`; a score error or a partial render fails. Give the current v1.0 reader a valid v1.1 report and require refusal with no render. Add an unknown root key to an otherwise valid v1.1 report and require schema rejection. |
 | Both asset states require the candidate image object. | Remove `image` once from a scored asset and once from an abstained asset. Each mutated v1.1 document must fail. |
+| The complete immutable fit policy is disclosed without a mutable-registry escape hatch. | Remove each fit field in turn, add an unknown fit field, change `k` so it differs from `min(k_cap, references.length - 1)`, or change a scored asset's interval level without changing `board.fit.interval_level`. Each case must fail. Generate a report from a verified board after changing the current registry and require the emitted fit and score-bearing content to remain unchanged. |
 | Candidate identity describes the original input rather than the preview. | Against the verifier's known candidate bytes, substitute the thumbnail hash for `image.content_sha256`, change the original MIME, or change either original dimension. Schema shape may still pass, but the writer/input assertion must fail in every case. |
 | Every thumbnail is inert, decodable image data whose declared MIME and dimensions are true. | Corrupt the base64, declare WebP bytes as PNG, change one declared dimension, and supply SVG bytes. Each case must fail validation before rendering. |
 | The exemplar set is the deterministic board-wide set the viewer promises. | Supply two exemplars on a board with at least three references, a duplicate exemplar id, duplicate ids in `references`, a dangling id, a fourth exemplar, a reversed similarity order, and an equal-similarity pair in reverse catalogue order. Each v1.1 case must fail. The duplicate-exemplar-id case must ALSO fail when supplied as a schema-valid v1.0 report, which is the arm that proves the rule is not version-scoped and that the struck legacy dedup has not survived anywhere. |
@@ -499,13 +546,19 @@ facts.
 
 A conforming v1.1 viewer can show the candidate and its three closest reference previews from one
 file. It can distinguish fit p-values from distances, present the one interval the engine actually
-estimates, and disclose where uncertainty is not estimated. It can also show the recorded engine
-source revision and dirty state, model and schema identities, structured invocation, and image
-identities behind a report.
+estimates, disclose where uncertainty is not estimated, and inspect the complete immutable numeric
+fit policy. It can also show the recorded engine source revision and dirty state, model and schema
+identities, structured invocation, and image identities behind a report.
 
 The engine and viewer remain coupled through one explicit versioned contract. The additional
 cross-field assertions keep the shared definitions and per-asset values coherent. A v1.1 consumer
 can still open historical v1.0 reports without fabricating missing evidence.
+
+All path-based engine and viewer readers enforce one shared 128 MiB report-byte ceiling before
+JSON, base64, thumbnail, or schema work. A size preflight avoids opening an already oversized file,
+and a bounded `limit + 1` read catches growth after preflight. The ceiling is deliberately above
+the governed reference/candidate preview envelope; it is an availability/transport limit and does
+not alter any measurement, score, or compatibility meaning in this record.
 
 Reports become larger because every candidate has an inline preview. Shared HTML files now contain
 candidate pixels as well as reference pixels, which is a privacy and retention consequence even
