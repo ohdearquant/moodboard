@@ -91,12 +91,12 @@ class TestNonconformityScores:
 class TestConformalPValue:
     def test_rejects_empty_reference_set(self):
         with pytest.raises(ValueError):
-            conformal_p_value(np.empty((0, 4)), np.zeros(4))
+            conformal_p_value(np.empty((0, 4)), np.zeros(4), 5)
 
     def test_single_reference(self):
         refs = _iid_embeddings(1, seed=1)
         candidate = _iid_embeddings(1, seed=2)[0]
-        p = conformal_p_value(refs, candidate)
+        p = conformal_p_value(refs, candidate, 5)
         assert p in (0.5, 1.0)
 
     def test_p_value_is_multiple_of_grid(self):
@@ -105,7 +105,7 @@ class TestConformalPValue:
             n = rng.integers(2, 30)
             refs = _iid_embeddings(n, dim=5, seed=int(rng.integers(0, 1_000_000)))
             candidate = _iid_embeddings(1, dim=5, seed=int(rng.integers(0, 1_000_000)))[0]
-            p = conformal_p_value(refs, candidate)
+            p = conformal_p_value(refs, candidate, 5)
             grid_position = p * (n + 1)
             assert grid_position == pytest.approx(round(grid_position), abs=1e-9)
             assert 1 <= round(grid_position) <= n + 1
@@ -113,11 +113,23 @@ class TestConformalPValue:
     def test_candidate_identical_to_a_reference_is_never_the_most_unusual(self):
         refs = _iid_embeddings(12, seed=11)
         candidate = refs[0].copy()
-        p = conformal_p_value(refs, candidate)
+        p = conformal_p_value(refs, candidate, 5)
         # An exact duplicate of a reference is at least as unusual as that reference (distance
         # 0 to itself as a neighbour candidate), so it cannot land at the extreme high-alpha
         # end reserved for genuine outliers; the p-value must clear the finest grid value.
         assert p > 1 / (len(refs) + 1)
+
+    def test_the_caller_supplied_k_changes_the_score_when_the_geometry_requires_it(self):
+        rng = np.random.default_rng(20260808)
+        for _ in range(5):
+            bag = _unit(rng.normal(size=(11, 6)))
+
+        score_at_four = conformal_p_value(bag[:10], bag[10], 4)
+        score_at_five = conformal_p_value(bag[:10], bag[10], 5)
+
+        assert score_at_four == pytest.approx(2.0 / 11.0)
+        assert score_at_five == pytest.approx(3.0 / 11.0)
+        assert score_at_four != score_at_five
 
     def test_uniform_under_exchangeability(self):
         # Under exchangeability of the references and the candidate, the symmetric full
@@ -133,7 +145,7 @@ class TestConformalPValue:
         for _ in range(trials):
             bag = _unit(rng.normal(size=(n + 1, dim)))
             refs, candidate = bag[:n], bag[n]
-            p = conformal_p_value(refs, candidate)
+            p = conformal_p_value(refs, candidate, 5)
             grid_index = round(p * (n + 1)) - 1
             buckets[grid_index] += 1
 

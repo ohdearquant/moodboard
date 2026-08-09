@@ -140,9 +140,7 @@ def _dominant_colours(
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
             warnings.simplefilter("ignore", category=UserWarning)
-            centroids, labels = kmeans2(
-                chroma, n_clusters, minit="++", seed=seed, missing="warn"
-            )
+            centroids, labels = kmeans2(chroma, n_clusters, minit="++", seed=seed, missing="warn")
     except Exception:
         # Degenerate input (e.g. every pixel identical) can leave kmeans2 unable to seed
         # distinct starting centroids. The image has effectively one dominant colour.

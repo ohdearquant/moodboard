@@ -1,0 +1,507 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/report_v1_1.schema.json",
+  "title": "moodboard report, schema version 1.1",
+  "description": "The additive viewer-facing contract in ADR-0008. Every v1.0 field retains its path, type, and meaning; v1.1 adds complete fit policy, candidate media, axis definitions, and structured provenance. Cross-reference, image-decode, ordering, duplicated-value, command, and schema-hash assertions are enforced by moodboard.report.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "board",
+    "board_stats",
+    "references",
+    "assets",
+    "comparisons",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.1" },
+    "board": { "$ref": "#/$defs/board" },
+    "board_stats": { "$ref": "#/$defs/boardStats" },
+    "references": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/referenceEntry" }
+    },
+    "assets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/asset" }
+    },
+    "comparisons": { "$ref": "#/$defs/comparisons" },
+    "provenance": { "$ref": "#/$defs/provenance" }
+  },
+  "$defs": {
+    "rfc3339": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "sha256Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "mime": {
+      "type": "string",
+      "pattern": "^[a-z]+/[a-z0-9+.-]+$"
+    },
+    "thumbnailMime": {
+      "enum": ["image/jpeg", "image/png", "image/webp"]
+    },
+    "safeInteger": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "positiveSafeInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "pValue": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1
+    },
+    "alpha": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "exclusiveMaximum": 1
+    },
+    "cosineCut": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 2
+    },
+    "flags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["low", "high", "level", "method"],
+      "properties": {
+        "low": { "type": "number", "minimum": 0, "maximum": 1 },
+        "high": { "type": "number", "minimum": 0, "maximum": 1 },
+        "level": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+        "method": { "const": "loo-jackknife-plus" }
+      }
+    },
+    "exemplar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference_id", "similarity"],
+      "properties": {
+        "reference_id": { "type": "string", "minLength": 1 },
+        "similarity": { "type": "number", "minimum": -1, "maximum": 1 }
+      }
+    },
+    "thumbnail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mime", "width", "height", "data_base64"],
+      "properties": {
+        "mime": { "$ref": "#/$defs/thumbnailMime" },
+        "width": { "$ref": "#/$defs/positiveSafeInteger" },
+        "height": { "$ref": "#/$defs/positiveSafeInteger" },
+        "data_base64": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+        }
+      }
+    },
+    "candidateImage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_sha256", "mime", "width", "height", "thumbnail"],
+      "properties": {
+        "content_sha256": { "$ref": "#/$defs/sha256Hex" },
+        "mime": { "$ref": "#/$defs/mime" },
+        "width": { "$ref": "#/$defs/positiveSafeInteger" },
+        "height": { "$ref": "#/$defs/positiveSafeInteger" },
+        "thumbnail": { "$ref": "#/$defs/thumbnail" }
+      }
+    },
+    "referenceEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference_id", "content_sha256", "mime", "width", "height", "thumbnail"],
+      "properties": {
+        "reference_id": { "type": "string", "minLength": 1 },
+        "content_sha256": { "$ref": "#/$defs/sha256Hex" },
+        "mime": { "$ref": "#/$defs/mime" },
+        "width": { "$ref": "#/$defs/positiveSafeInteger" },
+        "height": { "$ref": "#/$defs/positiveSafeInteger" },
+        "thumbnail": { "$ref": "#/$defs/thumbnail" }
+      }
+    },
+    "category": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category_id", "n_local", "member_ids"],
+      "properties": {
+        "category_id": { "type": "string", "minLength": 1 },
+        "n_local": { "$ref": "#/$defs/positiveSafeInteger" },
+        "member_ids": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "styleModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "revision", "dim"],
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 },
+        "dim": { "$ref": "#/$defs/positiveSafeInteger" }
+      }
+    },
+    "axisMethod": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "revision"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "revision": { "$ref": "#/$defs/positiveSafeInteger" }
+      }
+    },
+    "axisDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "axis_id",
+        "label",
+        "value_kind",
+        "direction",
+        "aggregation",
+        "availability",
+        "uncertainty",
+        "method"
+      ],
+      "properties": {
+        "axis_id": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "value_kind": { "enum": ["conformal_p_value", "normalized_distance"] },
+        "direction": { "enum": ["higher_is_better_fit", "lower_is_closer"] },
+        "aggregation": { "enum": ["full_conformal_category", "mean_over_exemplars"] },
+        "availability": { "enum": ["scored_only", "all_assets"] },
+        "uncertainty": { "enum": ["asset_interval", "none"] },
+        "method": { "$ref": "#/$defs/axisMethod" }
+      }
+    },
+    "representation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["style", "axes", "axis_definitions"],
+      "properties": {
+        "style": { "$ref": "#/$defs/styleModel" },
+        "axes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "axis_definitions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/axisDefinition" }
+        }
+      }
+    },
+    "fit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "k",
+        "k_cap",
+        "cluster_cut",
+        "dup_cut",
+        "min_category_size",
+        "interval_level",
+        "far_outlier_iqr_multiplier",
+        "far_outlier_iqr_multiplier_source",
+        "interval"
+      ],
+      "properties": {
+        "metric": { "const": "cosine" },
+        "k": { "$ref": "#/$defs/positiveSafeInteger" },
+        "k_cap": { "$ref": "#/$defs/positiveSafeInteger" },
+        "cluster_cut": { "$ref": "#/$defs/cosineCut" },
+        "dup_cut": { "$ref": "#/$defs/cosineCut" },
+        "min_category_size": { "$ref": "#/$defs/positiveSafeInteger" },
+        "interval_level": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+        "far_outlier_iqr_multiplier": { "type": "number", "minimum": 0 },
+        "far_outlier_iqr_multiplier_source": { "type": "string", "minLength": 1 },
+        "interval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["method", "replicates", "seed"],
+          "properties": {
+            "method": { "const": "loo-jackknife-plus" },
+            "replicates": { "type": "null" },
+            "seed": { "$ref": "#/$defs/safeInteger" }
+          }
+        }
+      }
+    },
+    "board": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "n_references",
+        "n_eff",
+        "requested_alpha",
+        "supported_alpha",
+        "built_at",
+        "representation",
+        "fit",
+        "categories"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/sha256Hex" },
+        "name": { "type": "string" },
+        "n_references": { "$ref": "#/$defs/positiveSafeInteger" },
+        "n_eff": { "type": "number", "minimum": 1 },
+        "requested_alpha": { "$ref": "#/$defs/alpha" },
+        "supported_alpha": { "$ref": "#/$defs/alpha" },
+        "built_at": { "$ref": "#/$defs/rfc3339" },
+        "representation": { "$ref": "#/$defs/representation" },
+        "fit": { "$ref": "#/$defs/fit" },
+        "categories": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/category" }
+        }
+      }
+    },
+    "boardStats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tightness", "leverage", "flags"],
+      "properties": {
+        "tightness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["loo_mean", "loo_sd", "loo_quantiles"],
+          "properties": {
+            "loo_mean": { "type": "number" },
+            "loo_sd": { "type": "number", "minimum": 0 },
+            "loo_quantiles": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["p10", "p50", "p90"],
+              "properties": {
+                "p10": { "type": "number" },
+                "p50": { "type": "number" },
+                "p90": { "type": "number" }
+              }
+            }
+          }
+        },
+        "leverage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["reference_id", "delta_tightness", "rank"],
+            "properties": {
+              "reference_id": { "type": "string", "minLength": 1 },
+              "delta_tightness": { "type": "number" },
+              "rank": { "$ref": "#/$defs/positiveSafeInteger" }
+            }
+          }
+        },
+        "flags": { "$ref": "#/$defs/flags" }
+      }
+    },
+    "axesScored": {
+      "type": "object",
+      "required": ["style"],
+      "properties": {
+        "style": { "$ref": "#/$defs/pValue" }
+      },
+      "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+    },
+    "axesAbstained": {
+      "type": "object",
+      "required": ["style"],
+      "properties": {
+        "style": { "type": "null" }
+      },
+      "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+    },
+    "scoredAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "asset_id",
+        "source",
+        "image",
+        "category_id",
+        "n_local",
+        "score",
+        "interval",
+        "rank",
+        "axes",
+        "exemplars",
+        "flags"
+      ],
+      "properties": {
+        "state": { "const": "scored" },
+        "asset_id": { "type": "string", "minLength": 1 },
+        "source": { "type": "string" },
+        "image": { "$ref": "#/$defs/candidateImage" },
+        "category_id": { "type": "string", "minLength": 1 },
+        "n_local": { "$ref": "#/$defs/positiveSafeInteger" },
+        "score": { "$ref": "#/$defs/pValue" },
+        "interval": { "$ref": "#/$defs/interval" },
+        "rank": { "$ref": "#/$defs/positiveSafeInteger" },
+        "axes": { "$ref": "#/$defs/axesScored" },
+        "exemplars": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/exemplar" }
+        },
+        "flags": { "$ref": "#/$defs/flags" }
+      }
+    },
+    "abstainedAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "asset_id",
+        "source",
+        "image",
+        "reason",
+        "explanation",
+        "measurement",
+        "category_id",
+        "axes",
+        "exemplars",
+        "flags"
+      ],
+      "properties": {
+        "state": { "const": "abstained" },
+        "asset_id": { "type": "string", "minLength": 1 },
+        "source": { "type": "string" },
+        "image": { "$ref": "#/$defs/candidateImage" },
+        "reason": { "enum": ["resolution", "multi_modality", "far_outlier"] },
+        "explanation": { "type": "string", "minLength": 1 },
+        "measurement": { "type": "object", "minProperties": 1 },
+        "category_id": { "type": "string", "minLength": 1 },
+        "axes": { "$ref": "#/$defs/axesAbstained" },
+        "exemplars": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/exemplar" }
+        },
+        "flags": { "$ref": "#/$defs/flags" }
+      }
+    },
+    "asset": {
+      "oneOf": [
+        { "$ref": "#/$defs/scoredAsset" },
+        { "$ref": "#/$defs/abstainedAsset" }
+      ]
+    },
+    "comparisons": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ties", "note"],
+      "properties": {
+        "ties": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        },
+        "note": { "type": "string" }
+      }
+    },
+    "engineBasic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "engineWithSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "source_repository",
+        "source_revision",
+        "source_dirty"
+      ],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "source_repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:.+$"
+        },
+        "source_revision": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"
+        },
+        "source_dirty": { "type": "boolean" }
+      }
+    },
+    "modelProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "revision", "sha256"],
+      "properties": {
+        "repo": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "minLength": 1 }
+      }
+    },
+    "schemaProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sha256"],
+      "properties": {
+        "id": {
+          "const": "https://github.com/ohdearquant/moodboard/schema/report_v1_1.schema.json"
+        },
+        "sha256": { "$ref": "#/$defs/sha256Hex" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine", "model", "command", "argv", "seed", "created_at", "schema"],
+      "properties": {
+        "engine": {
+          "oneOf": [
+            { "$ref": "#/$defs/engineBasic" },
+            { "$ref": "#/$defs/engineWithSource" }
+          ]
+        },
+        "model": { "$ref": "#/$defs/modelProvenance" },
+        "command": { "type": "string" },
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "seed": { "$ref": "#/$defs/safeInteger" },
+        "created_at": { "$ref": "#/$defs/rfc3339" },
+        "schema": { "$ref": "#/$defs/schemaProvenance" }
+      }
+    }
+  }
+}

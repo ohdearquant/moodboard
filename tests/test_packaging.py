@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -115,3 +116,57 @@ def test_the_schema_the_report_validates_against_also_ships(tmp_path):
         "the report schema is missing from the wheel, so report validation cannot run from an "
         "installed copy"
     )
+    assert "moodboard/schema/report_v1_1.schema.json" in members, (
+        "the current report writer schema is missing from the wheel, so rank/report validation "
+        "cannot run from an installed copy"
+    )
+
+
+def test_the_verified_viewer_package_ships_when_the_build_has_staged_it(tmp_path):
+    staged = REPO_ROOT / "moodboard" / "viewer_dist"
+    if not staged.is_dir():
+        pytest.skip("run `npm --prefix viewer run build` to stage the verified viewer package")
+    wheel = _build_wheel(tmp_path / "dist")
+
+    with zipfile.ZipFile(wheel) as archive:
+        members = set(archive.namelist())
+
+    required = {
+        "moodboard/viewer_dist/artifact-manifest.json",
+        "moodboard/viewer_dist/standalone-template.html",
+        "moodboard/viewer_dist/schemas/report_v1_0.schema.json",
+        "moodboard/viewer_dist/schemas/report_v1_1.schema.json",
+    }
+    assert required <= members, (
+        "the ignored build output was staged but omitted from the wheel; report --html would "
+        f"fail after installation. Missing {sorted(required - members)}"
+    )
+
+
+def test_the_staged_viewer_package_also_survives_the_sdist_boundary(tmp_path):
+    staged = REPO_ROOT / "moodboard" / "viewer_dist"
+    if not staged.is_dir():
+        pytest.skip("run `npm --prefix viewer run build` to stage the verified viewer package")
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv is not on PATH, so the source distribution cannot be measured")
+    destination = tmp_path / "dist"
+    completed = subprocess.run(
+        [uv, "build", "--sdist", "-o", str(destination)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert completed.returncode == 0, completed.stderr
+    archives = sorted(destination.glob("*.tar.gz"))
+    assert len(archives) == 1
+
+    with tarfile.open(archives[0], "r:gz") as archive:
+        members = {Path(name).as_posix() for name in archive.getnames()}
+    suffixes = {
+        "moodboard/viewer_dist/artifact-manifest.json",
+        "moodboard/viewer_dist/standalone-template.html",
+    }
+    for suffix in suffixes:
+        assert any(name.endswith(suffix) for name in members), f"sdist omitted {suffix}"
