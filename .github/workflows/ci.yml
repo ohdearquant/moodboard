@@ -69,6 +69,22 @@ jobs:
         # not the one committed.
         run: uv sync --locked --python ${{ matrix.python-version }}
 
+      - name: Install the pinned viewer toolchain
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: viewer/.node-version
+          cache: npm
+          cache-dependency-path: viewer/package-lock.json
+
+      - name: Stage verified viewer package data
+        # The Python inliner deliberately consumes only the manifest-verified package-data copy.
+        # Rebuild it from the locked frontend inputs and prove that the committed static output is
+        # byte-identical before the Python matrix exercises the HTML command.
+        run: |
+          npm --prefix viewer ci
+          npm --prefix viewer run build
+          git diff --exit-code -- viewer/dist-static
+
       - name: Tests
         # No -x and no --maxfail. A first-failure read tells you one thing is broken; a
         # release-grade read tells you how many, and the difference matters when deciding
