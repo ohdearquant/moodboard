@@ -22,6 +22,7 @@ import json
 import math
 import operator
 import shlex
+import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
@@ -44,6 +45,12 @@ __all__ = [
     "SCHEMA_VERSION",
     "SCHEMA_VERSION_V1_0",
     "SCHEMA_VERSION_V1_1",
+    "THUMBNAIL_MAX_COMPRESSED_BYTES",
+    "THUMBNAIL_MAX_COUNT",
+    "THUMBNAIL_MAX_DECODED_BYTES",
+    "THUMBNAIL_MAX_PIXELS",
+    "THUMBNAIL_MAX_SIDE",
+    "THUMBNAIL_TOTAL_DECODED_BYTES",
     "AbstainedAsset",
     "AbstainedAssetV1_1",
     "Asset",
@@ -118,6 +125,16 @@ SCHEMA_PATH: Path = SCHEMA_PATH_V1_0
 # 250-candidate/thumbnail operating envelope while preventing untrusted JSON/base64 input from
 # consuming unbounded memory before schema validation.
 REPORT_MAX_BYTES = 128 * 1024 * 1024
+
+# Shared Python consumer limits. The browser decoder independently pins the same values in its
+# versioned consumer contract, while both the CLI validator and the standalone inliner flow
+# through these constants. These are transport/decode safety ceilings, never aesthetic policy.
+THUMBNAIL_MAX_COMPRESSED_BYTES = 16 * 1024 * 1024
+THUMBNAIL_MAX_COUNT = 512
+THUMBNAIL_MAX_SIDE = 8_192
+THUMBNAIL_MAX_PIXELS = 4_096 * 4_096
+THUMBNAIL_MAX_DECODED_BYTES = 64 * 1024 * 1024
+THUMBNAIL_TOTAL_DECODED_BYTES = 256 * 1024 * 1024
 
 _SCHEMA_ID_V1_1 = "https://github.com/ohdearquant/moodboard/schema/report_v1_1.schema.json"
 _THUMBNAIL_MIME_BY_FORMAT = {
@@ -1499,24 +1516,73 @@ def report_schema_sha256(schema_path: Path = SCHEMA_PATH_V1_1) -> str:
     return hashlib.sha256(schema_path.read_bytes()).hexdigest()
 
 
-def _validate_thumbnail(thumbnail: Thumbnail, *, field: str) -> None:
+def _validate_thumbnail_limits(
+    *, width: object, height: object, encoded_length: int, field: str
+) -> int:
+    if (
+        isinstance(width, bool)
+        or isinstance(height, bool)
+        or not isinstance(width, Integral)
+        or not isinstance(height, Integral)
+        or width < 1
+        or height < 1
+    ):
+        raise ValueError(f"{field} thumbnail dimensions must be positive integers")
+    if width > THUMBNAIL_MAX_SIDE or height > THUMBNAIL_MAX_SIDE:
+        raise ValueError(f"{field} thumbnail exceeds the {THUMBNAIL_MAX_SIDE}-pixel side limit")
+    pixels = int(width) * int(height)
+    if pixels > THUMBNAIL_MAX_PIXELS:
+        raise ValueError(f"{field} thumbnail exceeds the {THUMBNAIL_MAX_PIXELS}-pixel decode limit")
+    if pixels * 4 > THUMBNAIL_MAX_DECODED_BYTES:
+        raise ValueError(
+            f"{field} thumbnail exceeds the {THUMBNAIL_MAX_DECODED_BYTES}-byte raster limit"
+        )
+    estimated_bytes = (encoded_length * 3 + 3) // 4
+    if estimated_bytes > THUMBNAIL_MAX_COMPRESSED_BYTES:
+        raise ValueError(
+            f"{field} thumbnail exceeds the {THUMBNAIL_MAX_COMPRESSED_BYTES}-byte compressed limit"
+        )
+    return pixels * 4
+
+
+def _validate_thumbnail(thumbnail: Thumbnail, *, field: str) -> int:
     if thumbnail.mime not in frozenset(_THUMBNAIL_MIME_BY_FORMAT.values()):
         raise ValueError(
             f"{field} thumbnail MIME must be image/png, image/jpeg, or image/webp; "
             f"got {thumbnail.mime!r}"
         )
+    if not isinstance(thumbnail.data_base64, str):
+        raise ValueError(f"{field} thumbnail base64 must be a string")
+    declared_raster_bytes = _validate_thumbnail_limits(
+        width=thumbnail.width,
+        height=thumbnail.height,
+        encoded_length=len(thumbnail.data_base64),
+        field=field,
+    )
     try:
         payload = base64.b64decode(thumbnail.data_base64, validate=True)
     except (ValueError, TypeError) as error:
         raise ValueError(f"{field} thumbnail is not strict base64: {error}") from error
     if base64.b64encode(payload).decode("ascii") != thumbnail.data_base64:
         raise ValueError(f"{field} thumbnail base64 is not in canonical padded form")
+    if len(payload) > THUMBNAIL_MAX_COMPRESSED_BYTES:
+        raise ValueError(
+            f"{field} thumbnail exceeds the {THUMBNAIL_MAX_COMPRESSED_BYTES}-byte compressed limit"
+        )
     try:
-        with Image.open(io.BytesIO(payload)) as image:
-            actual_format = image.format
-            actual_size = image.size
-            image.verify()
-    except (OSError, SyntaxError, UnidentifiedImageError) as error:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(payload)) as image:
+                actual_format = image.format
+                actual_size = image.size
+                actual_raster_bytes = _validate_thumbnail_limits(
+                    width=actual_size[0],
+                    height=actual_size[1],
+                    encoded_length=len(thumbnail.data_base64),
+                    field=field,
+                )
+                image.verify()
+    except (OSError, SyntaxError, UnidentifiedImageError, Image.DecompressionBombError) as error:
         raise ValueError(
             f"{field} thumbnail bytes are not a decodable inert image: {error}"
         ) from error
@@ -1531,6 +1597,44 @@ def _validate_thumbnail(thumbnail: Thumbnail, *, field: str) -> None:
             f"{field} thumbnail declares {thumbnail.width}x{thumbnail.height} but bytes decode "
             f"as {actual_size[0]}x{actual_size[1]}"
         )
+    return max(declared_raster_bytes, actual_raster_bytes)
+
+
+def _validate_legacy_thumbnail_resources(thumbnail: Thumbnail, *, field: str) -> int:
+    """Enforce resource limits while preserving v1.0's diagnostic decode semantics."""
+
+    if not isinstance(thumbnail.data_base64, str):
+        raise ValueError(f"{field} thumbnail base64 must be a string")
+    declared_raster_bytes = _validate_thumbnail_limits(
+        width=thumbnail.width,
+        height=thumbnail.height,
+        encoded_length=len(thumbnail.data_base64),
+        field=field,
+    )
+    try:
+        payload = base64.b64decode(thumbnail.data_base64, validate=True)
+    except (ValueError, TypeError):
+        return declared_raster_bytes
+    if len(payload) > THUMBNAIL_MAX_COMPRESSED_BYTES:
+        raise ValueError(
+            f"{field} thumbnail exceeds the {THUMBNAIL_MAX_COMPRESSED_BYTES}-byte compressed limit"
+        )
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(payload)) as image:
+                actual_size = image.size
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
+        raise ValueError(f"{field} thumbnail header exceeds the decode safety limit") from error
+    except (OSError, SyntaxError, UnidentifiedImageError):
+        return declared_raster_bytes
+    actual_raster_bytes = _validate_thumbnail_limits(
+        width=actual_size[0],
+        height=actual_size[1],
+        encoded_length=len(thumbnail.data_base64),
+        field=field,
+    )
+    return max(declared_raster_bytes, actual_raster_bytes)
 
 
 def _validate_unique_exemplars(report: Report | ReportV1_1) -> None:
@@ -1562,15 +1666,18 @@ def _validate_v1_1_cross_fields(report: ReportV1_1, schema_path: Path) -> None:
 
     position = {reference_id: index for index, reference_id in enumerate(references)}
     expected_count = min(3, len(references))
+    total_raster_bytes = 0
     for index, reference in enumerate(report.references):
-        _validate_thumbnail(reference.thumbnail, field=f"references[{index}]")
+        total_raster_bytes += _validate_thumbnail(reference.thumbnail, field=f"references[{index}]")
 
     asset_ids: set[str] = set()
     for index, asset in enumerate(report.assets):
         if asset.asset_id in asset_ids:
             raise ValueError(f"report v1.1 asset_id {asset.asset_id!r} is duplicated")
         asset_ids.add(asset.asset_id)
-        _validate_thumbnail(asset.image.thumbnail, field=f"assets[{index}].image")
+        total_raster_bytes += _validate_thumbnail(
+            asset.image.thumbnail, field=f"assets[{index}].image"
+        )
         if len(asset.exemplars) != expected_count:
             raise ValueError(
                 f"{asset.asset_id} has {len(asset.exemplars)} exemplars; report v1.1 requires "
@@ -1619,6 +1726,12 @@ def _validate_v1_1_cross_fields(report: ReportV1_1, schema_path: Path) -> None:
                     f"{asset.asset_id} classical axis {axis!r} must be a finite numeric value"
                 )
 
+    if total_raster_bytes > THUMBNAIL_TOTAL_DECODED_BYTES:
+        raise ValueError(
+            "report thumbnails exceed the aggregate "
+            f"{THUMBNAIL_TOTAL_DECODED_BYTES}-byte raster limit"
+        )
+
     if report.provenance.command != shlex.join(report.provenance.argv):
         raise ValueError("provenance.command must equal shlex.join(provenance.argv)")
     if report.provenance.schema.id != _SCHEMA_ID_V1_1:
@@ -1646,8 +1759,26 @@ def _validate_cross_fields(
 ) -> None:
     validate_axis_vocabulary(report)
     _validate_unique_exemplars(report)
+    thumbnail_count = len(report.references) + sum(
+        1 for asset in report.assets if isinstance(asset, (ScoredAssetV1_1, AbstainedAssetV1_1))
+    )
+    if thumbnail_count > THUMBNAIL_MAX_COUNT:
+        raise ValueError(
+            f"report carries {thumbnail_count} thumbnails and exceeds the "
+            f"{THUMBNAIL_MAX_COUNT}-thumbnail decode limit"
+        )
     if isinstance(report, ReportV1_1):
         _validate_v1_1_cross_fields(report, schema_path)
+    else:
+        total_raster_bytes = sum(
+            _validate_legacy_thumbnail_resources(reference.thumbnail, field=f"references[{index}]")
+            for index, reference in enumerate(report.references)
+        )
+        if total_raster_bytes > THUMBNAIL_TOTAL_DECODED_BYTES:
+            raise ValueError(
+                "report thumbnails exceed the aggregate "
+                f"{THUMBNAIL_TOTAL_DECODED_BYTES}-byte raster limit"
+            )
 
 
 def _validate_candidate_inputs(

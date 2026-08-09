@@ -148,7 +148,7 @@ def _canonical_json(value: Any) -> bytes:
 
 
 def _is_score_source(relative: Path) -> bool:
-    if relative == Path("eval/thresholds.json"):
+    if relative in {Path("eval/thresholds.json"), Path("uv.lock")}:
         return True
     return (
         len(relative.parts) > 1
@@ -170,6 +170,9 @@ def _score_source_files(repository: Path) -> tuple[Path, ...]:
     thresholds = repository / "eval" / "thresholds.json"
     if thresholds.is_file():
         candidates.append(thresholds)
+    lockfile = repository / "uv.lock"
+    if lockfile.is_file():
+        candidates.append(lockfile)
     return tuple(sorted(candidates, key=lambda path: path.relative_to(repository).as_posix()))
 
 
@@ -195,6 +198,7 @@ def _engine_source_dirty(repository: Path) -> bool:
             "--",
             "moodboard",
             "eval/thresholds.json",
+            "uv.lock",
         ],
         capture_output=True,
         check=False,
@@ -309,6 +313,7 @@ def _generate(repository: Path, workspace: Path, seed: int) -> tuple[Path, dict[
         "engine_revision": engine_revision,
         "engine_source_dirty": engine_source_dirty,
         "engine_source_digest": engine_source_digest,
+        "uv_lock_sha256": _sha256(repository / "uv.lock"),
         "commands": {
             "build": ["moodboard", *build_argv],
             "rank": ["moodboard", *rank_argv],
@@ -340,6 +345,15 @@ def _normalized_report(path: Path) -> dict[str, Any]:
     report = json.loads(path.read_text(encoding="utf-8"))
     report["board"]["built_at"] = "<generated-at>"
     report["provenance"]["created_at"] = "<generated-at>"
+    # The published report truthfully names the clean engine commit used to create it. Its own
+    # fixture commit (and later documentation-only commits) necessarily move HEAD and dirty the
+    # checkout used by a verification run without moving any score-bearing byte. The manifest's
+    # content-addressed source-set identity is the verification fence for those bytes, so ignore
+    # only these self-referential Git checkout fields while comparing regenerated geometry.
+    engine = report["provenance"]["engine"]
+    if "source_revision" in engine:
+        engine["source_revision"] = "<engine-source-revision>"
+        engine["source_dirty"] = "<engine-source-dirty>"
     return report
 
 
@@ -391,6 +405,7 @@ def main(argv: list[str] | None = None) -> int:
             "engine_revision",
             "engine_source_dirty",
             "engine_source_digest",
+            "uv_lock_sha256",
             "commands",
             "source_images",
             "preconditions",

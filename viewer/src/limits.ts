@@ -5,9 +5,12 @@ import type { Thumbnail } from "./model";
 // from turning one local file into unbounded browser work.
 export const MAX_REPORT_BYTES = 128 * 1024 * 1024;
 export const MAX_THUMBNAIL_COMPRESSED_BYTES = 16 * 1024 * 1024;
+export const MAX_TOTAL_THUMBNAILS = 512;
 export const MAX_THUMBNAIL_SIDE = 8_192;
 export const MAX_THUMBNAIL_PIXELS = 4_096 * 4_096;
 export const MAX_THUMBNAIL_DECODED_BYTES = 64 * 1024 * 1024;
+export const MAX_TOTAL_THUMBNAIL_DECODED_BYTES = 256 * 1024 * 1024;
+export const MAX_THUMBNAIL_PROBE_CONCURRENCY = 4;
 
 export function estimatedBase64Bytes(payload: string): number {
   return Math.ceil((payload.length * 3) / 4);

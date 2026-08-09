@@ -93,6 +93,20 @@ def test_report_text_cannot_terminate_the_inert_payload(tmp_path, viewer_package
     assert b'<script data-unsafe="true">' not in html
 
 
+def test_non_finite_json_constant_is_rejected_before_publication(tmp_path, viewer_package):
+    report = json.loads(SHOWCASE_REPORT.read_text(encoding="utf-8"))
+    report["board"]["n_eff"] = float("nan")
+    report_path = tmp_path / "non-finite.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    destination = tmp_path / "existing.html"
+    destination.write_bytes(b"sentinel")
+
+    with pytest.raises(ViewerPackagingError, match="non-finite JSON constant NaN"):
+        inline_report(report_path, destination, package_root=viewer_package.root)
+
+    assert destination.read_bytes() == b"sentinel"
+
+
 def test_invalid_report_preserves_existing_destination_and_leaves_no_temporary(
     tmp_path, viewer_package
 ):

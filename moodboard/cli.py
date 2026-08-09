@@ -159,7 +159,7 @@ from .report import (
     validate_report,
     write_report,
 )
-from .viewer import inline_report
+from .viewer import decode_report_document, inline_report
 
 __all__ = ["main", "build_parser"]
 
@@ -1414,13 +1414,14 @@ def _cmd_retrieve(args: argparse.Namespace, out, err) -> int:
 def _cmd_report(args: argparse.Namespace, out, err) -> int:
     """Re-read a report, prove its contract, optionally inline it, and summarise it."""
 
-    document = json.loads(read_report_bytes(Path(args.report)))
+    report_label = json.dumps(str(args.report), ensure_ascii=True)
+    _, document = decode_report_document(read_report_bytes(Path(args.report)))
     try:
         report = from_json_dict(document)
     except JsonSchemaValidationError as error:
         location = "/" + "/".join(str(part) for part in error.absolute_path)
         raise ValueError(
-            f"{args.report} fails its report schema at {location}: {error.message}"
+            f"{report_label} fails its report schema at {location}: {error.message}"
         ) from error
     validate_report(report)
     if args.html is not None:
@@ -1428,7 +1429,7 @@ def _cmd_report(args: argparse.Namespace, out, err) -> int:
 
     scored = [asset for asset in report.assets if asset.state == "scored"]
     abstained = [asset for asset in report.assets if asset.state == "abstained"]
-    print(f"{args.report} is a valid schema {report.schema_version} report", file=out)
+    print(f"{report_label} is a valid schema {report.schema_version} report", file=out)
     print(f"  board          {report.board.id}", file=out)
     print(f"  references     {report.board.n_references}, n_eff {report.board.n_eff:.4f}", file=out)
     print(f"  requested a    {report.board.requested_alpha}", file=out)
@@ -1437,15 +1438,18 @@ def _cmd_report(args: argparse.Namespace, out, err) -> int:
     print(f"  abstained      {len(abstained)}", file=out)
     print(f"  ties           {len(report.comparisons.ties)}", file=out)
     if args.html is not None:
-        print(f"  HTML written   {args.html}", file=out)
+        html_label = json.dumps(str(args.html), ensure_ascii=True)
+        print(f"  HTML written   {html_label}", file=out)
     for asset in scored:
+        asset_id = json.dumps(asset.asset_id, ensure_ascii=True)
         print(
             f"  {asset.rank:>4}  {asset.score:.4f}  "
-            f"[{asset.interval.low:.4f}, {asset.interval.high:.4f}]  {asset.asset_id}",
+            f"[{asset.interval.low:.4f}, {asset.interval.high:.4f}]  {asset_id}",
             file=out,
         )
     for asset in abstained:
-        print(f"     -  {asset.reason:<15} {asset.asset_id}", file=out)
+        asset_id = json.dumps(asset.asset_id, ensure_ascii=True)
+        print(f"     -  {asset.reason:<15} {asset_id}", file=out)
     return 0
 
 

@@ -29,7 +29,9 @@ import hashlib
 import io
 import json
 import shlex
+import struct
 import zipfile
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -1358,6 +1360,133 @@ def test_report_rejects_a_document_that_violates_the_contract(tmp_path: Path, ra
     code, _, err = _run(["report", str(broken)])
     assert code == 1
     assert document["assets"][0]["asset_id"] in err
+
+
+def test_report_rejects_duplicate_keys_and_non_utf8_json(tmp_path: Path, ranked: dict):
+    source = ranked["path"].read_text(encoding="utf-8")
+    marker = '"schema_version": "1.1"'
+    assert source.count(marker) == 1
+    duplicate = tmp_path / "duplicate-key.json"
+    duplicate.write_text(source.replace(marker, f"{marker},\n  {marker}", 1), encoding="utf-8")
+
+    code, _, err = _run(["report", str(duplicate)])
+    assert code == 1
+    assert "repeats JSON key 'schema_version'" in err
+
+    utf16 = tmp_path / "utf16.json"
+    utf16.write_bytes(source.encode("utf-16"))
+    code, _, err = _run(["report", str(utf16)])
+    assert code == 1
+    assert "strict UTF-8" in err
+
+
+def _solid_rgb_png(width: int, height: int) -> bytes:
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        body = kind + payload
+        return struct.pack(">I", len(payload)) + body + struct.pack(">I", zlib.crc32(body))
+
+    compressor = zlib.compressobj(level=9)
+    compressed = bytearray()
+    row = b"\0" + (b"\0" * (width * 3))
+    for _ in range(height):
+        compressed.extend(compressor.compress(row))
+    compressed.extend(compressor.flush())
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", bytes(compressed))
+        + chunk(b"IEND", b"")
+    )
+
+
+def test_report_rejects_thumbnail_that_exceeds_viewer_decode_budget(tmp_path: Path, ranked: dict):
+    document = json.loads(json.dumps(ranked["document"]))
+    side = 4_097
+    payload = _solid_rgb_png(side, side)
+    assert len(payload) < 128 * 1024
+    document["references"][0]["thumbnail"].update(
+        {
+            "mime": "image/png",
+            "width": side,
+            "height": side,
+            "data_base64": base64.b64encode(payload).decode("ascii"),
+        }
+    )
+    oversized = tmp_path / "oversized-thumbnail.json"
+    oversized.write_text(json.dumps(document), encoding="utf-8")
+
+    code, _, err = _run(["report", str(oversized)])
+    assert code == 1
+    assert "pixel decode limit" in err
+
+
+def test_report_v1_0_checks_encoded_header_before_decode(tmp_path: Path, ranked: dict):
+    document = json.loads(json.dumps(ranked["document"]))
+    document["schema_version"] = "1.0"
+    del document["board"]["representation"]["axis_definitions"]
+    for field in (
+        "k_cap",
+        "min_category_size",
+        "interval_level",
+        "far_outlier_iqr_multiplier",
+        "far_outlier_iqr_multiplier_source",
+    ):
+        del document["board"]["fit"][field]
+    for asset in document["assets"]:
+        del asset["image"]
+    del document["provenance"]["argv"]
+    del document["provenance"]["schema"]
+    for field in ("source_repository", "source_revision", "source_dirty"):
+        document["provenance"]["engine"].pop(field, None)
+
+    side = 4_097
+    payload = _solid_rgb_png(side, side)
+    document["references"][0]["thumbnail"].update(
+        {
+            "mime": "image/png",
+            "width": 1,
+            "height": 1,
+            "data_base64": base64.b64encode(payload).decode("ascii"),
+        }
+    )
+    path = tmp_path / "legacy-hidden-bomb.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    code, _, err = _run(["report", str(path)])
+    assert code == 1
+    assert "pixel decode limit" in err
+
+
+def test_report_json_escapes_untrusted_asset_ids_for_terminal_output(tmp_path: Path, ranked: dict):
+    document = json.loads(json.dumps(ranked["document"]))
+    old_id = document["assets"][0]["asset_id"]
+    hostile = "candidate\n\x1b]8;;https://example.test\x07click\x1b]8;;\x07"
+    document["assets"][0]["asset_id"] = hostile
+    document["comparisons"]["ties"] = [
+        [hostile if endpoint == old_id else endpoint for endpoint in pair]
+        for pair in document["comparisons"]["ties"]
+    ]
+    path = tmp_path / "terminal-data.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    code, out, err = _run(["report", str(path)])
+    assert code == 0, err
+    assert "\x1b" not in out
+    assert json.dumps(hostile, ensure_ascii=True) in out
+
+
+def test_report_json_escapes_terminal_controls_in_display_paths(tmp_path: Path, ranked: dict):
+    hostile_name = "report\n\x1b]8;;x\x07click\x1b]8;;\x07.json"
+    report_path = tmp_path / hostile_name
+    report_path.write_bytes(ranked["path"].read_bytes())
+    html_path = tmp_path / f"{hostile_name}.html"
+
+    code, out, err = _run(["report", str(report_path), "--html", str(html_path)])
+    assert code == 0, err
+    assert "\x1b" not in out
+    assert json.dumps(str(report_path), ensure_ascii=True) in out
+    assert json.dumps(str(html_path), ensure_ascii=True) in out
 
 
 def test_report_html_writes_the_verified_offline_viewer(ranked: dict, tmp_path: Path):

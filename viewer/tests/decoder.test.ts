@@ -98,4 +98,107 @@ describe("versioned report decoder", () => {
       }
     }
   });
+
+  it("checks encoded header dimensions before native decode in every version", () => {
+    const header = new Uint8Array(24);
+    header.set([137, 80, 78, 71, 13, 10, 26, 10], 0);
+    header.set([73, 72, 68, 82], 12);
+    new DataView(header.buffer).setUint32(16, 32_768, false);
+    new DataView(header.buffer).setUint32(20, 32_768, false);
+    const payload = Buffer.from(header).toString("base64");
+
+    for (const version of ["1.1", "1.0"] as const) {
+      const source = fixtureObject();
+      const report: any = version === "1.1" ? source : toLegacy(source);
+      report.references[0].thumbnail.width = 1;
+      report.references[0].thumbnail.height = 1;
+      report.references[0].thumbnail.data_base64 = payload;
+      const result = createReportDecoder(acceptingProbe).validateStructure(encodeReport(report));
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues).toContainEqual(
+          expect.objectContaining({ code: "resource-limit", path: "/references/0/thumbnail" }),
+        );
+      }
+    }
+  });
+
+  it("preflights governed JPEG and WebP headers without native decoding", () => {
+    const fixtures = [
+      {
+        mime: "image/jpeg",
+        payload: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAACAAMDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDyOiiiuw5D/9k=",
+      },
+      {
+        mime: "image/webp",
+        payload: "UklGRjAAAABXRUJQVlA4ICQAAABQAQCdASoDAAIAAUAmJQBOgCgAAP76id+R2EN2HLri5shvAAA=",
+      },
+    ];
+    for (const fixture of fixtures) {
+      const report: any = fixtureObject();
+      report.references[0].thumbnail = {
+        mime: fixture.mime,
+        width: 3,
+        height: 2,
+        data_base64: fixture.payload,
+      };
+      const result = createReportDecoder(acceptingProbe).validateStructure(encodeReport(report));
+      expect(result.ok).toBe(true);
+    }
+  });
+
+  it("bounds the aggregate declared thumbnail raster budget", () => {
+    const report: any = toLegacy(fixtureObject());
+    for (const reference of report.references) {
+      reference.thumbnail.width = 4_096;
+      reference.thumbnail.height = 4_096;
+    }
+    const result = createReportDecoder(acceptingProbe).validateStructure(encodeReport(report));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ code: "resource-limit", path: "/thumbnails" }),
+      );
+    }
+  });
+
+  it("bounds the total native thumbnail target count", () => {
+    const report: any = fixtureObject();
+    const template = report.assets[0];
+    report.assets = Array.from({ length: 513 }, (_, index) => ({
+      ...structuredClone(template),
+      asset_id: `candidate-${index}`,
+      rank: index + 1,
+    }));
+    report.comparisons.ties = [];
+    const result = createReportDecoder(acceptingProbe).validateStructure(encodeReport(report));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ code: "resource-limit", path: "/thumbnails" }),
+      );
+    }
+  });
+
+  it("bounds concurrent native thumbnail probes", async () => {
+    let active = 0;
+    let peak = 0;
+    let calls = 0;
+    const observingProbe = {
+      async decode() {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        active -= 1;
+        calls += 1;
+        return "decoded" as const;
+      },
+    };
+
+    const result = await createReportDecoder(observingProbe).decode(fixtureBytes(), origin);
+    expect(result.ok).toBe(true);
+    expect(calls).toBeGreaterThan(4);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(4);
+  });
 });

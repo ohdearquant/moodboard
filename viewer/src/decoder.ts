@@ -4,7 +4,13 @@ import { compareNumber, isInteger, isLosslessNumber, parse, parseLosslessNumber 
 import reportV10SchemaText from "../../moodboard/schema/report_v1_0.schema.json?raw";
 import reportV11SchemaText from "../../moodboard/schema/report_v1_1.schema.json?raw";
 import { validateReportV10, validateReportV11 } from "./generated/report-validators.mjs";
-import { MAX_REPORT_BYTES, thumbnailLimitMessage } from "./limits";
+import {
+  MAX_REPORT_BYTES,
+  MAX_THUMBNAIL_PROBE_CONCURRENCY,
+  MAX_TOTAL_THUMBNAILS,
+  MAX_TOTAL_THUMBNAIL_DECODED_BYTES,
+  thumbnailLimitMessage,
+} from "./limits";
 import type {
   Asset,
   AxisDefinition,
@@ -234,11 +240,22 @@ function validateCrossFields(report: ReportProjection): readonly ReportIssue[] {
   const issues: ReportIssue[] = [];
   const strict = report.schema_version === "1.1";
   const referencePositions = new Map<string, number>();
+  let totalThumbnailRasterBytes = 0;
   report.references.forEach((reference, index) => {
-    const limitMessage = thumbnailLimitMessage(reference.thumbnail);
-    if (limitMessage) {
+    const preflight = thumbnailPreflight(reference.thumbnail);
+    totalThumbnailRasterBytes += preflight.rasterBytes;
+    if (preflight.resourceMessage) {
       issues.push(
-        issue("fatal", "resource-limit", `/references/${index}/thumbnail`, limitMessage),
+        issue("fatal", "resource-limit", `/references/${index}/thumbnail`, preflight.resourceMessage),
+      );
+    } else if (preflight.integrityMessage) {
+      issues.push(
+        issue(
+          strict ? "fatal" : "diagnostic",
+          "integrity",
+          `/references/${index}/thumbnail`,
+          preflight.integrityMessage,
+        ),
       );
     }
     if (referencePositions.has(reference.reference_id)) {
@@ -260,10 +277,20 @@ function validateCrossFields(report: ReportProjection): readonly ReportIssue[] {
       assetsById.set(asset.asset_id, asset);
     }
     if (asset.image) {
-      const limitMessage = thumbnailLimitMessage(asset.image.thumbnail);
-      if (limitMessage) {
+      const preflight = thumbnailPreflight(asset.image.thumbnail);
+      totalThumbnailRasterBytes += preflight.rasterBytes;
+      if (preflight.resourceMessage) {
         issues.push(
-          issue("fatal", "resource-limit", `${assetPath}/image/thumbnail`, limitMessage),
+          issue("fatal", "resource-limit", `${assetPath}/image/thumbnail`, preflight.resourceMessage),
+        );
+      } else if (preflight.integrityMessage) {
+        issues.push(
+          issue(
+            strict ? "fatal" : "diagnostic",
+            "integrity",
+            `${assetPath}/image/thumbnail`,
+            preflight.integrityMessage,
+          ),
         );
       }
     }
@@ -312,6 +339,27 @@ function validateCrossFields(report: ReportProjection): readonly ReportIssue[] {
       issues.push(issue("diagnostic", "integrity", `${assetPath}/exemplars`, "Legacy report does not supply exactly three reported exemplar slots."));
     }
   });
+  const thumbnailCount = report.references.length + report.assets.filter((asset) => asset.image).length;
+  if (thumbnailCount > MAX_TOTAL_THUMBNAILS) {
+    issues.push(
+      issue(
+        "fatal",
+        "resource-limit",
+        "/thumbnails",
+        `Report carries ${thumbnailCount} thumbnails and exceeds the ${MAX_TOTAL_THUMBNAILS}-thumbnail limit.`,
+      ),
+    );
+  }
+  if (totalThumbnailRasterBytes > MAX_TOTAL_THUMBNAIL_DECODED_BYTES) {
+    issues.push(
+      issue(
+        "fatal",
+        "resource-limit",
+        "/thumbnails",
+        `Thumbnail rasters exceed the ${MAX_TOTAL_THUMBNAIL_DECODED_BYTES}-byte aggregate limit.`,
+      ),
+    );
+  }
 
   const tiePairs = new Set<string>();
   report.comparisons.ties.forEach(([left, right], index) => {
@@ -353,15 +401,138 @@ function decodeCanonicalBase64(payload: string): Uint8Array | null {
   }
 }
 
-function safeSource(thumbnail: Thumbnail): SafeThumbnailSource | null {
-  if (
-    thumbnailLimitMessage(thumbnail) !== null ||
-    !SAFE_MIMES.has(thumbnail.mime) ||
-    decodeCanonicalBase64(thumbnail.data_base64) === null
-  ) {
-    return null;
+interface ImageDimensions {
+  readonly width: number;
+  readonly height: number;
+}
+
+function uint24le(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] ?? 0) | ((bytes[offset + 1] ?? 0) << 8) | ((bytes[offset + 2] ?? 0) << 16);
+}
+
+function pngDimensions(bytes: Uint8Array): ImageDimensions | null {
+  const signature = [137, 80, 78, 71, 13, 10, 26, 10];
+  if (bytes.length < 24 || !signature.every((value, index) => bytes[index] === value)) return null;
+  if (String.fromCharCode(...bytes.slice(12, 16)) !== "IHDR") return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return { width: view.getUint32(16, false), height: view.getUint32(20, false) };
+}
+
+function jpegDimensions(bytes: Uint8Array): ImageDimensions | null {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  const startOfFrame = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+  let offset = 2;
+  while (offset + 1 < bytes.length) {
+    if (bytes[offset] !== 0xff) return null;
+    while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+    const marker = bytes[offset];
+    offset += 1;
+    if (marker === undefined || marker === 0xd9 || marker === 0xda) return null;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 2 > bytes.length) return null;
+    const length = ((bytes[offset] ?? 0) << 8) | (bytes[offset + 1] ?? 0);
+    if (length < 2 || offset + length > bytes.length) return null;
+    if (startOfFrame.has(marker)) {
+      if (length < 7) return null;
+      return {
+        height: ((bytes[offset + 3] ?? 0) << 8) | (bytes[offset + 4] ?? 0),
+        width: ((bytes[offset + 5] ?? 0) << 8) | (bytes[offset + 6] ?? 0),
+      };
+    }
+    offset += length;
   }
-  return `data:${thumbnail.mime};base64,${thumbnail.data_base64}` as SafeThumbnailSource;
+  return null;
+}
+
+function webpDimensions(bytes: Uint8Array): ImageDimensions | null {
+  if (
+    bytes.length < 20 ||
+    String.fromCharCode(...bytes.slice(0, 4)) !== "RIFF" ||
+    String.fromCharCode(...bytes.slice(8, 12)) !== "WEBP"
+  ) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 12;
+  while (offset + 8 <= bytes.length) {
+    const kind = String.fromCharCode(...bytes.slice(offset, offset + 4));
+    const size = view.getUint32(offset + 4, true);
+    const data = offset + 8;
+    if (data + size > bytes.length) return null;
+    if (kind === "VP8X" && size >= 10) {
+      return { width: uint24le(bytes, data + 4) + 1, height: uint24le(bytes, data + 7) + 1 };
+    }
+    if (
+      kind === "VP8 " && size >= 10 &&
+      bytes[data + 3] === 0x9d && bytes[data + 4] === 0x01 && bytes[data + 5] === 0x2a
+    ) {
+      return {
+        width: (((bytes[data + 7] ?? 0) << 8) | (bytes[data + 6] ?? 0)) & 0x3fff,
+        height: (((bytes[data + 9] ?? 0) << 8) | (bytes[data + 8] ?? 0)) & 0x3fff,
+      };
+    }
+    if (kind === "VP8L" && size >= 5 && bytes[data] === 0x2f) {
+      const b1 = bytes[data + 1] ?? 0;
+      const b2 = bytes[data + 2] ?? 0;
+      const b3 = bytes[data + 3] ?? 0;
+      const b4 = bytes[data + 4] ?? 0;
+      return {
+        width: 1 + b1 + ((b2 & 0x3f) << 8),
+        height: 1 + (b2 >> 6) + (b3 << 2) + ((b4 & 0x0f) << 10),
+      };
+    }
+    offset = data + size + (size % 2);
+  }
+  return null;
+}
+
+function headerDimensions(bytes: Uint8Array, mime: string): ImageDimensions | null {
+  if (mime === "image/png") return pngDimensions(bytes);
+  if (mime === "image/jpeg") return jpegDimensions(bytes);
+  if (mime === "image/webp") return webpDimensions(bytes);
+  return null;
+}
+
+interface ThumbnailPreflight {
+  readonly source: SafeThumbnailSource | null;
+  readonly resourceMessage: string | null;
+  readonly integrityMessage: string | null;
+  readonly rasterBytes: number;
+}
+
+function thumbnailPreflight(thumbnail: Thumbnail): ThumbnailPreflight {
+  const declaredMessage = thumbnailLimitMessage(thumbnail);
+  const declaredRasterBytes = thumbnail.width * thumbnail.height * 4;
+  if (declaredMessage) {
+    return { source: null, resourceMessage: declaredMessage, integrityMessage: null, rasterBytes: declaredRasterBytes };
+  }
+  if (!SAFE_MIMES.has(thumbnail.mime)) {
+    return { source: null, resourceMessage: null, integrityMessage: "Thumbnail MIME is not safe to render.", rasterBytes: declaredRasterBytes };
+  }
+  const bytes = decodeCanonicalBase64(thumbnail.data_base64);
+  if (!bytes) {
+    return { source: null, resourceMessage: null, integrityMessage: "Thumbnail base64 is not canonical.", rasterBytes: declaredRasterBytes };
+  }
+  const dimensions = headerDimensions(bytes, thumbnail.mime);
+  if (!dimensions) {
+    return { source: null, resourceMessage: null, integrityMessage: "Thumbnail header does not match its declared MIME.", rasterBytes: declaredRasterBytes };
+  }
+  const actualMessage = thumbnailLimitMessage({ ...thumbnail, ...dimensions });
+  const rasterBytes = Math.max(declaredRasterBytes, dimensions.width * dimensions.height * 4);
+  if (actualMessage) {
+    return { source: null, resourceMessage: actualMessage, integrityMessage: null, rasterBytes };
+  }
+  if (dimensions.width !== thumbnail.width || dimensions.height !== thumbnail.height) {
+    return { source: null, resourceMessage: null, integrityMessage: "Thumbnail dimensions do not match its encoded header.", rasterBytes };
+  }
+  return {
+    source: `data:${thumbnail.mime};base64,${thumbnail.data_base64}` as SafeThumbnailSource,
+    resourceMessage: null,
+    integrityMessage: null,
+    rasterBytes,
+  };
+}
+
+function safeSource(thumbnail: Thumbnail): SafeThumbnailSource | null {
+  return thumbnailPreflight(thumbnail).source;
 }
 
 class BrowserThumbnailProbe implements ThumbnailProbe {
@@ -414,26 +585,38 @@ async function probeThumbnails(
     });
   }
 
-  await Promise.all(targets.map(async (target) => {
+  let nextTarget = 0;
+  const worker = async () => {
+    while (nextTarget < targets.length) {
+      const target = targets[nextTarget];
+      nextTarget += 1;
+      if (!target) continue;
     const source = safeSource(target.identity.thumbnail);
     if (!source) {
       issues.push(issue(target.strict ? "fatal" : "diagnostic", "integrity", target.path, "Thumbnail MIME or base64 payload is not safe to render."));
-      return;
+      continue;
     }
     let result: "decoded" | "undecodable";
     try {
       result = await probe.decode(source, target.identity.thumbnail.width, target.identity.thumbnail.height);
     } catch {
       issues.push(issue("fatal", "thumbnail-probe", target.path, "The browser thumbnail probe could not execute."));
-      return;
+      continue;
     }
     if (result !== "decoded") {
       issues.push(issue(target.strict ? "fatal" : "diagnostic", "integrity", target.path, "Thumbnail bytes did not decode to their declared dimensions and MIME."));
-      return;
+      continue;
     }
     if (target.kind === "reference") referenceSources.set(target.key, source);
     else candidateSources.set(target.key, source);
-  }));
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(MAX_THUMBNAIL_PROBE_CONCURRENCY, targets.length) },
+      () => worker(),
+    ),
+  );
 
   return { issues: normalizeIssues(issues), referenceSources, candidateSources };
 }

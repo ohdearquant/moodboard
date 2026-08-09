@@ -29,11 +29,19 @@ from typing import Any, Final
 import jsonschema
 from PIL import Image, UnidentifiedImageError
 
-from .report import read_report_bytes
+from .report import (
+    THUMBNAIL_MAX_COMPRESSED_BYTES,
+    THUMBNAIL_MAX_DECODED_BYTES,
+    THUMBNAIL_MAX_PIXELS,
+    THUMBNAIL_MAX_SIDE,
+    from_json_dict,
+    read_report_bytes,
+)
 
 __all__ = [
     "ViewerPackage",
     "ViewerPackagingError",
+    "decode_report_document",
     "inline_report",
     "validate_viewer_package",
 ]
@@ -46,10 +54,10 @@ _SAFE_MIMES: Final = {
     "image/webp": "WEBP",
 }
 _PAYLOAD_TOKEN: Final = "__MOODBOARD_REPORT_BASE64__"
-_MAX_THUMBNAIL_COMPRESSED_BYTES: Final = 16 * 1024 * 1024
-_MAX_THUMBNAIL_SIDE: Final = 8_192
-_MAX_THUMBNAIL_PIXELS: Final = 4_096 * 4_096
-_MAX_THUMBNAIL_DECODED_BYTES: Final = 64 * 1024 * 1024
+_MAX_THUMBNAIL_COMPRESSED_BYTES: Final = THUMBNAIL_MAX_COMPRESSED_BYTES
+_MAX_THUMBNAIL_SIDE: Final = THUMBNAIL_MAX_SIDE
+_MAX_THUMBNAIL_PIXELS: Final = THUMBNAIL_MAX_PIXELS
+_MAX_THUMBNAIL_DECODED_BYTES: Final = THUMBNAIL_MAX_DECODED_BYTES
 _STANDALONE_CSP: Final = (
     "default-src 'none'; script-src data:; style-src data:; img-src data:; "
     "connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
@@ -101,8 +109,15 @@ def _load_json_object(value: bytes, label: str) -> dict[str, Any]:
             result[key] = item
         return result
 
+    def reject_constant(token: str) -> None:
+        raise ViewerPackagingError(f"{label} contains non-finite JSON constant {token}")
+
     try:
-        parsed = json.loads(text, object_pairs_hook=object_pairs)
+        parsed = json.loads(
+            text,
+            object_pairs_hook=object_pairs,
+            parse_constant=reject_constant,
+        )
     except (json.JSONDecodeError, RecursionError) as exc:
         raise ViewerPackagingError(f"{label} is not one unambiguous JSON document") from exc
     if not isinstance(parsed, dict):
@@ -302,7 +317,9 @@ def validate_viewer_package(package_root: Path | None = None) -> ViewerPackage:
     return ViewerPackage(root=root, version=str(version), manifest=manifest, template=template)
 
 
-def _lossless_report_json(report_bytes: bytes) -> tuple[str, dict[str, Any]]:
+def decode_report_document(report_bytes: bytes) -> tuple[str, dict[str, Any]]:
+    """Decode one strict UTF-8 report without duplicate keys or lossy/non-finite numbers."""
+
     try:
         report_text = report_bytes.decode("utf-8", errors="strict")
     except UnicodeDecodeError as exc:
@@ -316,11 +333,15 @@ def _lossless_report_json(report_bytes: bytes) -> tuple[str, dict[str, Any]]:
             result[key] = value
         return result
 
+    def reject_constant(token: str) -> None:
+        raise ViewerPackagingError(f"report contains non-finite JSON constant {token}")
+
     try:
         parsed = json.loads(
             report_text,
             parse_int=Decimal,
             parse_float=Decimal,
+            parse_constant=reject_constant,
             object_pairs_hook=object_pairs,
         )
     except (json.JSONDecodeError, InvalidOperation, RecursionError) as exc:
@@ -631,10 +652,14 @@ def _validate_report_bytes(
     report_bytes: bytes,
     viewer: ViewerPackage,
 ) -> None:
-    version, report = _lossless_report_json(report_bytes)
+    version, report = decode_report_document(report_bytes)
     schema_bytes, schema = _schema_entries(viewer)[version]
     _report_schema_validate(report, schema)
     _validate_cross_fields(version, report, schema_bytes)
+    try:
+        from_json_dict(report)
+    except (ValueError, TypeError, KeyError, jsonschema.ValidationError) as exc:
+        raise ViewerPackagingError(f"report fails the shared Python contract: {exc}") from exc
 
 
 def _atomic_publish(destination: Path, content: bytes) -> None:
