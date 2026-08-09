@@ -44,8 +44,8 @@ does not name, including a minor numerically later than every named one
 blanket ignore-unknown-minor rule (`docs/adr/0002-report-contract.md:211-214`), which this
 record cited until the amendment landed. The Python validator enforces axis-key equality
 as a second step because JSON Schema cannot express it (`moodboard/report.py:723-771`). A
-browser consumer therefore needs a version gate, a projection restricted to the minors it
-names, and semantic checks after projection.
+browser consumer therefore needs a version gate, an exact typed path for each minor it names,
+and semantic checks after schema validation.
 
 The comparison view has a similarly important gap between shape and meaning. The engine's
 default is three nearest exemplars, ordered by descending cosine similarity with a stable
@@ -57,10 +57,10 @@ ADR-0001 nevertheless makes seeing all three reference images the reason the vie
 (`docs/adr/0001-engine-and-viewer-split.md:15-25,49-56`). The tests must cover the promised
 three-image case and the deficient-report case separately.
 
-The current `moodboard report --html` entry point refuses the operation and identifies the
-separate viewer as unimplemented (`moodboard/cli.py:1029-1042`; `INTERFACES.md:698-706`).
-This record extends ADR-0001, ADR-0002 (amended by ADR-0008, whose v1.1 fields this record's
-fixtures adopt once the engine implements that version), ADR-0004, and ADR-0007, whose component
+The implemented `moodboard report --html` entry point verifies both the report contract and the
+manifest-owned offline viewer, then atomically publishes one self-contained artifact.
+This record extends ADR-0001, ADR-0002 (amended by ADR-0008, whose v1.1 fields the engine now
+emits), ADR-0004, and ADR-0007, whose component
 boundaries and toolchain this record's test layers exercise directly. It changes no score, interval,
 abstention rule, or report field.
 
@@ -110,11 +110,12 @@ output. It also records the pinned browser build, operating-system image, bundle
 digests, viewport configuration, device-pixel ratio, locale, time zone, and colour scheme
 used for each visual baseline.
 
-The report's own provenance remains authoritative for the engine name, engine version, model
-repository and revision, model hash, command, seed, and creation time
-(`moodboard/schema/report_v1_0.schema.json:#/$defs/provenance`). The sidecar is necessary
-because the current report provenance has no engine commit, source-image list, dependency-lock
-digest, generator identity, or browser identity at that schema path.
+The report's own provenance remains authoritative for the engine name and version, model identity,
+structured argument vector and rendered command, seed, creation time, schema identity, and any
+resolved engine-source revision recorded by report v1.1. Candidate and reference content hashes
+identify the report images. The sidecar remains necessary because report provenance deliberately
+does not carry the dependency-lock digest, fixture-generator identity, browser identity, complete
+fixture source-image manifest, or a mandatory engine-source tree digest.
 
 The check command regenerates all source images and reports into a temporary directory, runs
 the engine's validator, verifies the scenario preconditions, and compares the result with the
@@ -236,8 +237,8 @@ fixture of its own.
 | `second-load-resets-state` | Starting report B invalidates report A's request identifier, removes A while loading, and resets selection, hover, focus, and filtering. Successful B publishes only B; failed B shows only B's origin and issues. No index, tie, asset, diagnostic, or delayed completion from A remains. | Hold A's thumbnail probe pending, start and complete B with one identical `asset_id` but different values, then resolve A. Repeat with B failing. Any display or restoration of A, transition away from B, or stale score, reference, focus, tie, or diagnostic is a failure. |
 | `thumbnail-preflight-ownership` | `LoadingView` remains visible, with no report values, until every safe selected thumbnail probe settles. On legacy input, a rejected image is an immutable diagnostic and labelled slot on the first `ready` render; probe-mechanism failure enters `failed` with no partial model. | Include unresolved, invalid-base64, and unsupported-MIME exemplars beside one delayed safe source and one rejected safe source. Probing any unsafe case, an early or invisible loading state, a diagnostic added after `ready`, or a partially rendered fatal case is a failure. |
 | `thumbnail-post-ready-fallback` | If an image element fails after its source passed preflight, only that cell switches to the exact labelled fallback while identifier, position label, similarity, and immutable model diagnostics remain unchanged. | Dispatch an `error` event on one rendered preflighted image. A blank image, changed shared diagnostic, or affected sibling cell is a failure. |
-| `version-policy-in-both-modes` | A v1.0 report passes exact validation against the production consumer contract, whose `supported_minor_versions` is `["1.0"]` until ADR-0008 is accepted. Against a test consumer contract whose `supported_minor_versions` includes `"1.1"`, a synthetic v1.1 report with unknown fields at the root, under `board`, and inside an asset interval renders its known projection, displays `1.1`, and names every ignored path through local-file loading and `moodboard report REPORT_JSON --html OUTPUT_HTML`. The identical v1.1 fixture run against the production consumer contract is refused as an unsupported minor, naming the supported and received minors. A v2.0 report is refused in both modes before asset data is rendered. | Change only `schema_version` from `1.0` to `2.0`. Any HTML output file, rendered score, or error that omits the supported and received majors is a failure. Separately, run the v1.1 fixture against the production contract: any projection, rendered value, or written HTML output instead of a named-minor refusal is a failure. |
-| `minor-open-map-data` | Against the same test consumer contract used by `version-policy-in-both-modes`, the v1.1 fixture adds `texture` to `board.representation.axes` and a numeric `axes.texture` to every asset. Both loading modes retain and render that declared axis while still diagnosing the unknown structural fields. | Run the fixture through a projector that treats every object as closed. A missing texture row or an ignored-path diagnostic for `axes.texture` is a failure. |
+| `version-policy-in-both-modes` | The production consumer contract names exactly `1.0` and `1.1`. Each version passes its own exact schema and typed decoder through local-file loading and `moodboard report REPORT_JSON --html OUTPUT_HTML`; v1.0 remains visibly legacy and is never relabelled. Reports `1.2`, `2.0`, malformed, or missing a version are refused before asset content is interpreted. Unknown structural fields in either named version fail its closed schema rather than being projected away. | Give an unknown-version report a malformed first score and require `unsupported_schema_version`, not a score error or partial output. Add one unknown root field to v1.1 and require schema refusal. Any projection, relabelling, rendered value, or written HTML output for either mutation is a failure. |
+| `minor-axis-extension-is-versioned` | Report v1.1 accepts only the governed style/palette/tone/composition definitions and exact matching asset key sets. A new `texture` axis requires a later named report minor with its own method definition; it cannot be smuggled into v1.1's open scalar map. | Add `texture` to `board.representation.axes`, every asset's axes, and `axis_definitions` without changing `schema_version`. Both loading modes must refuse the v1.1 document rather than render or silently omit texture. |
 | `branch-exhaustiveness` | A scored asset renders its score, interval, and rank. An abstained asset renders its reason, explanation, and measurement with no numeric score region. | Add `score: 0`, `interval`, or `rank` to an abstained asset, and separately remove `interval` from a scored asset. Every mutated report must fail decoding. |
 | `identity-integrity` | Asset and reference indexes contain unique identifiers, and each asset contains unique exemplar identifiers. | Duplicate an `asset_id`, duplicate a `reference_id`, and repeat one exemplar identifier within an asset in three independent mutations. Each must fail with the duplicate's JSON path. |
 | `score-axis-equality` | Every scored asset has `score === axes.style`, while every abstained asset has `axes.style === null`. | Change only `axes.style` on a scored asset and change only `axes.style` from null on an abstained asset. Both reports must fail before rendering. |

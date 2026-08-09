@@ -8,22 +8,10 @@ pins their signatures. It produces `Interval` values defined in `report.py` and 
 define its own; it never imports `abstain.py`, `board.py` or `cli.py`, which sit downstream of
 it in the module map.
 
-**A pinned-signature gap, recorded rather than worked around.** ADR-0003 fixes
-k = min(5, n - 1) as part of the score's definition, not as a free-standing registered number,
-and `conformal_p_value`'s signature (two arguments, no k) leaves no parameter to carry it in.
-INTERFACES.md's prose claims this cap is "read from eval/thresholds.json at runtime", and that
-claim does not hold: `eval/thresholds.json`, read in full before writing this module, carries
-only the ADRs' pass/fail acceptance bars (AUC minimums, coverage floors, false-abstention
-rates and the like) and no key for this cap, for the category-partition cut, the duplicate cut
-or the far-outlier IQR multiplier. Where a pinned signature accepts these as a parameter
-(`nonconformity_scores`'s `k`, `partition_categories`'s `cut`, `duplicate_groups`'s `cut`,
-`loo_jackknife_plus_interval`'s and `paired_score_difference_interval`'s `k`), this module reads
-nothing from the threshold file itself and simply takes the caller's value, which is where the
-contract's "read every acceptance-relevant constant from eval/thresholds.json at runtime" is
-honoured: by the caller that has a value to load. Where no parameter exists to carry it
-(`conformal_p_value`'s internal k, and `partition_categories`'s `min_category_size` default),
-the ADR's own fixed number is named as a module constant instead of being silently invented,
-and is called out here so a reader does not mistake it for a value this module chose.
+Every score-moving fitting parameter is supplied by the caller. In particular,
+`conformal_p_value` receives the board's stored effective `k` and clamps it only when a
+category or leave-one-out fold has fewer available neighbours. It never reloads a mutable
+threshold registry or substitutes its own neighbourhood cap.
 
 **A second gap, in the leave-one-out interval functions.** Their docstrings in INTERFACES.md
 describe recomputing `partition_categories` and `duplicate_groups` inside every fold, "on the
@@ -58,11 +46,6 @@ __all__ = [
     "paired_score_difference_interval",
     "partition_categories",
 ]
-
-# ADR-0003: "the nonconformity measure is therefore pinned as ... k = min(5, n - 1)". Named
-# here because `conformal_p_value`'s pinned signature has no parameter to carry it; see the
-# module docstring for why this is not read from eval/thresholds.json.
-_STYLE_K_CAP = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,11 +107,13 @@ def _augmented_p_value(
     return (1 + tie_inclusive_count) / (n + 1)
 
 
-def conformal_p_value(reference_embeddings: np.ndarray, candidate_embedding: np.ndarray) -> float:
+def conformal_p_value(
+    reference_embeddings: np.ndarray, candidate_embedding: np.ndarray, k: int
+) -> float:
     """ADR-0003's symmetric full-conformal p-value, exactly.
 
     Forms the augmented bag of `n + 1` observations (the `n` references, then the candidate)
-    and computes the same nonconformity measure, k = min(5, n), over every member of it,
+    and computes the same nonconformity measure, `min(k, n)`, over every member of it,
     including the candidate: each reference's own alpha is computed with the candidate present
     in its neighbour pool. Returns `(1 + count(alpha_i >= alpha_cand)) / (n + 1)`, ties counted
     in the numerator. The candidate is never one of the `n` references passed in; this
@@ -137,8 +122,9 @@ def conformal_p_value(reference_embeddings: np.ndarray, candidate_embedding: np.
     n = np.asarray(reference_embeddings).shape[0]
     if n < 1:
         raise ValueError("conformal_p_value requires at least one reference embedding")
-    k = min(_STYLE_K_CAP, n)
-    return _augmented_p_value(reference_embeddings, candidate_embedding, k)
+    if not isinstance(k, int) or isinstance(k, bool) or k < 1:
+        raise ValueError(f"k must be a positive plain integer; got {k!r}")
+    return _augmented_p_value(reference_embeddings, candidate_embedding, min(k, n))
 
 
 def _pairwise_cosine_distance(bag: np.ndarray) -> np.ndarray:

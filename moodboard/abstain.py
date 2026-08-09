@@ -423,6 +423,9 @@ def check_far_outlier(
     candidate_alpha: float,
     board_reference_alphas: Sequence[float],
     thresholds: AbstentionThresholds | None = None,
+    *,
+    far_outlier_iqr_multiplier: float | None = None,
+    far_outlier_iqr_multiplier_source: str | None = None,
 ) -> AbstentionVerdict | None:
     """ADR-0004 rule 3: refuse when the candidate is a gross outlier against the whole board.
 
@@ -441,6 +444,10 @@ def check_far_outlier(
     carries `abstention.far_outlier.iqr_multiplier`; see the module docstring. The interquartile
     range uses the type-7 quantile convention, which is numpy's default and the convention
     `conformal.py` already uses for its intervals.
+
+    The CLI always supplies the multiplier and source persisted in the verified board. The
+    optional ``thresholds`` fallback remains for direct rule evaluation and tests; passing the
+    stored policy means this function performs no registry discovery.
 
     The explanation states that the candidate is nothing like these references, in plain language.
     It never mentions a medium, a file type or a format: ADR-0004 withdrew that framing on the
@@ -461,9 +468,28 @@ def check_far_outlier(
     if not np.isfinite(candidate):
         raise ValueError(f"candidate_alpha must be finite; got {candidate_alpha!r}")
 
-    if thresholds is None:
-        thresholds = load_abstention_thresholds()
-    multiplier = thresholds.far_outlier_iqr_multiplier
+    if far_outlier_iqr_multiplier is None:
+        if thresholds is None:
+            thresholds = load_abstention_thresholds()
+        multiplier = thresholds.far_outlier_iqr_multiplier
+        multiplier_source = thresholds.far_outlier_iqr_multiplier_source
+    else:
+        if thresholds is not None:
+            raise ValueError("pass either thresholds or a stored far-outlier policy, not both")
+        if (
+            isinstance(far_outlier_iqr_multiplier, bool)
+            or not isinstance(far_outlier_iqr_multiplier, (int, float))
+            or not np.isfinite(far_outlier_iqr_multiplier)
+            or far_outlier_iqr_multiplier < 0
+        ):
+            raise ValueError("far_outlier_iqr_multiplier must be a finite non-negative number")
+        if (
+            not isinstance(far_outlier_iqr_multiplier_source, str)
+            or not far_outlier_iqr_multiplier_source
+        ):
+            raise ValueError("far_outlier_iqr_multiplier_source must be a non-empty string")
+        multiplier = float(far_outlier_iqr_multiplier)
+        multiplier_source = far_outlier_iqr_multiplier_source
 
     reference_max = float(alphas.max())
     q1 = float(np.quantile(alphas, 0.25, method="linear"))
@@ -480,7 +506,7 @@ def check_far_outlier(
         "reference_iqr": reference_iqr,
         "threshold": threshold,
         "iqr_multiplier": multiplier,
-        "iqr_multiplier_source": thresholds.far_outlier_iqr_multiplier_source,
+        "iqr_multiplier_source": multiplier_source,
     }
     explanation = (
         "This asset is nothing like the references on this board. Its distance from the board "
@@ -498,6 +524,9 @@ def evaluate_abstention(
     board_reference_alphas: Sequence[float],
     board_duplicate_groups: Iterable[Sequence[int]] | None = None,
     thresholds: AbstentionThresholds | None = None,
+    *,
+    far_outlier_iqr_multiplier: float | None = None,
+    far_outlier_iqr_multiplier_source: str | None = None,
 ) -> AbstentionVerdict | None:
     """Run the rules in order and return the one verdict the report carries, or None to score.
 
@@ -514,4 +543,10 @@ def evaluate_abstention(
     resolution = check_resolution(partition, requested_alpha, board_duplicate_groups)
     if resolution is not None:
         return resolution
-    return check_far_outlier(candidate_alpha, board_reference_alphas, thresholds)
+    return check_far_outlier(
+        candidate_alpha,
+        board_reference_alphas,
+        thresholds,
+        far_outlier_iqr_multiplier=far_outlier_iqr_multiplier,
+        far_outlier_iqr_multiplier_source=far_outlier_iqr_multiplier_source,
+    )

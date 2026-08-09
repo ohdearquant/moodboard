@@ -2,6 +2,8 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-07
+- **Amended by:** [ADR-0008](0008-report-contract-for-viewer.md), which preserves report v1.0 as a
+  closed historical contract and defines report v1.1 plus exact named-minor dispatch.
 - **Measurable claim:** yes. The report states an interval around every score and calls two
   assets tied when their intervals overlap. That is a claim about coverage and it is
   falsifiable. Dataset row: `interval-coverage` in [`DATASETS.md`](../../DATASETS.md).
@@ -211,6 +213,12 @@ silently, and in the direction where each side looks correct on its own.
 `schema_version` is `major.minor`. A minor version may add fields. A major version may
 remove or change the meaning of a field. A consumer must ignore fields it does not know and
 must refuse a major version it does not support rather than reading it partially.
+
+ADR-0008 amends this compatibility paragraph. The implemented v1.0 schema is exact and closed, so
+consumers support only the complete minor versions they name: a v1.1 consumer validates v1.0 or
+v1.1 with its corresponding schema, while v1.0 consumers refuse v1.1 and every consumer refuses an
+unknown minor before interpreting payload content. No consumer strips fields, rewrites a version,
+or relabels a v1.0 report as v1.1.
 
 ## Acceptance criterion, and the dataset behind it
 

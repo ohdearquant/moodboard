@@ -1,0 +1,791 @@
+import {
+  type CSSProperties,
+  type ChangeEvent,
+  type Dispatch,
+  type KeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
+
+import { createReportDecoder } from "./decoder";
+import { axisDefinitionFallback, flattenMeasurement, formatNumber, humanizeToken, shortDigest } from "./format";
+import type {
+  AbstainedAsset,
+  Asset,
+  AxisDefinition,
+  ImageIdentity,
+  Interval,
+  ReferenceEntry,
+  ReportIssue,
+  ReportModel,
+  SafeThumbnailSource,
+  ScoredAsset,
+} from "./model";
+import {
+  abstainedAssets,
+  activeAssetId,
+  initialViewerState,
+  rankedAssets,
+  type OutcomeFilter,
+  type ViewerAction,
+  viewerReducer,
+} from "./state";
+import { EmbeddedSource, hasEmbeddedPayload, LocalFileSource, type ReportSource } from "./sources";
+
+const decoder = createReportDecoder();
+
+function Wordmark(): ReactNode {
+  return (
+    <div className="wordmark" aria-label="Moodboard">
+      <span className="wordmark-mark" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      <span>moodboard</span>
+    </div>
+  );
+}
+
+function FileControl({ onFile }: { readonly onFile: (file: File) => void }): ReactNode {
+  const input = useRef<HTMLInputElement>(null);
+  const onChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.item(0);
+    if (file) onFile(file);
+    event.target.value = "";
+  };
+  return (
+    <>
+      <input
+        ref={input}
+        className="visually-hidden"
+        type="file"
+        accept="application/json,.json"
+        onChange={onChange}
+      />
+      <button className="button button-primary" type="button" onClick={() => input.current?.click()}>
+        Open a report
+      </button>
+    </>
+  );
+}
+
+function AwaitingFileView({ onFile }: { readonly onFile: (file: File) => void }): ReactNode {
+  return (
+    <main className="start-page">
+      <header className="start-header">
+        <Wordmark />
+        <span className="offline-pill">Offline viewer</span>
+      </header>
+      <section className="start-hero" aria-labelledby="start-title">
+        <p className="eyebrow">Governed visual review</p>
+        <h1 id="start-title">Does the work belong—<em>and what evidence says so?</em></h1>
+        <p className="start-copy">
+          Open a Moodboard report to inspect compatibility evidence, board cohesion, intentional
+          diversity, and uncertainty without sending imagery or provenance anywhere.
+        </p>
+        <div className="start-actions">
+          <FileControl onFile={onFile} />
+          <span>JSON · processed on this device · no network</span>
+        </div>
+      </section>
+      <section className="start-principles" aria-label="Measurement principles">
+        <article>
+          <span>01</span>
+          <h2>Compatibility is evidence</h2>
+          <p>A conformal inlier p-value is not an approval probability or taste score.</p>
+        </article>
+        <article>
+          <span>02</span>
+          <h2>Uncertainty stays visible</h2>
+          <p>Intervals, ties, and refusals remain primary outcomes—not footnotes.</p>
+        </article>
+        <article>
+          <span>03</span>
+          <h2>Every asset is traceable</h2>
+          <p>Images stay inline; hashes, model identity, and invocation remain inspectable.</p>
+        </article>
+      </section>
+    </main>
+  );
+}
+
+function LoadingView({ label }: { readonly label: string }): ReactNode {
+  return (
+    <main className="status-page" aria-live="polite" aria-busy="true">
+      <Wordmark />
+      <div className="loading-mark" aria-hidden="true"><i /><i /><i /></div>
+      <p className="eyebrow">{label}</p>
+      <h1>Validating report and inline images</h1>
+      <p>No report values are shown until the complete contract passes.</p>
+    </main>
+  );
+}
+
+function IssueList({ issues }: { readonly issues: readonly ReportIssue[] }): ReactNode {
+  return (
+    <ol className="issue-list">
+      {issues.map((issue, index) => (
+        <li key={`${issue.severity}-${issue.code}-${issue.path}-${index}`}>
+          <strong>{issue.code}</strong>
+          <code>{issue.path}</code>
+          <span>{issue.message}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function LoadErrorView({
+  label,
+  issues,
+  allowFile,
+  onFile,
+}: {
+  readonly label: string;
+  readonly issues: readonly ReportIssue[];
+  readonly allowFile: boolean;
+  readonly onFile: (file: File) => void;
+}): ReactNode {
+  return (
+    <main className="status-page status-error">
+      <Wordmark />
+      <p className="eyebrow">Report refused · {label}</p>
+      <h1>Nothing was partially rendered.</h1>
+      <p>The report did not satisfy the supported 1.0 or 1.1 contract.</p>
+      <IssueList issues={issues} />
+      {allowFile ? <FileControl onFile={onFile} /> : null}
+    </main>
+  );
+}
+
+function FlagList({ flags }: { readonly flags: readonly string[] }): ReactNode {
+  if (flags.length === 0) return null;
+  return (
+    <ul className="flag-list" aria-label="Diagnostics">
+      {flags.map((flag) => <li key={flag}>{humanizeToken(flag)}</li>)}
+    </ul>
+  );
+}
+
+interface IntervalStyle extends CSSProperties {
+  "--interval-low": string;
+  "--interval-high": string;
+  "--interval-score": string;
+}
+
+function IntervalMark({ score, interval, compact = false }: {
+  readonly score: number;
+  readonly interval: Interval;
+  readonly compact?: boolean;
+}): ReactNode {
+  const style: IntervalStyle = {
+    "--interval-low": `${interval.low * 100}%`,
+    "--interval-high": `${interval.high * 100}%`,
+    "--interval-score": `${score * 100}%`,
+  };
+  const zeroWidth = interval.low === interval.high;
+  const accessible = `Reported inlier p-value ${formatNumber(score)}. Stated level ${formatNumber(interval.level)} interval ${formatNumber(interval.low)} to ${formatNumber(interval.high)}. Method ${interval.method}.${zeroWidth ? " Zero-width interval." : ""}`;
+  return (
+    <div className={`interval ${compact ? "interval-compact" : ""}`} aria-label={accessible}>
+      <div className="interval-scale" style={style} aria-hidden="true">
+        <span className={`interval-band ${zeroWidth ? "interval-band-zero" : ""}`} />
+        <span className="interval-point" />
+      </div>
+      <div className="interval-labels">
+        <span><b>{formatNumber(interval.low)}</b> low</span>
+        <span><b>{formatNumber(score)}</b> p-value</span>
+        <span><b>{formatNumber(interval.high)}</b> high</span>
+      </div>
+      {compact ? null : (
+        <p className="interval-method">
+          Level {formatNumber(interval.level)} · {interval.method}
+          {zeroWidth ? " · zero-width interval" : ""}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SafeImage({
+  source,
+  alt,
+  fallback,
+}: {
+  readonly source: SafeThumbnailSource | undefined;
+  readonly alt: string;
+  readonly fallback: string;
+}): ReactNode {
+  const [failed, setFailed] = useState(false);
+  if (!source || failed) return <div className="image-fallback" role="img" aria-label={fallback}>{fallback}</div>;
+  return <img src={source} alt={alt} onError={() => setFailed(true)} />;
+}
+
+function CandidatePreview({ asset, model }: { readonly asset: Asset; readonly model: ReportModel }): ReactNode {
+  const image = asset.image;
+  const source = model.candidateSources.get(asset.asset_id);
+  return (
+    <section className="candidate-preview" aria-label={`Candidate ${asset.asset_id}`}>
+      <div className="preview-kicker"><span>Candidate</span><span>{asset.state}</span></div>
+      <div className="candidate-frame">
+        {image ? (
+          <SafeImage
+            source={source}
+            alt={`Inline preview for candidate ${asset.asset_id}`}
+            fallback="Candidate preview could not be rendered."
+          />
+        ) : (
+          <div className="image-fallback legacy-preview" role="img" aria-label="Candidate image unavailable">
+            Candidate image was not included in report version 1.0.
+          </div>
+        )}
+      </div>
+      <div className="identity-lines">
+        <strong>{asset.asset_id}</strong>
+        <span title={asset.source}>Recorded source: {asset.source}</span>
+        {image ? (
+          <>
+            <span title={image.content_sha256}>Content SHA-256 · {shortDigest(image.content_sha256)}</span>
+            <span>{image.mime} · {image.width} × {image.height}</span>
+          </>
+        ) : <span>Candidate content identity unavailable in v1.0</span>}
+      </div>
+    </section>
+  );
+}
+
+const ORDINALS = ["First", "Second", "Third"] as const;
+
+function ReferenceCell({
+  exemplar,
+  reference,
+  source,
+  index,
+  strict,
+}: {
+  readonly exemplar: Asset["exemplars"][number] | undefined;
+  readonly reference: ReferenceEntry | undefined;
+  readonly source: SafeThumbnailSource | undefined;
+  readonly index: number;
+  readonly strict: boolean;
+}): ReactNode {
+  const position = ORDINALS[index] ?? `Position ${index + 1}`;
+  const relation = strict ? "closest reference" : "reported exemplar";
+  return (
+    <article className="reference-cell">
+      <p className="reference-position">{position} {relation}</p>
+      <div className="reference-frame">
+        {exemplar && reference ? (
+          <SafeImage
+            source={source}
+            alt={`${position} ${relation}: ${reference.reference_id}`}
+            fallback="Reference preview is not safely renderable from this report."
+          />
+        ) : (
+          <div className="image-fallback" role="img" aria-label={`Missing ${relation}`}>
+            {exemplar ? "Reference identifier did not resolve." : `Report did not supply this ${relation}.`}
+          </div>
+        )}
+      </div>
+      <div className="reference-caption">
+        <strong>{reference?.reference_id ?? exemplar?.reference_id ?? "Not supplied"}</strong>
+        <span>Similarity {exemplar ? formatNumber(exemplar.similarity) : "unavailable"}</span>
+        {reference ? (
+          <>
+            <span title={reference.content_sha256}>SHA-256 · {shortDigest(reference.content_sha256)}</span>
+            <span>{reference.mime} · {reference.width} × {reference.height}</span>
+            <span>Preview {reference.thumbnail.mime} · {reference.thumbnail.width} × {reference.thumbnail.height}</span>
+          </>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function ReferenceTriptych({ asset, model }: { readonly asset: Asset; readonly model: ReportModel }): ReactNode {
+  const strict = model.report.schema_version === "1.1";
+  const count = strict ? Math.min(3, model.report.references.length) : 3;
+  const exemplars = asset.exemplars.slice(0, count);
+  return (
+    <section className="reference-evidence" aria-label={`Reference comparison for ${asset.asset_id}`}>
+      <div className="section-title-row">
+        <div>
+          <p className="eyebrow">Visual retrieval evidence</p>
+          <h4>{strict ? "Closest references, together" : "Legacy reported exemplars"}</h4>
+        </div>
+        <span>{exemplars.length}/{count} supplied</span>
+      </div>
+      <p className="evidence-caveat">
+        Nearest references are selected board-wide; compatibility is calibrated within the reported category.
+      </p>
+      <div className="reference-triptych">
+        {Array.from({ length: count }, (_, index) => {
+          const exemplar = exemplars[index];
+          const reference = exemplar ? model.referencesById.get(exemplar.reference_id) : undefined;
+          return (
+            <ReferenceCell
+              key={`${asset.asset_id}-${index}-${exemplar?.reference_id ?? "missing"}`}
+              exemplar={exemplar}
+              reference={reference}
+              source={reference ? model.referenceSources.get(reference.reference_id) : undefined}
+              index={index}
+              strict={strict}
+            />
+          );
+        })}
+      </div>
+      {!strict ? <p className="legacy-note">Report 1.0 does not guarantee three closest, decodable references.</p> : null}
+    </section>
+  );
+}
+
+function AxisTable({ asset, model }: { readonly asset: Asset; readonly model: ReportModel }): ReactNode {
+  const ids = ["style", ...model.report.board.representation.axes];
+  const recorded = model.report.board.representation.axis_definitions;
+  const definitions = ids.map((axisId) => recorded?.find((item) => item.axis_id === axisId) ?? axisDefinitionFallback(axisId));
+  return (
+    <section className="axis-section" aria-labelledby={`axes-${asset.asset_id}`}>
+      <div className="section-title-row">
+        <div>
+          <p className="eyebrow">Unblended diagnostics</p>
+          <h4 id={`axes-${asset.asset_id}`}>{recorded ? "Axis details" : "Legacy axis values"}</h4>
+        </div>
+        <span>{definitions.length} separate measures</span>
+      </div>
+      {!recorded ? <p className="legacy-note">Axis method revision was not recorded in report version 1.0.</p> : null}
+      <div className="axis-table" role="table" aria-label={`Axis values for ${asset.asset_id}`}>
+        {definitions.map((definition) => (
+          <AxisRow key={definition.axis_id} definition={definition} value={asset.axes[definition.axis_id]} legacy={!recorded} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AxisRow({ definition, value, legacy }: {
+  readonly definition: AxisDefinition;
+  readonly value: number | null | undefined;
+  readonly legacy: boolean;
+}): ReactNode {
+  return (
+    <div className="axis-row" role="row">
+      <div role="cell">
+        <strong>{definition.label}</strong>
+        <span>{definition.value_kind === "conformal_p_value" ? "Compatibility evidence" : "Classical visual distance"}</span>
+      </div>
+      <div className="axis-value" role="cell">{value == null ? "Unavailable" : formatNumber(value)}</div>
+      <div role="cell">
+        <span>{humanizeToken(definition.direction)}</span>
+        <span>{definition.uncertainty === "asset_interval" ? "Interval reported above" : legacy ? "Interval not reported in version 1.0" : "No interval reported"}</span>
+      </div>
+      <div role="cell">
+        <span>{humanizeToken(definition.aggregation)}</span>
+        <span>{legacy ? "Method revision not recorded" : `${definition.method.name} · r${definition.method.revision}`}</span>
+      </div>
+    </div>
+  );
+}
+
+function ScoredOutcome({ asset }: { readonly asset: ScoredAsset }): ReactNode {
+  return (
+    <section className="outcome outcome-scored" aria-labelledby={`outcome-${asset.asset_id}`}>
+      <div className="outcome-heading">
+        <div>
+          <p className="eyebrow">Compatibility evidence</p>
+          <h4 id={`outcome-${asset.asset_id}`}>Rank {asset.rank} · reported inlier p-value {formatNumber(asset.score)}</h4>
+        </div>
+        <span className="category-pill">{asset.category_id} · n={asset.n_local}</span>
+      </div>
+      <p className="honesty-note">This is evidence of fit to the board—not approval probability, taste, or confidence in a human decision.</p>
+      <IntervalMark score={asset.score} interval={asset.interval} />
+    </section>
+  );
+}
+
+function AbstainedOutcome({ asset }: { readonly asset: AbstainedAsset }): ReactNode {
+  const leaves = flattenMeasurement(asset.measurement);
+  return (
+    <section className="outcome outcome-abstained" aria-labelledby={`outcome-${asset.asset_id}`}>
+      <div className="outcome-heading">
+        <div>
+          <p className="eyebrow">Uncertainty / refusal</p>
+          <h4 id={`outcome-${asset.asset_id}`}>No style score was issued.</h4>
+        </div>
+        <span className="abstention-pill">{humanizeToken(asset.reason)}</span>
+      </div>
+      <p className="abstention-copy">{asset.explanation}</p>
+      <dl className="measurement-tree">
+        {leaves.map((leaf) => (
+          <div key={leaf.path}>
+            <dt>{leaf.path}</dt>
+            <dd>{leaf.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+function AssetCard({ asset, model, active, dispatch }: {
+  readonly asset: Asset;
+  readonly model: ReportModel;
+  readonly active: boolean;
+  readonly dispatch: Dispatch<ViewerAction>;
+}): ReactNode {
+  const selectOnKey = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      dispatch({ type: "select", assetId: asset.asset_id });
+    }
+  };
+  return (
+    <article
+      className={`asset-card asset-${asset.state} ${active ? "asset-active" : ""}`}
+      tabIndex={0}
+      aria-label={`${asset.asset_id}, ${asset.state}`}
+      onMouseEnter={() => dispatch({ type: "hover", assetId: asset.asset_id })}
+      onMouseLeave={() => dispatch({ type: "hover", assetId: null })}
+      onFocus={() => dispatch({ type: "focus", assetId: asset.asset_id })}
+      onBlur={() => dispatch({ type: "focus", assetId: null })}
+      onClick={() => dispatch({ type: "select", assetId: asset.asset_id })}
+      onKeyDown={selectOnKey}
+    >
+      <header className="asset-header">
+        <span className="asset-index">{asset.state === "scored" ? String(asset.rank).padStart(2, "0") : "—"}</span>
+        <div>
+          <p className="eyebrow">{asset.state === "scored" ? "Ranked candidate" : "Unranked candidate"}</p>
+          <h3>{asset.asset_id}</h3>
+        </div>
+        <FlagList flags={asset.flags} />
+      </header>
+      <div className="evidence-layout">
+        <CandidatePreview asset={asset} model={model} />
+        <ReferenceTriptych asset={asset} model={model} />
+      </div>
+      {asset.state === "scored" ? <ScoredOutcome asset={asset} /> : <AbstainedOutcome asset={asset} />}
+      <AxisTable asset={asset} model={model} />
+    </article>
+  );
+}
+
+function StoryStrip({ model }: { readonly model: ReportModel }): ReactNode {
+  const report = model.report;
+  const scored = report.assets.filter((asset) => asset.state === "scored").length;
+  const abstained = report.assets.length - scored;
+  return (
+    <section className="story-strip" aria-label="Board measurement overview">
+      <article className="story-compatibility">
+        <p className="eyebrow">Compatibility</p>
+        <strong>{scored} measured</strong>
+        <span>{abstained} abstained · candidate-level evidence below</span>
+      </article>
+      <article>
+        <p className="eyebrow">Cohesion</p>
+        <strong>{formatNumber(report.board_stats.tightness.loo_quantiles.p50)}</strong>
+        <span>LOO median · p10 {formatNumber(report.board_stats.tightness.loo_quantiles.p10)} · p90 {formatNumber(report.board_stats.tightness.loo_quantiles.p90)}</span>
+      </article>
+      <article>
+        <p className="eyebrow">Diversity / coverage</p>
+        <strong>{formatNumber(report.board.n_eff)} / {report.board.n_references}</strong>
+        <span>effective support · {report.board.categories.length} declared look{report.board.categories.length === 1 ? "" : "s"}</span>
+      </article>
+      <article>
+        <p className="eyebrow">Uncertainty</p>
+        <strong>α {formatNumber(report.board.supported_alpha)}</strong>
+        <span>finest supported distinction · requested α {formatNumber(report.board.requested_alpha)}</span>
+      </article>
+    </section>
+  );
+}
+
+function ScoreOverview({ model, activeId }: { readonly model: ReportModel; readonly activeId: string | null }): ReactNode {
+  const assets = rankedAssets(model);
+  if (assets.length === 0) return null;
+  return (
+    <section className="score-overview" aria-labelledby="overview-heading">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Ranked compatibility</p>
+          <h2 id="overview-heading">Intervals before point estimates.</h2>
+        </div>
+        <p>Fixed 0–1 conformal scale. Rank is supplied by the engine.</p>
+      </div>
+      <div className="overview-grid">
+        {assets.map((asset) => (
+          <article key={asset.asset_id} className={`overview-row ${activeId === asset.asset_id ? "overview-active" : ""}`}>
+            <div><span>#{asset.rank}</span><strong>{asset.asset_id}</strong></div>
+            <IntervalMark score={asset.score} interval={asset.interval} compact />
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TieList({ model }: { readonly model: ReportModel }): ReactNode {
+  const { ties, note } = model.report.comparisons;
+  return (
+    <section className="tie-section" aria-labelledby="tie-heading">
+      <div>
+        <p className="eyebrow">Paired comparisons</p>
+        <h2 id="tie-heading">Ties are relations, not groups.</h2>
+        <p>{note}</p>
+      </div>
+      {ties.length > 0 ? (
+        <ol>
+          {ties.map(([left, right]) => <li key={`${left}\u0000${right}`}><strong>{left}</strong><span>not distinguishable from</span><strong>{right}</strong></li>)}
+        </ol>
+      ) : <p className="empty-inline">No tie pair was reported.</p>}
+    </section>
+  );
+}
+
+function FilterBar({ filter, dispatch, scored, abstained }: {
+  readonly filter: OutcomeFilter;
+  readonly dispatch: Dispatch<ViewerAction>;
+  readonly scored: number;
+  readonly abstained: number;
+}): ReactNode {
+  const options: ReadonlyArray<{ readonly value: OutcomeFilter; readonly label: string; readonly count: number }> = [
+    { value: "all", label: "All outcomes", count: scored + abstained },
+    { value: "scored", label: "Ranked", count: scored },
+    { value: "abstained", label: "Abstained", count: abstained },
+  ];
+  return (
+    <div className="filter-bar" role="group" aria-label="Filter assets by outcome">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          aria-pressed={filter === option.value}
+          onClick={() => dispatch({ type: "filter", filter: option.value })}
+        >
+          {option.label} <span>{option.count}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function AssetCollection({ stateModel, activeId, filter, dispatch }: {
+  readonly stateModel: ReportModel;
+  readonly activeId: string | null;
+  readonly filter: OutcomeFilter;
+  readonly dispatch: Dispatch<ViewerAction>;
+}): ReactNode {
+  const scored = rankedAssets(stateModel);
+  const abstained = abstainedAssets(stateModel) as readonly AbstainedAsset[];
+  if (scored.length + abstained.length === 0) {
+    return <section className="empty-report"><p className="eyebrow">No candidates</p><h2>This report contains board evidence and provenance, but no assets.</h2></section>;
+  }
+  return (
+    <section className="assets-section" aria-labelledby="assets-heading">
+      <div className="section-heading assets-title">
+        <div><p className="eyebrow">Candidate evidence</p><h2 id="assets-heading">Inspect what moved the review.</h2></div>
+        <FilterBar filter={filter} dispatch={dispatch} scored={scored.length} abstained={abstained.length} />
+      </div>
+      {filter !== "abstained" && scored.length > 0 ? (
+        <div className="asset-group">
+          <h3 className="group-title">Ranked candidates <span>engine-provided order</span></h3>
+          {scored.map((asset) => <AssetCard key={asset.asset_id} asset={asset} model={stateModel} active={activeId === asset.asset_id} dispatch={dispatch} />)}
+        </div>
+      ) : null}
+      {filter !== "scored" && abstained.length > 0 ? (
+        <div className="asset-group abstained-group">
+          <h3 className="group-title">Abstained candidates <span>unranked by design</span></h3>
+          {abstained.map((asset) => <AssetCard key={asset.asset_id} asset={asset} model={stateModel} active={activeId === asset.asset_id} dispatch={dispatch} />)}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function KeyValueRows({ value }: { readonly value: Readonly<Record<string, unknown>> }): ReactNode {
+  const rows = Object.entries(value).toSorted(([left], [right]) => left.localeCompare(right));
+  return (
+    <dl className="key-value-rows">
+      {rows.map(([key, raw]) => (
+        <div key={key}><dt>{humanizeToken(key)}</dt><dd>{raw === null ? "null" : typeof raw === "object" ? JSON.stringify(raw) : String(raw)}</dd></div>
+      ))}
+    </dl>
+  );
+}
+
+function DetailsAndProvenance({ model }: { readonly model: ReportModel }): ReactNode {
+  const { board, board_stats: stats, provenance } = model.report;
+  const engineSourceComplete = provenance.engine.source_repository && provenance.engine.source_revision && provenance.engine.source_dirty !== undefined;
+  return (
+    <section className="details-grid">
+      <details>
+        <summary><span>Board & fit</span><small>score-bearing policy</small></summary>
+        <div className="details-body">
+          <KeyValueRows value={{
+            board_id: board.id,
+            built_at: board.built_at,
+            references: board.n_references,
+            effective_references: board.n_eff,
+            categories: board.categories.length,
+            model: board.representation.style.model,
+            model_revision: board.representation.style.revision,
+            dimensions: board.representation.style.dim,
+          }} />
+          <h3>Fit policy</h3>
+          <KeyValueRows value={board.fit} />
+          <h3>Board flags</h3>
+          <FlagList flags={stats.flags} />
+          {stats.flags.length === 0 ? <p>No board-level flags were reported.</p> : null}
+          <h3>Reference leverage</h3>
+          <ol className="leverage-list">
+            {stats.leverage.map((item) => <li key={item.reference_id}><span>#{item.rank} {item.reference_id}</span><strong>{formatNumber(item.delta_tightness)}</strong></li>)}
+          </ol>
+        </div>
+      </details>
+      <details>
+        <summary><span>Provenance & identity</span><small>model, schema, invocation</small></summary>
+        <div className="details-body">
+          <h3>Engine</h3>
+          <KeyValueRows value={{ name: provenance.engine.name, version: provenance.engine.version }} />
+          {engineSourceComplete ? (
+            <KeyValueRows value={{
+              source_repository: provenance.engine.source_repository,
+              source_revision: provenance.engine.source_revision,
+              source_dirty: provenance.engine.source_dirty,
+            }} />
+          ) : <p className="unavailable-note">Engine source revision was not recorded.</p>}
+          {provenance.engine.source_dirty ? <p className="warning-note">Dirty source: this report cannot be reproduced from the named revision alone.</p> : null}
+          <h3>Visual model / descriptor</h3>
+          <KeyValueRows value={{ ...provenance.model }} />
+          <h3>Khive / BlobStore identity</h3>
+          <p className="unavailable-note">
+            Report 1.1 records each asset’s original SHA-256 and source string above, but it does
+            not carry a Khive BlobStore content_ref. This viewer never guesses a locator from a
+            path, asset id, or thumbnail.
+          </p>
+          <h3>Preference learning</h3>
+          <p className="unavailable-note">
+            A learned FANN preference probability is not part of this report. It remains separate
+            from the exact conformal compatibility evidence.
+          </p>
+          <h3>Schema</h3>
+          {provenance.schema ? <KeyValueRows value={{ ...provenance.schema }} /> : <p className="unavailable-note">Schema hash was not recorded in report version 1.0.</p>}
+          <h3>Run</h3>
+          <KeyValueRows value={{ created_at: provenance.created_at, seed: provenance.seed }} />
+          <details className="command-details">
+            <summary>Reveal potentially sensitive invocation</summary>
+            <p>{provenance.command}</p>
+            {provenance.argv ? <ol>{provenance.argv.map((token, index) => <li key={`${index}-${token}`}>{token}</li>)}</ol> : <p>Structured argv was not recorded in report version 1.0.</p>}
+          </details>
+        </div>
+      </details>
+    </section>
+  );
+}
+
+function ReportDiagnostics({ model }: { readonly model: ReportModel }): ReactNode {
+  if (model.diagnostics.length === 0) return null;
+  return (
+    <section className="diagnostics" aria-labelledby="diagnostics-heading">
+      <div><p className="eyebrow">Compatibility diagnostics</p><h2 id="diagnostics-heading">The report opened with limits.</h2></div>
+      <IssueList issues={model.diagnostics} />
+    </section>
+  );
+}
+
+function ReportView({
+  model,
+  activeId,
+  filter,
+  dispatch,
+  onFile,
+}: {
+  readonly model: ReportModel;
+  readonly activeId: string | null;
+  readonly filter: OutcomeFilter;
+  readonly dispatch: Dispatch<ViewerAction>;
+  readonly onFile: (file: File) => void;
+}): ReactNode {
+  const report = model.report;
+  return (
+    <main className="report-page">
+      <header className="report-header">
+        <div className="report-nav">
+          <Wordmark />
+          <div className="report-nav-actions">
+            <span className="experimental-pill">Experimental measurement</span>
+            {model.origin.kind === "local-file" ? <FileControl onFile={onFile} /> : <span className="offline-pill">Standalone · offline</span>}
+          </div>
+        </div>
+        <div className="report-title-grid">
+          <div>
+            <p className="eyebrow">Board review · schema {report.schema_version}</p>
+            <h1>{report.board.name || "Untitled board"}</h1>
+            <p className="report-deck">A governed reading of what fits, where the board stretches, and when the evidence refuses to decide.</p>
+          </div>
+          <dl className="board-identity">
+            <div><dt>Board identity</dt><dd title={report.board.id}>{shortDigest(report.board.id)}</dd></div>
+            <div><dt>Origin</dt><dd>{model.origin.label}</dd></div>
+            <div><dt>Visual model</dt><dd>{report.board.representation.style.model}</dd></div>
+          </dl>
+        </div>
+      </header>
+      <StoryStrip model={model} />
+      <ReportDiagnostics model={model} />
+      <ScoreOverview model={model} activeId={activeId} />
+      <TieList model={model} />
+      <AssetCollection stateModel={model} activeId={activeId} filter={filter} dispatch={dispatch} />
+      <DetailsAndProvenance model={model} />
+      <footer className="report-footer">
+        <Wordmark />
+        <p>Contract and presentation evidence only. External aesthetic validity requires the registered evaluation gates and human reliability study.</p>
+        <span>No network · no recomputation · no merged preference score</span>
+      </footer>
+    </main>
+  );
+}
+
+export function ViewerApp(): ReactNode {
+  const [state, dispatch] = useReducer(viewerReducer, initialViewerState);
+  const nextRequestId = useRef(0);
+  const embeddedStarted = useRef(false);
+
+  const load = useCallback(async (source: ReportSource) => {
+    const requestId = ++nextRequestId.current;
+    dispatch({ type: "load-started", origin: source.origin, requestId });
+    const read = await source.read();
+    if (!read.ok) {
+      dispatch({ type: "load-failed", origin: source.origin, requestId, issues: [read.issue] });
+      return;
+    }
+    const decoded = await decoder.decode(read.bytes, source.origin);
+    if (!decoded.ok) {
+      dispatch({ type: "load-failed", origin: source.origin, requestId, issues: decoded.issues });
+      return;
+    }
+    dispatch({ type: "load-succeeded", origin: source.origin, requestId, model: decoded.model });
+  }, []);
+
+  const onFile = useCallback((file: File) => void load(new LocalFileSource(file)), [load]);
+
+  useEffect(() => {
+    if (!embeddedStarted.current && hasEmbeddedPayload(document)) {
+      embeddedStarted.current = true;
+      void load(new EmbeddedSource(document));
+    }
+  }, [load]);
+
+  const activeId = useMemo(() => activeAssetId(state), [state]);
+
+  if (state.phase === "awaiting-file") return <AwaitingFileView onFile={onFile} />;
+  if (state.phase === "loading") return <LoadingView label={state.origin.label} />;
+  if (state.phase === "failed") {
+    return <LoadErrorView label={state.origin?.label ?? "Unknown source"} issues={state.issues} allowFile={state.origin?.kind !== "embedded"} onFile={onFile} />;
+  }
+  return <ReportView model={state.model} activeId={activeId} filter={state.outcomeFilter} dispatch={dispatch} onFile={onFile} />;
+}
+
+export const __test = { ReportView };

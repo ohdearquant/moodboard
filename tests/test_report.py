@@ -503,3 +503,12 @@ def test_the_schema_rejects_a_tie_that_is_not_a_pair():
     document["comparisons"]["ties"] = [["a0", "a1", "a2"]]
     with pytest.raises(jsonschema.ValidationError):
         _validate_document(document)
+
+
+def test_the_cross_validator_rejects_duplicate_exemplar_ids_in_frozen_v1_0():
+    duplicate = (
+        Exemplar(reference_id="r0", similarity=0.9),
+        Exemplar(reference_id="r0", similarity=0.8),
+    )
+    with pytest.raises(ValueError, match="duplicate exemplar"):
+        validate_report(_report(assets=(_scored_asset(exemplars=duplicate),)))

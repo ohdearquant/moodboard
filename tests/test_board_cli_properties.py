@@ -9,7 +9,7 @@ Three properties are under test here, each stated in a record rather than invent
    belongs inside this hash".
 2. `moodboard build`, `moodboard rank` and `moodboard report` run end to end on synthetic
    images and produce a report that satisfies the committed JSON Schema.
-3. `moodboard report --html` raises `NotImplementedError`.
+3. `moodboard report --html` atomically writes the verified offline viewer.
 
 Where the properties are quantified rather than exemplified
 -----------------------------------------------------------
@@ -62,7 +62,7 @@ from moodboard.abstain import load_abstention_thresholds
 from moodboard.board import board_hash, read_board, write_board
 from moodboard.conformal import duplicate_groups, kish_n_eff
 from moodboard.encoders import ClassicalEncoder
-from moodboard.report import SCHEMA_PATH
+from moodboard.report import SCHEMA_PATH_V1_1 as SCHEMA_PATH
 
 # ---------------------------------------------------------------------------
 # Generators for the hash population
@@ -74,12 +74,17 @@ from moodboard.report import SCHEMA_PATH
 # against `board_hash`'s own signature below.
 HASHED_INPUTS = (
     "reference_content_hashes",
+    "reference_embeddings",
     "model_repo",
     "model_revision",
     "metric",
     "k",
     "cluster_cut",
     "dup_cut",
+    "k_cap",
+    "min_category_size",
+    "interval_level",
+    "far_outlier_iqr_multiplier",
 )
 
 
@@ -96,14 +101,21 @@ def _arguments(rng: np.random.Generator, n_references: int | None = None) -> dic
     built from those configurations and still collide on the next one added.
     """
     count = n_references if n_references is not None else int(rng.integers(1, 15))
+    embeddings = rng.normal(size=(count, 7)).astype(np.float32)
+    embeddings /= np.linalg.norm(embeddings, axis=1, keepdims=True)
     return {
         "reference_content_hashes": [_content_hash(rng) for _ in range(count)],
+        "reference_embeddings": embeddings,
         "model_repo": f"repo-{rng.integers(0, 10_000)}",
         "model_revision": f"rev-{rng.integers(0, 10_000)}",
         "metric": str(rng.choice(["cosine", "euclidean", "correlation"])),
         "k": int(rng.integers(1, 64)),
         "cluster_cut": round(float(rng.uniform(0.01, 0.99)), 6),
         "dup_cut": round(float(rng.uniform(0.001, 0.5)), 6),
+        "k_cap": int(rng.integers(1, 64)),
+        "min_category_size": int(rng.integers(1, 20)),
+        "interval_level": round(float(rng.uniform(0.5, 0.99)), 6),
+        "far_outlier_iqr_multiplier": round(float(rng.uniform(0.1, 4.0)), 6),
     }
 
 
@@ -114,13 +126,20 @@ def _perturb(arguments: dict, field: str, rng: np.random.Generator) -> dict:
         replacement = list(arguments[field])
         replacement[int(rng.integers(0, len(replacement)))] = _content_hash(rng)
         moved[field] = replacement
+    elif field == "reference_embeddings":
+        replacement = np.array(arguments[field], copy=True)
+        replacement[0] = -replacement[0]
+        moved[field] = replacement
     elif field in {"model_repo", "model_revision", "metric"}:
         moved[field] = arguments[field] + "-moved"
-    elif field == "k":
+    elif field in {"k", "k_cap", "min_category_size"}:
         moved[field] = arguments[field] + int(rng.integers(1, 8))
     else:
         moved[field] = round(arguments[field] + float(rng.uniform(0.001, 0.1)), 9)
-    assert moved[field] != arguments[field], f"the perturbation of {field} did not move it"
+    if field == "reference_embeddings":
+        assert not np.array_equal(moved[field], arguments[field])
+    else:
+        assert moved[field] != arguments[field], f"the perturbation of {field} did not move it"
     return moved
 
 
@@ -132,15 +151,40 @@ def _canonical_digest(arguments: dict) -> str:
     the disagreement worth catching. It is not a refactor of the module under test and must not
     become one.
     """
-    payload = {
+    matrix = np.array(arguments["reference_embeddings"], dtype="<f4", order="C", copy=True)
+    matrix[matrix == 0] = np.float32(0.0)
+    entries = sorted(
+        [content_hash, hashlib.sha256(row.tobytes(order="C")).hexdigest()]
+        for content_hash, row in zip(arguments["reference_content_hashes"], matrix, strict=True)
+    )
+    embedding_payload = {
         "v": 1,
+        "dtype": "float32-le",
+        "shape": list(matrix.shape),
+        "entries": entries,
+    }
+    embedding_digest = hashlib.sha256(
+        json.dumps(embedding_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    payload = {
+        "v": 2,
         "refs": sorted(arguments["reference_content_hashes"]),
+        "reference_embeddings": {
+            "sha256": embedding_digest,
+            "shape": list(matrix.shape),
+            "dtype": "float32-le",
+        },
         "model": {"repo": arguments["model_repo"], "revision": arguments["model_revision"]},
         "fit": {
+            "schema_version": "moodboard-fit-policy.v1",
             "metric": arguments["metric"],
             "k": arguments["k"],
+            "k_cap": arguments["k_cap"],
             "cluster_cut": arguments["cluster_cut"],
             "dup_cut": arguments["dup_cut"],
+            "min_category_size": arguments["min_category_size"],
+            "interval_level": arguments["interval_level"],
+            "far_outlier_iqr_multiplier": arguments["far_outlier_iqr_multiplier"],
         },
     }
     serialised = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -183,6 +227,7 @@ def test_the_digest_is_unchanged_by_every_permutation_of_the_references(n_refere
         shuffled["reference_content_hashes"] = [
             arguments["reference_content_hashes"][index] for index in order
         ]
+        shuffled["reference_embeddings"] = arguments["reference_embeddings"][order]
         assert board_hash(**shuffled) == expected, (
             f"reordering {n_references} references changed the digest under permutation "
             f"{order.tolist()}"
@@ -204,10 +249,20 @@ def test_reordering_is_stable_even_when_two_references_have_the_same_content():
     hashes[3] = hashes[0]
     with_duplicate = {**arguments, "reference_content_hashes": hashes}
 
-    reversed_order = {**arguments, "reference_content_hashes": list(reversed(hashes))}
+    reversed_order = {
+        **arguments,
+        "reference_content_hashes": list(reversed(hashes)),
+        "reference_embeddings": arguments["reference_embeddings"][::-1],
+    }
     assert board_hash(**reversed_order) == board_hash(**with_duplicate)
 
-    without_duplicate = {**arguments, "reference_content_hashes": [*hashes[:3], *hashes[4:]]}
+    without_duplicate = {
+        **arguments,
+        "reference_content_hashes": [*hashes[:3], *hashes[4:]],
+        "reference_embeddings": np.concatenate(
+            [arguments["reference_embeddings"][:3], arguments["reference_embeddings"][4:]]
+        ),
+    }
     assert board_hash(**without_duplicate) != board_hash(**with_duplicate), (
         "dropping one of two identical references left the digest unchanged, so the hash is "
         "over the set of contents rather than over the references"
@@ -268,9 +323,9 @@ def test_distinct_argument_tuples_have_distinct_digests():
     seen: dict[str, str] = {}
     for _ in range(300):
         arguments = _arguments(rng)
-        key = json.dumps(
-            {name: arguments[name] for name in HASHED_INPUTS}, sort_keys=True, default=list
-        )
+        key_fields = {name: arguments[name] for name in HASHED_INPUTS}
+        key_fields["reference_embeddings"] = arguments["reference_embeddings"].tolist()
+        key = json.dumps(key_fields, sort_keys=True)
         digest = board_hash(**arguments)
         assert seen.setdefault(digest, key) == key, (
             f"two different boards hash to {digest}:\n  {seen[digest]}\n  {key}"
@@ -302,7 +357,16 @@ def test_two_inputs_cannot_be_confused_for_each_other_by_running_together(left: 
     """
     rng = np.random.default_rng(11)
     base = _arguments(rng, n_references=2)
-    assert board_hash(**{**base, **left}) != board_hash(**{**base, **right})
+    arguments = []
+    for overrides in (left, right):
+        merged = {**base, **overrides}
+        count = len(merged["reference_content_hashes"])
+        if count != len(base["reference_embeddings"]):
+            merged["reference_embeddings"] = np.repeat(
+                base["reference_embeddings"][:1], count, axis=0
+            )
+        arguments.append(merged)
+    assert board_hash(**arguments[0]) != board_hash(**arguments[1])
 
 
 def test_the_digest_is_the_serialisation_ADR_0005_defines():
@@ -329,11 +393,14 @@ def _sample_board(tmp_path: Path, seed: int = 5):
     rng = np.random.default_rng(seed)
     from moodboard.board import build_board
 
+    embeddings = rng.normal(size=(4, 6)).astype(np.float32)
+    embeddings /= np.linalg.norm(embeddings, axis=1, keepdims=True)
+
     return build_board(
         name="sample",
         reference_ids=[f"ref_{index}.png" for index in range(4)],
         reference_content_hashes=[_content_hash(rng) for _ in range(4)],
-        reference_embeddings=rng.normal(size=(4, 6)).astype(np.float32),
+        reference_embeddings=embeddings,
         model_repo="classical-v1",
         model_revision="1",
         metric="cosine",
@@ -352,9 +419,13 @@ def _sample_board(tmp_path: Path, seed: int = 5):
         ("model", "repo", "someone-elses-encoder"),
         ("model", "revision", "2"),
         ("fit", "metric", "euclidean"),
-        ("fit", "k", 4),
+        ("fit", "k", 2),
         ("fit", "cluster_cut", 0.36),
         ("fit", "dup_cut", 0.06),
+        ("fit", "k_cap", 4),
+        ("fit", "min_category_size", 4),
+        ("fit", "interval_level", 0.8),
+        ("fit", "far_outlier_iqr_multiplier", 2.0),
     ],
 )
 def test_editing_any_hashed_field_in_the_artifact_is_caught_on_read(
@@ -381,7 +452,9 @@ def test_editing_any_hashed_field_in_the_artifact_is_caught_on_read(
         archive.writestr("meta.json", json.dumps(meta))
         archive.writestr("embeddings.npy", embeddings)
 
-    with pytest.raises(ValueError, match="corrupt or was hand-edited"):
+    with pytest.raises(
+        ValueError, match="corrupt or was hand-edited|invalid verified fit metadata"
+    ):
         read_board(edited)
 
 
@@ -404,7 +477,7 @@ def test_a_field_outside_the_hash_is_not_caught_on_read(tmp_path: Path, key: str
     with zipfile.ZipFile(path) as archive:
         meta = json.loads(archive.read("meta.json"))
         embeddings = archive.read("embeddings.npy")
-    meta[key] = {"name": "renamed", "n_eff": 99.0, "built_at": "2000-01-01T00:00:00Z"}[key]
+    meta[key] = {"name": "renamed", "n_eff": 3.5, "built_at": "2000-01-01T00:00:00Z"}[key]
 
     edited = tmp_path / "edited.mb"
     with zipfile.ZipFile(edited, "w") as archive:
@@ -699,6 +772,7 @@ def test_build_writes_an_artifact_whose_id_is_the_hash_of_the_files_on_disk(
 
     assert board.board_id == board_hash(
         digests,
+        board.reference_embeddings,
         encoder.name,
         encoder.revision,
         "cosine",
@@ -803,6 +877,7 @@ def test_a_repeated_reference_file_changes_the_board_and_lowers_its_resolution(
 
     assert board.board_id == board_hash(
         digests,
+        board.reference_embeddings,
         encoder.name,
         encoder.revision,
         "cosine",
@@ -1017,7 +1092,7 @@ def test_report_reads_back_what_rank_wrote_and_summarises_it(ranked: dict):
     """The third command closes the path: rank writes, report reads it back and revalidates."""
     code, out, err = _run(["report", str(ranked["path"])])
     assert code == 0, err
-    assert "is a valid schema 1.0 report" in out
+    assert "is a valid schema 1.1 report" in out
 
     document = ranked["document"]
     scored = [asset for asset in document["assets"] if asset["state"] == "scored"]
@@ -1048,50 +1123,44 @@ def test_report_refuses_a_document_that_no_longer_satisfies_the_contract(
 
 
 # ---------------------------------------------------------------------------
-# report --html: the one refusal in the package
+# report --html: the verified offline artifact
 # ---------------------------------------------------------------------------
 
 
-def test_report_html_raises_not_implemented(ranked: dict, tmp_path: Path):
-    """The viewer is a separate artifact, so this flag refuses rather than writing a part of one."""
+def test_report_html_writes_one_self_contained_artifact(ranked: dict, tmp_path: Path):
     destination = tmp_path / "viewer.html"
-    with pytest.raises(NotImplementedError) as raised:
-        _run(["report", str(ranked["path"]), "--html", str(destination)])
 
-    assert "not implemented" in str(raised.value)
-    assert not destination.exists(), "the refusal still left a file behind"
+    code, _, err = _run(["report", str(ranked["path"]), "--html", str(destination)])
+
+    assert code == 0, err
+    assert destination.read_bytes().startswith(b"<!doctype html>")
 
 
-def test_the_html_refusal_does_not_depend_on_the_report_being_readable(tmp_path: Path):
-    """The refusal comes first, so it cannot be confused with a failure to read the input.
-
-    A flag that raised only after parsing would report the same exception for an unimplemented
-    renderer and for a renderer that worked but was handed a broken file.
-    """
+def test_html_missing_report_is_a_described_failure_and_writes_nothing(tmp_path: Path):
     destination = tmp_path / "viewer.html"
-    with pytest.raises(NotImplementedError):
-        _run(["report", str(tmp_path / "there-is-no-such-report.json"), "--html", str(destination)])
 
+    code, _, err = _run(
+        ["report", str(tmp_path / "there-is-no-such-report.json"), "--html", str(destination)]
+    )
+
+    assert code == 1
+    assert "there-is-no-such-report.json" in err
     assert not destination.exists()
 
 
-def test_the_html_refusal_is_not_swallowed_into_an_exit_code(ranked: dict, tmp_path: Path):
-    """`main` catches the errors it can describe and re-raises this one deliberately.
+def test_html_failure_preserves_an_existing_destination(tmp_path: Path):
+    broken = tmp_path / "broken.json"
+    broken.write_text('{"schema_version":"1.1"}', encoding="utf-8")
+    destination = tmp_path / "viewer.html"
+    destination.write_text("previous-good-artifact", encoding="utf-8")
 
-    An unimplemented surface returning exit code 1 would be indistinguishable from a run that
-    failed, which is the distinction a caller needs in order to know that producing the JSON
-    and handing it to the viewer is the supported path.
-    """
-    with pytest.raises(NotImplementedError):
-        cli.main(["report", str(ranked["path"]), "--html", str(tmp_path / "viewer.html")])
+    code, _, _ = _run(["report", str(broken), "--html", str(destination)])
+
+    assert code == 1
+    assert destination.read_text(encoding="utf-8") == "previous-good-artifact"
 
 
-def test_the_html_flag_is_the_only_unimplemented_surface_in_the_package():
-    """The package allows exactly one `NotImplementedError`, in the HTML renderer.
-
-    Counting the sites rather than trusting the docstring: a stub added later would be caught
-    here even if it was added with a plausible comment beside it.
-    """
+def test_the_package_has_no_unimplemented_surface():
     import ast
 
     package = Path(cli.__file__).parent
@@ -1105,5 +1174,4 @@ def test_the_html_flag_is_the_only_unimplemented_surface_in_the_package():
             if isinstance(raised, ast.Name) and raised.id == "NotImplementedError":
                 sites.append(f"{source_path.name}:{node.lineno}")
 
-    assert len(sites) == 1, f"expected one NotImplementedError in the package, found {sites}"
-    assert sites[0].startswith("cli.py:")
+    assert sites == []
