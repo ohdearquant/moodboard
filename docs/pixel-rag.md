@@ -99,3 +99,19 @@ Preference Model A/B is a separate governed artifact. The viewer may join it by 
 feature-schema, and candidate-pool identity, but the Pixel RAG compiler never fabricates that
 join. Likewise, source and generated image bytes belong in a hash-verified viewer media
 inventory; the viewer must not retain its earlier compile-time report-fixture media IDs.
+
+Freeze a compiled artifact into the offline bundle from the repository root:
+
+```bash
+npm --prefix viewer run pixel-rag:write -- \
+  --input /absolute/path/to/pixel-rag-artifact.json \
+  --write src/generated/pixel-rag-bridge.json
+npm --prefix viewer run build
+```
+
+The input must be the canonical JSON emitted by `write_pixel_rag_artifact`. The bridge embeds
+that same closed artifact and pins its byte length, raw SHA-256, canonical SHA-256, artifact id,
+schema version, and bridge-generator revision. Every viewer build repeats the engine's schema,
+semantic, and identity validation. The checked-in `fallback` sentinel contains no artifact and
+keeps the clearly labelled presentation fixture active until a measured bridge is generated.
+Pixel RAG evidence status never upgrades the independently governed preference panel.

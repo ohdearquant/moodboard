@@ -63,6 +63,7 @@ __all__ = [
     "PixelRagError",
     "compile_pixel_rag_artifact",
     "read_pixel_rag_artifact",
+    "validate_pixel_rag_artifact",
     "write_pixel_rag_artifact",
 ]
 
@@ -765,7 +766,7 @@ def compile_pixel_rag_artifact(
         },
     }
     artifact["artifact_id"] = _artifact_id(artifact)
-    _validate_artifact(artifact)
+    validate_pixel_rag_artifact(artifact)
     return artifact
 
 
@@ -849,11 +850,17 @@ def _validate_artifact(value: Mapping[str, Any]) -> None:
         raise PixelRagError("intent_top3_jaccard does not match the ranked evidence")
 
 
+def validate_pixel_rag_artifact(value: Mapping[str, Any]) -> None:
+    """Validate one closed artifact with the compiler's complete semantic contract."""
+
+    _validate_artifact(value)
+
+
 def write_pixel_rag_artifact(artifact: Mapping[str, Any], destination: Path) -> None:
     """Atomically publish a validated immutable artifact without overwriting a prior run."""
 
     document = dict(artifact)
-    _validate_artifact(document)
+    validate_pixel_rag_artifact(document)
     output = Path(destination)
     output.parent.mkdir(parents=True, exist_ok=True)
     if os.path.lexists(output):
@@ -876,7 +883,7 @@ def read_pixel_rag_artifact(path: Path) -> dict[str, Any]:
     """Read, close-validate, and identity-check one frozen Pixel RAG artifact."""
 
     value, _raw = _load_json(Path(path), label="Pixel RAG artifact")
-    _validate_artifact(value)
+    validate_pixel_rag_artifact(value)
     return value
 
 

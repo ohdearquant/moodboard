@@ -1,7 +1,11 @@
 import {
+  decodePixelRagBridge,
   decodePixelRagArtifact,
+  pixelRagBridge,
   pixelRagArtifact,
+  projectEnginePixelRagArtifact,
   resolvePixelRagMediaSource,
+  verifiedPixelRagArtifact,
 } from "../src/pixel-rag";
 import type { ReportModel, SafeThumbnailSource } from "../src/model";
 
@@ -28,7 +32,250 @@ function measuredArtifact(): any {
   return artifact;
 }
 
+function engineEvidence(
+  rank: number,
+  collection: "fruit-lemon" | "style-claude-lorrain",
+): any {
+  const suffix = collection === "fruit-lemon" ? rank : rank + 3;
+  return {
+    asset_id: `${collection}-${rank}`,
+    artist: `Artist ${suffix}`,
+    collection,
+    image: { format: "PNG", height: 960, width: 1280 },
+    khive: {
+      content_ref: String(suffix).repeat(64),
+      record_id: `00000000-0000-4000-8000-00000000000${suffix}`,
+    },
+    license: {
+      id: "CC0-1.0",
+      public_domain: true,
+      short_name: "CC0",
+      source_url: null,
+      url: "https://creativecommons.org/publicdomain/zero/1.0/",
+    },
+    rank,
+    score: {
+      descriptor_fingerprint: "d".repeat(64),
+      kind: "cosine_similarity",
+      value: 0.9 - rank / 100,
+    },
+    sha256: String(suffix + 1).repeat(64),
+    source_page_url: `https://example.test/${collection}/${rank}`,
+    source_search_rank: rank + 2,
+    title: `${collection} evidence ${rank}`,
+  };
+}
+
+function engineIntent(id: "local_replace" | "global_restyle"): any {
+  const local = id === "local_replace";
+  const collection = local ? "fruit-lemon" : "style-claude-lorrain";
+  const evidence = [1, 2, 3].map((rank) => engineEvidence(rank, collection));
+  return {
+    designer_prompt: local ? "Replace the selected tree." : "Restyle the whole frame.",
+    id,
+    output: local
+      ? {
+          blob_store_registration: {
+            content_ref: "e".repeat(64),
+            record_id: "00000000-0000-4000-8000-000000000009",
+            state: "registered",
+          },
+          generator: {
+            execution_mode: "precomputed_external",
+            provider: "openai-imagegen",
+            service: "Codex built-in ImageGen",
+          },
+          output_content_ref: "e".repeat(64),
+          output_sha256: "f".repeat(64),
+          rollback: {
+            content_ref: "a".repeat(64),
+            record_id: "00000000-0000-4000-8000-000000000001",
+          },
+          state: "precomputed_external_output",
+        }
+      : null,
+    plan: {
+      stages: [
+        ["retrieval", "khive_visual_retrieval"],
+        ["region", "human_confirmation"],
+        ["conditioning", "deterministic_control_plan"],
+        ["external_generation", "external_generator"],
+        ["verification", "recorded_verifier"],
+        ["immutable_output", "khive_blob_store"],
+        ["rollback", "content_ref_pointer"],
+      ].map(([stageId, executor]) => ({ detail: `${stageId} detail`, executor, id: stageId })),
+    },
+    retrieval: {
+      metrics: [
+        {
+          id: "precision_at_3",
+          reason: "explicit relevance judgments were not supplied",
+          source: "measured_run",
+          state: "not_computed",
+          value: null,
+        },
+        {
+          gain_scale: [0, 1, 2, 3],
+          id: "ndcg_at_5",
+          k: 5,
+          source: "measured_run",
+          state: "computed",
+          value: 0.91,
+        },
+      ],
+      ranked_evidence: evidence,
+    },
+    route: {
+      hard_filter: { field: "collection", operator: "equals", value: collection },
+      namespace: `adobe-demo:${id}`,
+      query: {
+        content_ref: local ? "b".repeat(64) : "a".repeat(64),
+        record_id: local
+          ? "00000000-0000-4000-8000-000000000002"
+          : "00000000-0000-4000-8000-000000000001",
+        sha256: local ? "c".repeat(64) : "9".repeat(64),
+      },
+      query_granularity: local ? "human_confirmed_region" : "whole_frame",
+      region: local
+        ? {
+            confirmation: {
+              actor: "operator:demo",
+              confirmed_at: "2026-08-12T18:55:00Z",
+              method: "human_confirmed",
+            },
+            height: 0.9,
+            kind: "normalized_rectangle",
+            label: "tree",
+            width: 0.8,
+            x: 0.1,
+            y: 0.05,
+          }
+        : null,
+    },
+    verification: local
+      ? {
+          metrics: [
+            {
+              id: "outside_mask_ssim",
+              method_revision: "moodboard.outside-mask-ssim.v1",
+              operator: "greater_than_or_equal",
+              passed: false,
+              source: "measured_run",
+              threshold: 0.95,
+              value: 0.38,
+            },
+          ],
+          status: "failed",
+        }
+      : { metrics: [], status: "not_run" },
+  };
+}
+
+function engineArtifact(): any {
+  return {
+    artifact_id: "8".repeat(64),
+    cross_intent_metrics: [
+      {
+        id: "intent_top3_jaccard",
+        intersection_count: 0,
+        source: "measured_run",
+        union_count: 6,
+        value: 0,
+      },
+    ],
+    descriptor: {
+      dimensions: 1024,
+      fingerprint: "d".repeat(64),
+      inference: { provider: "lattice-embed", version: "0.9.0" },
+      model_name: "qwen3.5-vlm-pooled-visual",
+      model_revision: "Qwen/Qwen3.5-0.8B",
+      pooling: "mean_visual_tokens",
+    },
+    evidence_status: "measured_run",
+    intents: [engineIntent("local_replace"), engineIntent("global_restyle")],
+    provenance: {
+      generated_at: "2026-08-12T19:00:00Z",
+      khive_revision: "5e7e73c0e7d8868c6a7aabbde3124ecb42289acc",
+      run_fingerprint: "7".repeat(64),
+    },
+    schema_version: "moodboard.pixel-rag-artifact.v1",
+    source: {
+      asset_id: "fruit_apple_garden",
+      khive: {
+        content_ref: "a".repeat(64),
+        record_id: "00000000-0000-4000-8000-000000000001",
+      },
+      sha256: "9".repeat(64),
+      source_page_url: "https://example.test/apple-garden",
+      title: "Apple garden",
+    },
+    source_manifest: { manifest_sha256: "6".repeat(64) },
+  };
+}
+
 describe("Pixel RAG demo artifact", () => {
+  it("consumes only the closed build-time bridge and keeps the explicit fallback sentinel", () => {
+    expect(pixelRagBridge).toEqual({
+      artifact: null,
+      format_version: "moodboard.viewer-pixel-rag-bridge.v1",
+      generator_revision: "moodboard.pixel-rag-viewer-bridge.v1",
+      input: null,
+      state: "fallback",
+    });
+    expect(verifiedPixelRagArtifact.artifact_id).toBe(pixelRagArtifact.artifact_id);
+
+    const drifted = { ...pixelRagBridge, future: true };
+    expect(() => decodePixelRagBridge(drifted)).toThrow(/unknown key/i);
+  });
+
+  it("projects measured engine evidence without upgrading the independent preference fixture", () => {
+    const artifact = engineArtifact();
+    const bridge = decodePixelRagBridge({
+      artifact,
+      format_version: "moodboard.viewer-pixel-rag-bridge.v1",
+      generator_revision: "moodboard.pixel-rag-viewer-bridge.v1",
+      input: {
+        artifact_id: artifact.artifact_id,
+        byte_size: 1234,
+        canonical_sha256: "5".repeat(64),
+        schema_version: artifact.schema_version,
+        sha256: "4".repeat(64),
+      },
+      state: "projected",
+    });
+
+    if (bridge.state !== "projected") throw new Error("expected projected test bridge");
+    const projected = projectEnginePixelRagArtifact(bridge);
+
+    expect(projected.artifact_id).toBe(artifact.artifact_id);
+    expect(projected.evidence_status).toBe("measured_run");
+    expect(projected.source.khive.content_ref).toBe("a".repeat(64));
+    expect(projected.intents[0]?.evidence[0]?.score.value).toBe(0.89);
+    expect(projected.intents[0]?.pipeline.map((stage) => stage.id)).toEqual([
+      "retrieval",
+      "region",
+      "conditioning",
+      "external_generation",
+      "verification",
+      "immutable_output",
+      "rollback",
+    ]);
+    expect(projected.intents[0]?.metrics.find((metric) => metric.id === "precision_at_3"))
+      .toMatchObject({ display: "Not computed", passed: null, value: null });
+    expect(projected.intents[0]?.metrics.find((metric) => metric.id === "outside_mask_ssim"))
+      .toMatchObject({ display: "0.380", passed: false, target: "≥ 0.950" });
+    expect(projected.intents[0]?.output).toMatchObject({
+      content_ref: "e".repeat(64),
+      state: "recorded_external_output",
+    });
+    expect(projected.intents[1]?.output).toMatchObject({
+      content_ref: null,
+      state: "not_available",
+    });
+    expect(projected.preference.status).toBe("governed_snapshot_fixture");
+    expect(projected.status_label).toMatch(/measured engine artifact/i);
+  });
+
   it("is a closed, intent-specific, provenance-complete projection", () => {
     const decoded = decodePixelRagArtifact(pixelRagArtifact);
 
@@ -55,12 +302,13 @@ describe("Pixel RAG demo artifact", () => {
         "retrieval",
         "region",
         "conditioning",
-        "generator",
+        "external_generation",
         "verification",
         "immutable_output",
+        "rollback",
       ]);
-      expect(intent.pipeline.find((stage) => stage.id === "generator")?.executor).toBe(
-        "external_or_precomputed",
+      expect(intent.pipeline.find((stage) => stage.id === "external_generation")?.executor).toBe(
+        "external_generator",
       );
       expect(intent.metrics.every((metric) => metric.source === "contract_fixture")).toBe(true);
     }

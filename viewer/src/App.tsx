@@ -648,7 +648,7 @@ function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
 
       <ol className="pixel-pipeline" aria-label="Pixel RAG control pipeline">
         {intent.pipeline.map((stage, index) => (
-          <li key={stage.id} className={stage.id === "generator" ? "pixel-stage-external" : ""}>
+          <li key={stage.id} className={stage.id === "external_generation" ? "pixel-stage-external" : ""}>
             <span>{String(index + 1).padStart(2, "0")}</span>
             <div>
               <strong>{stage.label}</strong>
@@ -669,16 +669,21 @@ function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
               <article key={metric.id}>
                 <span>{metric.label}</span>
                 <strong>{metric.display}</strong>
-                <small>{metric.passed ? "meets" : "misses"} target {metric.target}</small>
+                <small>{metric.passed === null ? metric.target : `${metric.passed ? "meets" : "misses"} target ${metric.target}`}</small>
               </article>
             ))}
           </div>
           <div className="pixel-output">
             <span>{intent.output.label}</span>
-            <strong>Immutable Khive output</strong>
+            <strong>{intent.output.state === "not_available" ? "No external output" : "Recorded external output"}</strong>
             <p>{intent.output.caveat}</p>
             <dl>
-              <div><dt>New asset</dt><dd title={intent.output.content_ref}>{shortDigest(intent.output.content_ref)}</dd></div>
+              <div>
+                <dt>New asset</dt>
+                <dd title={intent.output.content_ref ?? undefined}>
+                  {intent.output.content_ref ? shortDigest(intent.output.content_ref) : "not recorded"}
+                </dd>
+              </div>
               <div><dt>Rollback</dt><dd title={intent.output.rollback_ref}>{shortDigest(intent.output.rollback_ref)}</dd></div>
             </dl>
           </div>

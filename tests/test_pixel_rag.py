@@ -515,3 +515,90 @@ def test_frozen_artifact_round_trip_is_atomic_closed_and_self_identifying(tmp_pa
     destination.write_text(_canonical(document), encoding="utf-8")
     with pytest.raises(PixelRagError, match="artifact_id"):
         read_pixel_rag_artifact(destination)
+
+
+def test_viewer_bridge_embeds_one_validated_canonical_artifact_with_input_pins(
+    tmp_path: Path,
+) -> None:
+    from moodboard.pixel_rag_viewer import (
+        compile_viewer_pixel_rag_bridge,
+        validate_viewer_pixel_rag_bridge,
+    )
+
+    manifest_path, by_id = _manifest(tmp_path)
+    measurements_path = _measurements(tmp_path / "measurements.json", by_id)
+    artifact = compile_pixel_rag_artifact(
+        manifest_path=manifest_path,
+        measurements_path=measurements_path,
+        external_outputs=_outputs(tmp_path),
+    )
+    source = tmp_path / "pixel-rag.json"
+    write_pixel_rag_artifact(artifact, source)
+
+    bridge = compile_viewer_pixel_rag_bridge(source)
+
+    expected_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
+    assert bridge["format_version"] == "moodboard.viewer-pixel-rag-bridge.v1"
+    assert bridge["generator_revision"] == "moodboard.pixel-rag-viewer-bridge.v1"
+    assert bridge["state"] == "projected"
+    assert bridge["input"] == {
+        "artifact_id": artifact["artifact_id"],
+        "byte_size": source.stat().st_size,
+        "canonical_sha256": expected_sha256,
+        "schema_version": "moodboard.pixel-rag-artifact.v1",
+        "sha256": expected_sha256,
+    }
+    assert bridge["artifact"] == artifact
+    validate_viewer_pixel_rag_bridge(bridge)
+
+
+def test_public_artifact_validator_is_the_cross_module_contract(tmp_path: Path) -> None:
+    from moodboard.pixel_rag import validate_pixel_rag_artifact
+
+    manifest_path, by_id = _manifest(tmp_path)
+    measurements_path = _measurements(tmp_path / "measurements.json", by_id)
+    artifact = compile_pixel_rag_artifact(
+        manifest_path=manifest_path,
+        measurements_path=measurements_path,
+    )
+
+    validate_pixel_rag_artifact(artifact)
+
+    drifted = json.loads(json.dumps(artifact))
+    drifted["source"]["title"] = "drifted after compile"
+    with pytest.raises(PixelRagError, match="artifact_id"):
+        validate_pixel_rag_artifact(drifted)
+
+
+def test_viewer_bridge_fails_closed_on_noncanonical_input_and_generated_drift(
+    tmp_path: Path,
+) -> None:
+    from moodboard.pixel_rag_viewer import (
+        PixelRagViewerBridgeError,
+        compile_viewer_pixel_rag_bridge,
+        validate_viewer_pixel_rag_bridge,
+    )
+
+    manifest_path, by_id = _manifest(tmp_path)
+    measurements_path = _measurements(tmp_path / "measurements.json", by_id)
+    artifact = compile_pixel_rag_artifact(
+        manifest_path=manifest_path,
+        measurements_path=measurements_path,
+    )
+    pretty = tmp_path / "pretty-pixel-rag.json"
+    pretty.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+
+    with pytest.raises(PixelRagViewerBridgeError, match="canonical"):
+        compile_viewer_pixel_rag_bridge(pretty)
+
+    source = tmp_path / "pixel-rag.json"
+    write_pixel_rag_artifact(artifact, source)
+    bridge = compile_viewer_pixel_rag_bridge(source)
+    bridge["input"]["canonical_sha256"] = "f" * 64
+    with pytest.raises(PixelRagViewerBridgeError, match="canonical_sha256"):
+        validate_viewer_pixel_rag_bridge(bridge)
+
+    bridge = compile_viewer_pixel_rag_bridge(source)
+    bridge["artifact"]["surprise"] = True
+    with pytest.raises(PixelRagError, match="unknown|Additional properties"):
+        validate_viewer_pixel_rag_bridge(bridge)
