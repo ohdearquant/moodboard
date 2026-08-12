@@ -56,7 +56,7 @@ def descriptor(revision="weights-r1"):
         "model_name": "qwen3.5-vlm-pooled-visual",
         "model_revision": revision,
         "checkpoint_sha256": "1" * 64,
-        "inference": {"provider": "lattice-embed", "version": "0.7.1"},
+        "inference": {"provider": "lattice-embed", "version": "0.9.0"},
         "preprocessing": {
             "revision": "moodboard-qwen35-srgb-pad32-max448-v1",
             "max_side": 448,
@@ -101,6 +101,13 @@ rows = []
 ingest_index = 0
 for op in ops:
     tool = op["tool"]
+    if tool in {"moodboard.model", "moodboard.ingest", "moodboard.search"}:
+        if op["args"].get("namespace") != value("--namespace"):
+            print(
+                "operation namespace does not match kkernel attribution namespace",
+                file=sys.stderr,
+            )
+            raise SystemExit(91)
     if tool == "moodboard.model":
         result = {"descriptor": descriptor(), "experimental": True}
         if mode == "model-extra-key":
@@ -156,6 +163,8 @@ for op in ops:
                 "content_ref": "b" * 64,
             },
         ]
+        if op["args"]["namespace"] == "foreign-namespace":
+            hits = []
         result = {
             "query_asset_id": query_asset_id,
             "descriptor": descriptor("weights-r2")
@@ -323,6 +332,7 @@ def test_encoder_batches_in_order_and_keeps_large_image_bytes_out_of_argv(fake_k
     assert ingest["argv"][ingest["argv"].index("--actor") + 1] == "lambda:moodboard-tests"
     assert ingest["argv"][ingest["argv"].index("--expect-actor") + 1] == ("lambda:moodboard-tests")
     assert ingest["argv"][ingest["argv"].index("--namespace") + 1] == "moodboard-tests"
+    assert {op["args"]["namespace"] for op in ingest["ops"]} == {"moodboard-tests"}
     assert not Path(ingest["argv"][ingest["argv"].index("--ops-file") + 1]).exists()
     assert not Path(ingest["argv"][ingest["argv"].index("--save-file") + 1]).exists()
 
@@ -376,8 +386,13 @@ def test_client_search_returns_closed_typed_ranked_asset_locators(fake_kkernel):
         ),
     )
     model, search = _calls(log)
-    assert model["ops"] == [{"args": {}, "tool": "moodboard.model"}]
-    assert search["ops"] == [{"args": {"asset_id": query, "top_k": 2}, "tool": "moodboard.search"}]
+    assert model["ops"] == [{"args": {"namespace": "moodboard-tests"}, "tool": "moodboard.model"}]
+    assert search["ops"] == [
+        {
+            "args": {"asset_id": query, "namespace": "moodboard-tests", "top_k": 2},
+            "tool": "moodboard.search",
+        }
+    ]
     assert search["argv"][search["argv"].index("--actor") + 1] == "lambda:moodboard-tests"
     assert search["argv"][search["argv"].index("--expect-actor") + 1] == ("lambda:moodboard-tests")
 
@@ -389,7 +404,41 @@ def test_client_search_omits_the_optional_top_k_and_uses_the_pack_default(fake_k
     result = _client(executable).search(query)
 
     assert len(result.hits) == 2
-    assert _calls(log)[1]["ops"][0]["args"] == {"asset_id": query}
+    assert _calls(log)[1]["ops"][0]["args"] == {
+        "asset_id": query,
+        "namespace": "moodboard-tests",
+    }
+
+
+def test_operation_arguments_cannot_override_the_configured_storage_namespace(fake_kkernel):
+    executable, log = fake_kkernel
+
+    with pytest.raises(ValueError, match="conflicts with the configured Khive namespace"):
+        _client(executable).ingest(
+            ({"image_base64": "", "namespace": "a-different-storage-namespace"},)
+        )
+
+    assert not log.exists()
+
+
+def test_foreign_namespace_search_keeps_global_uuid_lookup_and_returns_no_candidates(
+    fake_kkernel,
+):
+    executable, log = fake_kkernel
+    query = "00000000-0000-0000-0000-000000000001"
+    client = KhiveClient(
+        executable=executable,
+        actor="lambda:moodboard-tests",
+        namespace="foreign-namespace",
+    )
+
+    result = client.search(query, top_k=100)
+
+    assert result.query_asset_id == query
+    assert result.hits == ()
+    assert {
+        operation["args"]["namespace"] for call in _calls(log) for operation in call["ops"]
+    } == {"foreign-namespace"}
 
 
 @pytest.mark.parametrize("top_k", [0, 101, True, 1.5, "2"])
@@ -611,18 +660,19 @@ def test_descriptor_canonicalization_has_a_cross_language_golden_fingerprint(fak
     descriptor = KhiveLatticeEncoder(_client(executable)).descriptor
 
     assert descriptor.fingerprint == (
-        "59f1ababe9229fe1a2e871a92172d7f84461d28729172bbba5f7c55c4ccd0a53"
+        "5d62815b1b662fa926c58aaaf58553e3d842b615cd90f431fe6e7c1bd782ea0b"
     )
     assert descriptor.model_key == (
-        "moodboard_59f1ababe9229fe1a2e871a92172d7f84461d28729172bbba5f7c55c4ccd0a53_4"
+        "moodboard_5d62815b1b662fa926c58aaaf58553e3d842b615cd90f431fe6e7c1bd782ea0b_4"
     )
+    assert KHIVE_ADAPTER_REVISION == "moodboard-khive-adapter-v2"
 
     synthetic = descriptor.to_json_dict()
     synthetic.pop("fingerprint")
     synthetic.pop("model_key")
     synthetic["prompt"]["sha256"] = "2" * 64
     assert hashlib.sha256(encoders_module._canonical_json(synthetic).encode()).hexdigest() == (
-        "88a9b26b399d878c77c3a4743dc38d2f538a951874b3c2fb6eb3d62d9cfbfd1c"
+        "b57fb3cf43da387cde12425e6d7d442af269ba37ecabfbe4c975cb80abdf56e5"
     )
 
 
@@ -630,6 +680,7 @@ def test_descriptor_canonicalization_has_a_cross_language_golden_fingerprint(fak
     ("field", "value", "message"),
     [
         ("model_name", "another-visual-model", "model_name"),
+        ("inference_version", "0.7.1", "inference"),
         ("prompt_sha256", "3" * 64, "prompt"),
     ],
 )
@@ -638,7 +689,9 @@ def test_descriptor_v1_rejects_known_semantic_fields_with_different_values(
 ):
     executable, _ = fake_kkernel
     document = KhiveLatticeEncoder(_client(executable)).descriptor.to_json_dict()
-    if field == "prompt_sha256":
+    if field == "inference_version":
+        document["inference"]["version"] = value
+    elif field == "prompt_sha256":
         document["prompt"]["sha256"] = value
     else:
         document[field] = value
@@ -1137,6 +1190,7 @@ def test_cli_khive_opt_in_pins_config_and_persists_reference_locations(fake_kker
     build_ingest = next(call for call in calls if call["ops"][0]["tool"] == "moodboard.ingest")
     assert build_ingest["argv"][build_ingest["argv"].index("--actor") + 1] == "lambda:cli-test"
     assert build_ingest["argv"][build_ingest["argv"].index("--namespace") + 1] == "cli-test"
+    assert {op["args"]["namespace"] for op in build_ingest["ops"]} == {"cli-test"}
     assert build_ingest["argv"][build_ingest["argv"].index("--config") + 1] == str(
         tmp_path / "khive.toml"
     )
@@ -1265,7 +1319,7 @@ def test_retrieve_cli_reports_ranked_khive_locators_without_coherence_semantics(
     assert model["argv"][model["argv"].index("--config") + 1] == str(tmp_path / "khive.toml")
     assert search["ops"][0] == {
         "tool": "moodboard.search",
-        "args": {"asset_id": query, "top_k": 2},
+        "args": {"asset_id": query, "namespace": "retrieve-cli", "top_k": 2},
     }
 
 

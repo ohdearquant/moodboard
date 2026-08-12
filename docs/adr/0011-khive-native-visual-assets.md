@@ -50,11 +50,14 @@ The plain `Encoder.embed` boundary receives decoded arrays, not source files. Pr
 callers are therefore converted without mutation to RGB8 or RGBA8 using the same accepted value
 ranges as the classical axes, then encoded as deterministic PNG bytes. RGBA remains transparent
 so the descriptor-pinned server matte, rather than the adapter, owns alpha compositing. The
-exact PNG encoder is frozen as `moodboard-khive-adapter-v1`: every scanline uses filter 0 and
+exact PNG encoder remains byte-frozen in `moodboard-khive-adapter-v2`: every scanline uses filter 0 and
 the zlib stream uses a fixed wrapper plus manually framed DEFLATE stored blocks, with fixed PNG
 chunk framing/CRC and Adler-32. It therefore has no Pillow/zlib compressor heuristic in its byte
 identity. A byte-for-byte RGBA and BLAKE3 golden plus a fresh-process test pin the result;
-changing any array-to-byte conversion requires an adapter revision bump. The encoder revision
+changing any array-to-byte conversion requires an adapter revision bump. Adapter v2 produces the
+same canonical PNG bytes as v1 but binds the selected storage namespace inside each pack operation;
+that persistence-scope correction requires a revision bump even though vector math did not change.
+The encoder revision
 entering `board_hash` is `<descriptor fingerprint>+<adapter revision>`, so a client-side
 conversion cannot move embeddings under an unchanged board model identity. Their BlobStore `content_ref`
 identifies that **canonical adapter rendition**, not the bytes of a JPEG, PNG, or other file the
@@ -88,7 +91,9 @@ This repository adds a small application adapter, not a general Khive SDK. It in
 `kkernel exec` non-interactively with all of the following pinned on every call:
 
 - an explicit actor and the identical `--expect-actor` value;
-- an explicit namespace;
+- an explicit CLI namespace for execution attribution;
+- that same exact namespace in every `moodboard.model`, `moodboard.ingest`, and
+  `moodboard.search` argument object, where the pack selects durable storage and retrieval;
 - `--strict`; and
 - temporary `--ops-file` and `--save-file` paths.
 
@@ -98,6 +103,12 @@ row count, checksum, tool name, per-row success flag, and result shape before re
 value. Non-zero exit, partial output, malformed JSON, a failed row, or a manifest disagreement
 fails the whole encoder call. Temporary files are private to the invocation and are removed
 on exit.
+
+The operation-level namespace is deliberate rather than redundant. `kkernel --namespace`
+controls execution attribution and gate policy; it does not implicitly select the namespace used
+by pack storage APIs. Omitting `args.namespace` therefore persisted and searched the pack's local
+default while the command line appeared to name another namespace. Adapter v2 injects one
+authoritative configured value into both layers and rejects a low-level conflicting override.
 
 Ops JSONL is streamed one operation at a time instead of first concatenating the whole base64
 batch in another Python string. Before byte deduplication, one request is capped at 64 total
@@ -144,6 +155,12 @@ descriptor drift. The CLI prints rank, raw cosine, asset id, content reference, 
 is a required non-empty bounded UTF-8 string and is rendered with JSON escaping so control
 characters cannot forge terminal rows. The CLI never labels that retrieval value as coherence,
 aesthetic quality, style fit, or a conformal score.
+
+Khive's entity identity contract resolves a canonical asset UUID globally; namespace is
+attribution and candidate scope, not entity isolation. `moodboard.search` therefore resolves the
+query asset globally and restricts vector candidates to `args.namespace`. A known query asset
+searched from a foreign namespace returns a valid result with an empty `hits` array rather than a
+missing-query error. Authorization remains a separate gate-policy concern.
 
 ### Asset locations extend `brand.mb` without changing board identity
 

@@ -233,8 +233,8 @@ _DESCRIPTOR_MODEL_NAME = "qwen3.5-vlm-pooled-visual"
 _DESCRIPTOR_PROMPT_SHA256 = "a67ae9b539c243f498c75f1ea9f19e7018860948087728d6f8e65b34eef6a66e"
 _UNIT_NORM_ATOL = 1e-5
 _KHIVE_SOURCE_MEDIA_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
-KHIVE_ADAPTER_REVISION = "moodboard-khive-adapter-v1"
-"""Pinned client-side array rendition and source-ingest contract revision."""
+KHIVE_ADAPTER_REVISION = "moodboard-khive-adapter-v2"
+"""Pinned client-side rendition, source-ingest, and storage-namespace contract revision."""
 KHIVE_VISUAL_MATTE_RGB = (128, 128, 128)
 """The frozen v1 alpha-compositing matte shared with the Khive Moodboard pack."""
 KHIVE_REQUEST_MAX_IMAGES = 64
@@ -352,9 +352,9 @@ class VisualDescriptor:
 
         inference = _require_mapping(document.get("inference"), "inference")
         _require_exact_keys(inference, frozenset({"provider", "version"}), "inference")
-        if inference.get("provider") != "lattice-embed" or inference.get("version") != "0.7.1":
+        if inference.get("provider") != "lattice-embed" or inference.get("version") != "0.9.0":
             raise KhiveProtocolError(
-                "visual descriptor inference must identify lattice-embed version 0.7.1"
+                "visual descriptor inference must identify lattice-embed version 0.9.0"
             )
         preprocessing = _require_mapping(document.get("preprocessing"), "preprocessing")
         _require_exact_keys(

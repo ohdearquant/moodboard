@@ -131,7 +131,10 @@ export KHIVE_MOODBOARD_CHECKPOINT_SHA256=64-lowercase-hex
 The pack always computes the canonical checkpoint-tree SHA-256. When the optional expected
 digest is omitted, call `moodboard.model()` once and pin its returned `checkpoint_sha256` for
 subsequent deployment attestation. Actor and namespace remain explicit Moodboard CLI options;
-they are not inferred from the storage root.
+they are not inferred from the storage root. Moodboard sends the configured namespace both as
+`kkernel` execution attribution and inside every pack operation, where it selects durable asset,
+vector, and retrieval state. Khive asset UUID lookup remains global; the namespace narrows vector
+candidates, so searching a globally known asset from another namespace succeeds with no hits.
 
 One Moodboard request is bounded to 64 total asset occurrences and 32 MiB of decoded bytes
 across those occurrences, before content deduplication. Admission is rolling: a source file is

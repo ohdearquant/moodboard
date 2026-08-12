@@ -522,7 +522,7 @@ ADR-0011 adds a second implementation without changing `Encoder`:
 ```python
 class KhiveLatticeEncoder:
     name: str  # "khive:" plus the descriptor's model_name
-    revision: str  # "<descriptor fingerprint>+moodboard-khive-adapter-v1"
+    revision: str  # "<descriptor fingerprint>+moodboard-khive-adapter-v2"
     dim: int  # descriptor dimensions
     descriptor: VisualDescriptor
     last_assets: tuple[KhiveAsset, ...]
@@ -535,7 +535,7 @@ class KhiveLatticeEncoder:
 Construction first calls `moodboard.model()` and validates the closed
 `moodboard.visual-descriptor.v1` object. Its SHA-256 `fingerprint` is recomputed over compact,
 recursively key-sorted JSON excluding `fingerprint` and `model_key`; `model_key` must then equal
-`moodboard_<fingerprint>_<dimensions>`. The v1 descriptor pins Lattice 0.7.1, Qwen3.5 visual
+`moodboard_<fingerprint>_<dimensions>`. The v1 descriptor pins `lattice-embed` 0.9.0, Qwen3.5 visual
 token mean pooling, sRGB/Lanczos preprocessing padded to the model's 32-pixel spatial-merge
 alignment at a maximum side of 448, the prompt identity, checkpoint SHA-256, dimension and L2
 normalisation. Root and nested key sets are closed. Every ingest repeats the same descriptor,
@@ -549,14 +549,19 @@ metadata labels the BlobStore object `canonical-png-rendition`; the path-aware c
 `source-bytes`. RGBA stays RGBA so the descriptor-pinned Khive matte owns compositing. The v1
 path-aware source contract admits PNG, JPEG, and WebP and rejects another MIME before dispatch.
 The adapter revision and a byte-exact RGBA PNG golden freeze array conversion as part of the
-encoder identity; a conversion change must bump that revision. The encoder is internal and
+encoder identity; a conversion or persistence-scope change must bump that revision. Revision 2
+retains revision 1's byte-exact PNG rendition and adds operation-level storage namespace binding.
+The encoder is internal and
 byte-frozen: filter-0 scanlines, a fixed zlib wrapper, manually framed DEFLATE stored blocks,
 fixed PNG chunks/CRC, and Adler-32. It does not delegate canonical byte identity to a ranged
 Pillow or compressor implementation.
 
 `moodboard/khive.py` is an application adapter, not a general SDK. Every invocation uses
 `kkernel exec --ops-file ... --save-file ... --strict` with explicit `--actor`, identical
-`--expect-actor`, and explicit `--namespace`. An optional config path is passed as `--config`;
+`--expect-actor`, and explicit `--namespace`. The CLI namespace remains execution attribution;
+the same exact configured value is also injected into the closed `args` object of every
+`moodboard.model`, `moodboard.ingest`, and `moodboard.search` operation because that field selects
+the pack's durable storage and retrieval namespace. An optional config path is passed as `--config`;
 when absent, Khive's normal environment/discovery fallback remains active. It verifies the saved JSONL manifest, byte
 checksum, row count, per-row tool/order, success flag, and strict JSON before releasing any
 result. Image base64 never appears in argv.
@@ -594,6 +599,9 @@ class KhiveClient:
 `top_k` is absent for the pack default or a plain integer in `[1,100]`. Query and hit asset ids
 are bare canonical UUIDs. Search discovers and validates the model descriptor before the first
 query; the response descriptor must match it exactly. The result and each hit are closed objects.
+Asset-id lookup remains global under Khive's identity contract while vector candidates are
+selected from the operation namespace. A globally known query asset in another namespace is
+therefore a successful search with zero hits, not a missing-query protocol failure.
 Hits are self-excluded, unique by asset id, ranked contiguously from one, and ordered by
 non-increasing finite cosine similarity in `[-1,1]`. Names are required non-empty UTF-8 strings
 within the pack limit, and content references are raw 64-character lowercase BLAKE3 hex. The

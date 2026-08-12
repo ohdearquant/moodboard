@@ -34,6 +34,7 @@ _HEX = frozenset("0123456789abcdef")
 _SEARCH_RESULT_KEYS = frozenset({"query_asset_id", "descriptor", "experimental", "hits"})
 _SEARCH_HIT_KEYS = frozenset({"asset_id", "score", "rank", "name", "content_ref"})
 _MODEL_RESULT_KEYS = frozenset({"descriptor", "experimental"})
+_NAMESPACED_MOODBOARD_TOOLS = frozenset({"moodboard.model", "moodboard.ingest", "moodboard.search"})
 _DEFAULT_SEARCH_TOP_K = 20
 _MAX_SEARCH_TOP_K = 100
 
@@ -371,7 +372,7 @@ class KhiveClient:
         are still required: a truncated result file, a mismatched manifest, or an executable
         that does not honour strict mode must not be accepted just because its status is zero.
         """
-        submitted = tuple(operations)
+        submitted = tuple(self._bind_storage_namespace(operation) for operation in operations)
         if not submitted:
             return ()
 
@@ -445,6 +446,27 @@ class KhiveClient:
             self._validate_manifest(manifest, save_path, payload, len(submitted))
             rows = self._parse_rows(payload, submitted)
             return tuple(row["result"] for row in rows)
+
+    def _bind_storage_namespace(self, operation: _KhiveOperation) -> _KhiveOperation:
+        """Bind a Moodboard pack operation to this client's durable storage namespace.
+
+        ``kkernel --namespace`` remains the actor/gate attribution namespace. The Moodboard
+        pack also requires the same value inside ``args`` to select durable asset, vector, and
+        retrieval state. Low-level callers may repeat the configured value, but cannot replace
+        it with a conflicting storage namespace.
+        """
+        if operation.tool not in _NAMESPACED_MOODBOARD_TOOLS:
+            return operation
+        arguments = dict(operation.args)
+        missing = object()
+        supplied = arguments.get("namespace", missing)
+        if supplied is not missing and supplied != self.namespace:
+            raise ValueError(
+                f"{operation.tool} namespace {supplied!r} conflicts with the configured "
+                f"Khive namespace {self.namespace!r}"
+            )
+        arguments["namespace"] = self.namespace
+        return _KhiveOperation(operation.tool, arguments)
 
     @staticmethod
     def _validate_manifest(
