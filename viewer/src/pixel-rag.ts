@@ -3,6 +3,8 @@
  * view-time input: the closed decoder fails the build/tests when its literal contract drifts.
  * A measured Khive run replaces the fixture values before any empirical claim is shown.
  */
+import type { ReportModel, SafeThumbnailSource } from "./model";
+
 export type PixelRagIntentId = "local_replace" | "global_restyle";
 export type PixelRagEvidenceStatus = "contract_fixture" | "measured_run";
 export type PixelRagGranularity = "confirmed_mask" | "whole_frame";
@@ -20,6 +22,45 @@ export interface PixelRagContentIdentity {
     readonly content_ref: string;
     readonly record_id: string;
   };
+}
+
+/**
+ * Resolve only report-owned, decoder-verified media. Presentation ids are useful hints, but
+ * SHA-256 is the byte identity: a stale id must never display unrelated pixels. The digest
+ * fallback lets a measured artifact join a separately generated offline report without
+ * fabricating a shared filename convention.
+ */
+export function resolvePixelRagMediaSource(
+  identity: Pick<PixelRagContentIdentity, "content_sha256" | "media">,
+  model: ReportModel,
+): SafeThumbnailSource | undefined {
+  const candidate = (id: string): SafeThumbnailSource | undefined => {
+    const asset = model.assetsById.get(id);
+    return asset?.image?.content_sha256 === identity.content_sha256
+      ? model.candidateSources.get(id)
+      : undefined;
+  };
+  const reference = (id: string): SafeThumbnailSource | undefined => {
+    const entry = model.referencesById.get(id);
+    return entry?.content_sha256 === identity.content_sha256
+      ? model.referenceSources.get(id)
+      : undefined;
+  };
+  const hinted = identity.media.kind === "report_candidate"
+    ? candidate(identity.media.id)
+    : reference(identity.media.id);
+  if (hinted) return hinted;
+
+  const candidates = model.report.assets
+    .filter((asset) => asset.image?.content_sha256 === identity.content_sha256)
+    .map((asset) => candidate(asset.asset_id));
+  const references = model.report.references
+    .filter((entry) => entry.content_sha256 === identity.content_sha256)
+    .map((entry) => reference(entry.reference_id));
+  const ordered = identity.media.kind === "report_candidate"
+    ? [...candidates, ...references]
+    : [...references, ...candidates];
+  return ordered.find((source) => source !== undefined);
 }
 
 export interface PixelRagLicense {
@@ -366,7 +407,9 @@ function shaAt(value: unknown, path: string): string {
 
 function contentRefAt(value: unknown, path: string): string {
   const resolved = stringAt(value, path);
-  if (!/^sha256:[a-f0-9]{64}$/.test(resolved)) throw new Error(`${path} must be a SHA-256 content ref`);
+  if (!/^(?:sha256:)?[a-f0-9]{64}$/.test(resolved)) {
+    throw new Error(`${path} must be a 64-hex Khive ContentRef or a legacy fixture SHA-256 ref`);
+  }
   return resolved;
 }
 
@@ -526,7 +569,8 @@ export function decodePixelRagArtifact(value: unknown): PixelRagArtifact {
   if (new Set(intents.map((intent) => intent.query.namespace)).size !== intents.length) {
     throw new Error("$pixel_rag.intents namespaces must be distinct");
   }
-  if (intents.some((intent) => intent.metrics.some((metric) => metric.source !== record.evidence_status))) {
+  const evidenceStatus = exact(record.evidence_status, ["contract_fixture", "measured_run"], "$pixel_rag.evidence_status");
+  if (intents.some((intent) => intent.metrics.some((metric) => metric.source !== evidenceStatus))) {
     throw new Error("$pixel_rag metrics must match artifact evidence status");
   }
   const preference = objectAt(record.preference, "$pixel_rag.preference");
@@ -534,12 +578,27 @@ export function decodePixelRagArtifact(value: unknown): PixelRagArtifact {
   const before = snapshotAt(preference.before, "$pixel_rag.preference.before");
   const after = snapshotAt(preference.after, "$pixel_rag.preference.after");
   if (before.model_id === after.model_id) throw new Error("$pixel_rag preference snapshots require distinct immutable model ids");
+  if (evidenceStatus === "measured_run") {
+    const contentRefs = [
+      khiveAt(source.khive, "$pixel_rag.source.khive").content_ref,
+      before.provenance.bundle_ref,
+      after.provenance.bundle_ref,
+      ...intents.flatMap((intent) => [
+        ...intent.evidence.map((hit) => hit.khive.content_ref),
+        intent.output.content_ref,
+        intent.output.rollback_ref,
+      ]),
+    ];
+    if (contentRefs.some((contentRef) => !/^[a-f0-9]{64}$/.test(contentRef))) {
+      throw new Error("$pixel_rag measured evidence requires bare BLAKE3 ContentRefs from Khive");
+    }
+  }
   const provenance = objectAt(record.provenance, "$pixel_rag.provenance");
   closed(provenance, ["generated_at", "source_manifest_sha256", "khive_revision", "lattice_descriptor", "run_fingerprint"], "$pixel_rag.provenance");
   return {
     format_version: 1,
     artifact_id: stringAt(record.artifact_id, "$pixel_rag.artifact_id"),
-    evidence_status: exact(record.evidence_status, ["contract_fixture", "measured_run"], "$pixel_rag.evidence_status"),
+    evidence_status: evidenceStatus,
     status_label: stringAt(record.status_label, "$pixel_rag.status_label"),
     source: {
       asset_id: stringAt(source.asset_id, "$pixel_rag.source.asset_id"),

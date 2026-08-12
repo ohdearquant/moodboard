@@ -34,7 +34,7 @@ import type {
   ScoredAsset,
 } from "./model";
 import {
-  type PixelRagMediaRef,
+  resolvePixelRagMediaSource,
   verifiedPixelRagArtifact,
 } from "./pixel-rag";
 import {
@@ -519,19 +519,13 @@ function StoryStrip({ model }: { readonly model: ReportModel }): ReactNode {
   );
 }
 
-function pixelRagMediaSource(media: PixelRagMediaRef, model: ReportModel): SafeThumbnailSource | undefined {
-  return media.kind === "report_candidate"
-    ? model.candidateSources.get(media.id)
-    : model.referenceSources.get(media.id);
-}
-
 function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
   const artifact = verifiedPixelRagArtifact;
   const initialIntent = artifact.intents[0];
   if (!initialIntent) throw new Error("Verified Pixel RAG artifact has no intents");
   const [activeIntentId, setActiveIntentId] = useState(initialIntent.id);
   const intent = artifact.intents.find((candidate) => candidate.id === activeIntentId) ?? initialIntent;
-  const source = pixelRagMediaSource(artifact.source.media, model);
+  const source = resolvePixelRagMediaSource(artifact.source, model);
 
   return (
     <section className="pixel-rag-lab" aria-label="Pixel RAG intent lab">
@@ -626,7 +620,7 @@ function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
               <article className="pixel-evidence-card" key={hit.asset_id}>
                 <div className="pixel-hit-image">
                   <SafeImage
-                    source={pixelRagMediaSource(hit.media, model)}
+                    source={resolvePixelRagMediaSource(hit, model)}
                     alt={`Retrieved evidence ${hit.title}`}
                     fallback="Evidence preview does not resolve in this report."
                   />
