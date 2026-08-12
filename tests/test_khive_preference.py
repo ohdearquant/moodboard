@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from moodboard.khive import KhiveClient, KhiveProtocolError
-from moodboard.preference import FEATURE_SCHEMA_ID
+from moodboard.preference import (
+    FEATURE_PRODUCER_ID,
+    FEATURE_PRODUCER_REVISION,
+    FEATURE_SCHEMA_ID,
+)
 
 FAKE_PREFERENCE_KKERNEL = r"""#!/usr/bin/env python3
 import hashlib
@@ -28,7 +32,48 @@ for operation in ops:
     args = operation["args"]
     if args.get("namespace") != value("--namespace"):
         raise SystemExit(91)
-    if tool == "moodboard.serve":
+    if tool == "kg.create":
+        expected_properties = {
+            "schema_version": "moodboard.preference-board.v1",
+            "board_id": "a" * 64,
+            "model_key": "moodboard_" + "b" * 64 + "_1024",
+            "descriptor_fingerprint": "b" * 64,
+            "source_report_sha256": "c" * 64,
+            "feature_schema_id": "f691fc73bf9a50d72157e21601fa579caa707bf2c448df546c63e915b4e42175",
+            "feature_producer_revision": "moodboard.preference-producer.v1",
+            "feature_producer_id": (
+                "3fd22977f9f3686429cdb6569580b70573396efe0562095f43ed44e0a0ff3f22"
+            ),
+        }
+        if args != {
+            "kind": "entity",
+            "entity_kind": "artifact",
+            "entity_type": "moodboard",
+            "name": "Adobe lemon study",
+            "description": "Immutable Moodboard preference-learning scope",
+            "properties": expected_properties,
+            "tags": ["moodboard", "preference-learning"],
+            "skip_dedup_check": True,
+            "namespace": value("--namespace"),
+        }:
+            raise SystemExit(93)
+        result = {
+            "id": "00000000-0000-4000-8000-000000000010",
+            "namespace": args["namespace"],
+            "created_at": "2026-08-12T16:00:00+00:00",
+            "updated_at": "2026-08-12T16:00:00+00:00",
+            "kind": "artifact",
+            "entity_type": "moodboard",
+            "name": args["name"],
+            "description": args["description"],
+            "properties": args["properties"],
+            "tags": args["tags"],
+            "deleted_at": None,
+            "merged_into": None,
+            "merge_event_id": None,
+            "content_ref": None,
+        }
+    elif tool == "moodboard.serve":
         result = {
             "schema_version": "moodboard.preference-serve.v1",
             "serve_id": "00000000-0000-4000-8000-000000000101",
@@ -205,6 +250,82 @@ def _scope() -> dict[str, str]:
         "descriptor_fingerprint": "b" * 64,
         "source_report_sha256": "c" * 64,
     }
+
+
+def test_publish_board_creates_exact_identity_bound_artifact(preference_client) -> None:
+    client, _ = preference_client
+    entity = client.publish_board(
+        name="Adobe lemon study",
+        board_id="a" * 64,
+        model_key="moodboard_" + "b" * 64 + "_1024",
+        descriptor_fingerprint="b" * 64,
+        source_report_sha256="c" * 64,
+    )
+
+    assert entity.entity_id == "00000000-0000-4000-8000-000000000010"
+    assert entity.namespace == "adobe-demo"
+    assert entity.board_id == "a" * 64
+    assert entity.feature_schema_id == FEATURE_SCHEMA_ID
+    assert entity.feature_producer_revision == FEATURE_PRODUCER_REVISION
+    assert entity.feature_producer_id == FEATURE_PRODUCER_ID
+
+
+def test_publish_board_rejects_invalid_scope_before_process(preference_client) -> None:
+    client, executable = preference_client
+    before = executable.stat().st_atime_ns
+
+    with pytest.raises(ValueError, match="model_key"):
+        client.publish_board(
+            name="Adobe lemon study",
+            board_id="a" * 64,
+            model_key="moodboard_bad_1024",
+            descriptor_fingerprint="b" * 64,
+            source_report_sha256="c" * 64,
+        )
+
+    assert executable.stat().st_atime_ns == before
+
+
+def test_publish_board_parser_rejects_property_drift(monkeypatch, preference_client) -> None:
+    client, _ = preference_client
+    original = client._execute
+
+    def broken(operations):
+        result = original(operations)[0]
+        result["properties"]["feature_producer_id"] = "0" * 64
+        return (result,)
+
+    monkeypatch.setattr(client, "_execute", broken)
+    with pytest.raises(KhiveProtocolError, match="properties"):
+        client.publish_board(
+            name="Adobe lemon study",
+            board_id="a" * 64,
+            model_key="moodboard_" + "b" * 64 + "_1024",
+            descriptor_fingerprint="b" * 64,
+            source_report_sha256="c" * 64,
+        )
+
+
+def test_publish_board_parser_rejects_non_null_entity_lifecycle_fields(
+    monkeypatch, preference_client
+) -> None:
+    client, _ = preference_client
+    original = client._execute
+
+    def broken(operations):
+        result = original(operations)[0]
+        result["content_ref"] = "d" * 64
+        return (result,)
+
+    monkeypatch.setattr(client, "_execute", broken)
+    with pytest.raises(KhiveProtocolError, match="lifecycle"):
+        client.publish_board(
+            name="Adobe lemon study",
+            board_id="a" * 64,
+            model_key="moodboard_" + "b" * 64 + "_1024",
+            descriptor_fingerprint="b" * 64,
+            source_report_sha256="c" * 64,
+        )
 
 
 def test_preference_client_typed_full_loop(preference_client) -> None:

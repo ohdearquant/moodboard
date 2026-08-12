@@ -98,11 +98,12 @@ FEATURE_PRODUCER_ID: Final = hashlib.sha256(FEATURE_SEMANTICS_CANONICAL_JSON).he
 
 _UNIT_NORM_ATOL = 1.0e-5
 _HEX = frozenset("0123456789abcdef")
-_ARTIFACT_SCHEMA_VERSION = "moodboard.preference-feature-artifact.v1"
+_ARTIFACT_SCHEMA_VERSION = "moodboard.preference-feature-artifact.v2"
 _MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 _ARTIFACT_KEYS = frozenset(
     {
         "schema_version",
+        "board_entity_id",
         "board_id",
         "model_key",
         "descriptor_fingerprint",
@@ -111,6 +112,7 @@ _ARTIFACT_KEYS = frozenset(
         "producer_revision",
         "producer_id",
         "candidate_pool_sha256",
+        "scope_sha256",
         "candidates",
     }
 )
@@ -143,7 +145,7 @@ class PreferenceFeatures:
 
 
 def _lower_hex_64(value: object, *, label: str) -> str:
-    if not isinstance(value, str) or len(value) != 64 or set(value) > _HEX:
+    if not isinstance(value, str) or len(value) != 64 or not set(value) <= _HEX:
         raise ValueError(f"{label} must be 64 lowercase hexadecimal characters")
     return value
 
@@ -222,11 +224,46 @@ def _candidate_pool_digest(candidates: Sequence[PreferenceCandidate]) -> str:
     return digest.hexdigest()
 
 
+def _artifact_scope_digest(
+    *,
+    board_entity_id: str,
+    board_id: str,
+    model_key: str,
+    descriptor_fingerprint: str,
+    source_report_sha256: str,
+    feature_schema_id: str,
+    producer_revision: str,
+    producer_id: str,
+    candidate_pool_sha256: str,
+) -> str:
+    """Bind the complete learning scope without conflating it with pool identity."""
+
+    payload = json.dumps(
+        {
+            "schema_version": _ARTIFACT_SCHEMA_VERSION,
+            "board_entity_id": board_entity_id,
+            "board_id": board_id,
+            "model_key": model_key,
+            "descriptor_fingerprint": descriptor_fingerprint,
+            "source_report_sha256": source_report_sha256,
+            "feature_schema_id": feature_schema_id,
+            "producer_revision": producer_revision,
+            "producer_id": producer_id,
+            "candidate_pool_sha256": candidate_pool_sha256,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("ascii")
+    return hashlib.sha256(b"moodboard-preference-artifact-scope-v2\0" + payload).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class PreferenceFeatureArtifact:
     """Closed handoff between rank-time geometry and Khive preference events."""
 
     schema_version: str
+    board_entity_id: str
     board_id: str
     model_key: str
     descriptor_fingerprint: str
@@ -235,12 +272,14 @@ class PreferenceFeatureArtifact:
     producer_revision: str
     producer_id: str
     candidate_pool_sha256: str
+    scope_sha256: str
     candidates: tuple[PreferenceCandidate, ...]
 
     @classmethod
     def build(
         cls,
         *,
+        board_entity_id: str,
         board_id: str,
         model_key: str,
         descriptor_fingerprint: str,
@@ -248,8 +287,9 @@ class PreferenceFeatureArtifact:
         candidates: Sequence[PreferenceCandidate],
     ) -> PreferenceFeatureArtifact:
         frozen = tuple(candidates)
-        return cls(
-            schema_version=_ARTIFACT_SCHEMA_VERSION,
+        candidate_pool_sha256 = _candidate_pool_digest(frozen)
+        scope_sha256 = _artifact_scope_digest(
+            board_entity_id=board_entity_id,
             board_id=board_id,
             model_key=model_key,
             descriptor_fingerprint=descriptor_fingerprint,
@@ -257,22 +297,49 @@ class PreferenceFeatureArtifact:
             feature_schema_id=FEATURE_SCHEMA_ID,
             producer_revision=FEATURE_PRODUCER_REVISION,
             producer_id=FEATURE_PRODUCER_ID,
-            candidate_pool_sha256=_candidate_pool_digest(frozen),
+            candidate_pool_sha256=candidate_pool_sha256,
+        )
+        return cls(
+            schema_version=_ARTIFACT_SCHEMA_VERSION,
+            board_entity_id=board_entity_id,
+            board_id=board_id,
+            model_key=model_key,
+            descriptor_fingerprint=descriptor_fingerprint,
+            source_report_sha256=source_report_sha256,
+            feature_schema_id=FEATURE_SCHEMA_ID,
+            producer_revision=FEATURE_PRODUCER_REVISION,
+            producer_id=FEATURE_PRODUCER_ID,
+            candidate_pool_sha256=candidate_pool_sha256,
+            scope_sha256=scope_sha256,
             candidates=frozen,
         )
 
     def __post_init__(self) -> None:
         if self.schema_version != _ARTIFACT_SCHEMA_VERSION:
             raise ValueError("unsupported preference feature artifact schema_version")
+        _canonical_uuid(self.board_entity_id, label="preference artifact board_entity_id")
         _lower_hex_64(self.board_id, label="preference artifact board_id")
         _lower_hex_64(
             self.descriptor_fingerprint, label="preference artifact descriptor_fingerprint"
         )
         _lower_hex_64(self.source_report_sha256, label="preference artifact source_report_sha256")
-        if not isinstance(self.model_key, str) or not self.model_key.strip():
-            raise ValueError("preference artifact model_key must be a non-empty string")
-        if len(self.model_key.encode("ascii", errors="ignore")) != len(self.model_key):
-            raise ValueError("preference artifact model_key must be ASCII")
+        model_prefix = f"moodboard_{self.descriptor_fingerprint}_"
+        dimension = (
+            self.model_key.removeprefix(model_prefix)
+            if isinstance(self.model_key, str)
+            else ""
+        )
+        if (
+            not isinstance(self.model_key, str)
+            or not self.model_key.isascii()
+            or not self.model_key.startswith(model_prefix)
+            or not dimension.isdigit()
+            or dimension.startswith("0")
+            or not 1 <= int(dimension) <= 8192
+        ):
+            raise ValueError(
+                "preference artifact model_key must bind its descriptor fingerprint"
+            )
         if self.feature_schema_id != FEATURE_SCHEMA_ID:
             raise ValueError("preference artifact feature_schema_id is not the supported schema")
         if self.producer_revision != FEATURE_PRODUCER_REVISION:
@@ -291,11 +358,26 @@ class PreferenceFeatureArtifact:
         measured = _candidate_pool_digest(self.candidates)
         if measured != self.candidate_pool_sha256:
             raise ValueError("preference artifact candidate_pool_sha256 does not match candidates")
+        _lower_hex_64(self.scope_sha256, label="preference artifact scope_sha256")
+        measured_scope = _artifact_scope_digest(
+            board_entity_id=self.board_entity_id,
+            board_id=self.board_id,
+            model_key=self.model_key,
+            descriptor_fingerprint=self.descriptor_fingerprint,
+            source_report_sha256=self.source_report_sha256,
+            feature_schema_id=self.feature_schema_id,
+            producer_revision=self.producer_revision,
+            producer_id=self.producer_id,
+            candidate_pool_sha256=self.candidate_pool_sha256,
+        )
+        if measured_scope != self.scope_sha256:
+            raise ValueError("preference artifact scope_sha256 does not match its immutable scope")
 
     def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, PreferenceFeatureArtifact)
             and self.schema_version == other.schema_version
+            and self.board_entity_id == other.board_entity_id
             and self.board_id == other.board_id
             and self.model_key == other.model_key
             and self.descriptor_fingerprint == other.descriptor_fingerprint
@@ -304,12 +386,14 @@ class PreferenceFeatureArtifact:
             and self.producer_revision == other.producer_revision
             and self.producer_id == other.producer_id
             and self.candidate_pool_sha256 == other.candidate_pool_sha256
+            and self.scope_sha256 == other.scope_sha256
             and self.candidates == other.candidates
         )
 
     def to_json_dict(self) -> dict[str, object]:
         return {
             "schema_version": self.schema_version,
+            "board_entity_id": self.board_entity_id,
             "board_id": self.board_id,
             "model_key": self.model_key,
             "descriptor_fingerprint": self.descriptor_fingerprint,
@@ -318,6 +402,7 @@ class PreferenceFeatureArtifact:
             "producer_revision": self.producer_revision,
             "producer_id": self.producer_id,
             "candidate_pool_sha256": self.candidate_pool_sha256,
+            "scope_sha256": self.scope_sha256,
             "candidates": [candidate.to_json_dict() for candidate in self.candidates],
         }
 
@@ -385,6 +470,7 @@ def read_preference_feature_artifact(path: Path) -> PreferenceFeatureArtifact:
         )
     return PreferenceFeatureArtifact(
         schema_version=document["schema_version"],
+        board_entity_id=document["board_entity_id"],
         board_id=document["board_id"],
         model_key=document["model_key"],
         descriptor_fingerprint=document["descriptor_fingerprint"],
@@ -393,6 +479,7 @@ def read_preference_feature_artifact(path: Path) -> PreferenceFeatureArtifact:
         producer_revision=document["producer_revision"],
         producer_id=document["producer_id"],
         candidate_pool_sha256=document["candidate_pool_sha256"],
+        scope_sha256=document["scope_sha256"],
         candidates=tuple(candidates),
     )
 

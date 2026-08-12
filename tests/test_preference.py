@@ -177,6 +177,7 @@ def test_preference_feature_artifact_round_trips_and_binds_candidate_pool(tmp_pa
     first_id = str(uuid.UUID("00000000-0000-4000-8000-000000000001"))
     second_id = str(uuid.UUID("00000000-0000-4000-8000-000000000002"))
     artifact = PreferenceFeatureArtifact.build(
+        board_entity_id="00000000-0000-4000-8000-000000000010",
         board_id="a" * 64,
         model_key="moodboard_" + "b" * 64 + "_1024",
         descriptor_fingerprint="b" * 64,
@@ -204,6 +205,9 @@ def test_preference_feature_artifact_round_trips_and_binds_candidate_pool(tmp_pa
     loaded = read_preference_feature_artifact(destination)
 
     assert loaded == artifact
+    assert loaded.board_entity_id == "00000000-0000-4000-8000-000000000010"
+    assert loaded.schema_version == "moodboard.preference-feature-artifact.v2"
+    assert len(loaded.scope_sha256) == 64
     assert loaded.feature_schema_id == FEATURE_SCHEMA_ID
     assert loaded.producer_id == FEATURE_PRODUCER_ID
     assert len(loaded.candidate_pool_sha256) == 64
@@ -218,6 +222,7 @@ def test_candidate_pool_identity_moves_with_features_but_not_display_label() -> 
         "source_rank": 1,
     }
     first = PreferenceFeatureArtifact.build(
+        board_entity_id="00000000-0000-4000-8000-000000000010",
         board_id="a" * 64,
         model_key="moodboard_" + "b" * 64 + "_1024",
         descriptor_fingerprint="b" * 64,
@@ -225,6 +230,7 @@ def test_candidate_pool_identity_moves_with_features_but_not_display_label() -> 
         candidates=(PreferenceCandidate(label="before.png", features=_feature_row(0.1), **common),),
     )
     renamed = PreferenceFeatureArtifact.build(
+        board_entity_id=first.board_entity_id,
         board_id=first.board_id,
         model_key=first.model_key,
         descriptor_fingerprint=first.descriptor_fingerprint,
@@ -232,6 +238,7 @@ def test_candidate_pool_identity_moves_with_features_but_not_display_label() -> 
         candidates=(PreferenceCandidate(label="after.png", features=_feature_row(0.1), **common),),
     )
     moved = PreferenceFeatureArtifact.build(
+        board_entity_id=first.board_entity_id,
         board_id=first.board_id,
         model_key=first.model_key,
         descriptor_fingerprint=first.descriptor_fingerprint,
@@ -249,6 +256,7 @@ def test_preference_feature_artifact_reader_rejects_tampering_and_unknown_keys(
     tmp_path: Path,
 ) -> None:
     artifact = PreferenceFeatureArtifact.build(
+        board_entity_id="00000000-0000-4000-8000-000000000010",
         board_id="a" * 64,
         model_key="moodboard_" + "b" * 64 + "_1024",
         descriptor_fingerprint="b" * 64,
@@ -272,9 +280,79 @@ def test_preference_feature_artifact_reader_rejects_tampering_and_unknown_keys(
         lambda value: value["candidates"][0]["features"].__setitem__(0, 0.9),
         lambda value: value.__setitem__("feature_schema_id", "0" * 64),
         lambda value: value.__setitem__("producer_id", "0" * 64),
+        lambda value: value.__setitem__(
+            "board_entity_id", "00000000-0000-4000-8000-000000000011"
+        ),
     ):
         changed = json.loads(json.dumps(document))
         mutation(changed)
         destination.write_text(json.dumps(changed), encoding="utf-8")
         with pytest.raises(ValueError):
             read_preference_feature_artifact(destination)
+
+
+def test_preference_artifact_scope_identity_moves_with_board_entity() -> None:
+    common = {
+        "board_id": "a" * 64,
+        "model_key": "moodboard_" + "b" * 64 + "_1024",
+        "descriptor_fingerprint": "b" * 64,
+        "source_report_sha256": "c" * 64,
+        "candidates": (
+            PreferenceCandidate(
+                label="candidate.png",
+                asset_id="00000000-0000-4000-8000-000000000001",
+                content_ref="d" * 64,
+                source_rank=1,
+                features=_feature_row(0.1),
+            ),
+        ),
+    }
+    first = PreferenceFeatureArtifact.build(
+        board_entity_id="00000000-0000-4000-8000-000000000010", **common
+    )
+    second = PreferenceFeatureArtifact.build(
+        board_entity_id="00000000-0000-4000-8000-000000000011", **common
+    )
+
+    assert first.candidate_pool_sha256 == second.candidate_pool_sha256
+    assert first.scope_sha256 != second.scope_sha256
+
+
+def test_preference_artifact_rejects_non_hex_scope_digest_inputs() -> None:
+    with pytest.raises(ValueError, match="board_id"):
+        PreferenceFeatureArtifact.build(
+            board_entity_id="00000000-0000-4000-8000-000000000010",
+            board_id="G" * 64,
+            model_key="moodboard_" + "b" * 64 + "_1024",
+            descriptor_fingerprint="b" * 64,
+            source_report_sha256="c" * 64,
+            candidates=(
+                PreferenceCandidate(
+                    label="candidate.png",
+                    asset_id="00000000-0000-4000-8000-000000000001",
+                    content_ref="d" * 64,
+                    source_rank=1,
+                    features=_feature_row(0.1),
+                ),
+            ),
+        )
+
+
+def test_preference_artifact_model_key_must_bind_descriptor_fingerprint() -> None:
+    with pytest.raises(ValueError, match="model_key"):
+        PreferenceFeatureArtifact.build(
+            board_entity_id="00000000-0000-4000-8000-000000000010",
+            board_id="a" * 64,
+            model_key="moodboard_" + "0" * 64 + "_1024",
+            descriptor_fingerprint="b" * 64,
+            source_report_sha256="c" * 64,
+            candidates=(
+                PreferenceCandidate(
+                    label="candidate.png",
+                    asset_id="00000000-0000-4000-8000-000000000001",
+                    content_ref="d" * 64,
+                    source_rank=1,
+                    features=_feature_row(0.1),
+                ),
+            ),
+        )

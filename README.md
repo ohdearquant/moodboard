@@ -79,6 +79,7 @@ uv run moodboard build references/ -o brand.mb \
   --khive-namespace local
 
 uv run moodboard rank candidates/ -b brand.mb -r references/ -o report.json \
+  --preference-features-output preference-features.json \
   --encoder khive-lattice \
   --khive-executable kkernel \
   --khive-config /absolute/path/to/khive.toml \
@@ -100,6 +101,13 @@ dimensioned, or non-unit embedding results stop the run. See
 `retrieve` reports Khive's self-excluded exact-cosine neighbours, asset UUIDs, BlobStore
 content references, and names. Its cosine is retrieval evidence in `[-1,1]`; it is not
 the conformal moodboard score, an aesthetic/coherence measurement, or a replacement for `rank`.
+
+`rank --preference-features-output PATH` is a Khive-Lattice-only opt-in. After the closed report
+has validated and been written, it publishes one live `artifact/moodboard` in the exact configured
+namespace and atomically writes an ADR-149 feature artifact. That artifact binds the board entity,
+descriptor, report SHA-256, frozen ten-feature producer, candidate pool, and Khive asset/BlobStore
+locators. It is a governed handoff for later `serve` and learning interactions; it does not train a
+model or merge learned preference into conformal evidence.
 
 Exact source-byte ingest in this v1 pack accepts PNG, JPEG, and WebP. The offline classical
 encoder retains the CLI's broader image-format support.

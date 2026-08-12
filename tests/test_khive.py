@@ -33,6 +33,7 @@ from moodboard.khive import (
     KhiveSearchHit,
     KhiveSearchResult,
 )
+from moodboard.preference import read_preference_feature_artifact
 
 FAKE_KKERNEL = r"""#!/usr/bin/env python3
 import base64
@@ -101,7 +102,7 @@ rows = []
 ingest_index = 0
 for op in ops:
     tool = op["tool"]
-    if tool in {"moodboard.model", "moodboard.ingest", "moodboard.search"}:
+    if tool in {"kg.create", "moodboard.model", "moodboard.ingest", "moodboard.search"}:
         if op["args"].get("namespace") != value("--namespace"):
             print(
                 "operation namespace does not match kkernel attribution namespace",
@@ -117,6 +118,8 @@ for op in ops:
     elif tool == "moodboard.ingest":
         vector = [0.0, 0.0, 0.0, 0.0]
         vector[ingest_index % 4] = 1.0
+        if mode == "constant-vector":
+            vector = [1.0, 0.0, 0.0, 0.0]
         used_descriptor = descriptor("weights-r2") if mode == "drift" else descriptor()
         if mode == "wrong-dimension":
             vector = vector[:-1]
@@ -145,6 +148,23 @@ for op in ops:
         elif mode == "ingest-missing-key":
             result.pop("created")
         ingest_index += 1
+    elif tool == "kg.create":
+        result = {
+            "id": "00000000-0000-4000-8000-000000000100",
+            "namespace": op["args"]["namespace"],
+            "created_at": "2026-08-12T16:00:00+00:00",
+            "updated_at": "2026-08-12T16:00:00+00:00",
+            "kind": "artifact",
+            "entity_type": "moodboard",
+            "name": op["args"]["name"],
+            "description": op["args"]["description"],
+            "properties": op["args"]["properties"],
+            "tags": op["args"]["tags"],
+            "deleted_at": None,
+            "merged_into": None,
+            "merge_event_id": None,
+            "content_ref": None,
+        }
     elif tool == "moodboard.search":
         query_asset_id = op["args"]["asset_id"]
         hits = [
@@ -1244,6 +1264,184 @@ def test_rank_parser_exposes_the_same_explicit_encoder_and_khive_configuration(t
     assert selected.khive_namespace == "rank-space"
     assert selected.khive_config == tmp_path / "khive.toml"
     assert default.khive_config is None
+
+
+def test_rank_parser_exposes_opt_in_preference_feature_artifact() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "rank",
+            "candidate.png",
+            "--board",
+            "brand.mb",
+            "--references",
+            "references",
+            "--output",
+            "report.json",
+            "--preference-features-output",
+            "preference-features.json",
+        ]
+    )
+
+    assert args.preference_features_output == Path("preference-features.json")
+
+
+def test_rank_preference_export_requires_khive_before_reading_inputs(tmp_path: Path) -> None:
+    report = tmp_path / "report.json"
+    artifact = tmp_path / "features.json"
+    error = io.StringIO()
+
+    status = cli.main(
+        [
+            "rank",
+            str(tmp_path / "missing-candidate.png"),
+            "--board",
+            str(tmp_path / "missing.mb"),
+            "--references",
+            str(tmp_path / "missing-references"),
+            "--output",
+            str(report),
+            "--preference-features-output",
+            str(artifact),
+        ],
+        out=io.StringIO(),
+        err=error,
+    )
+
+    assert status == 1
+    assert "requires --encoder khive-lattice" in error.getvalue()
+    assert not report.exists() and not artifact.exists()
+
+
+def test_rank_preference_export_rejects_colliding_output_before_khive(
+    fake_kkernel, tmp_path: Path
+) -> None:
+    executable, log = fake_kkernel
+    output = tmp_path / "same.json"
+    error = io.StringIO()
+
+    status = cli.main(
+        [
+            "rank",
+            str(tmp_path / "missing-candidate.png"),
+            "--board",
+            str(tmp_path / "missing.mb"),
+            "--references",
+            str(tmp_path / "missing-references"),
+            "--output",
+            str(output),
+            "--preference-features-output",
+            str(output),
+            "--encoder",
+            "khive-lattice",
+            "--khive-executable",
+            str(executable),
+        ],
+        out=io.StringIO(),
+        err=error,
+    )
+
+    assert status == 1
+    assert "must differ from the report output" in error.getvalue()
+    assert not log.exists()
+
+
+def test_rank_exports_real_geometry_only_after_valid_report(
+    fake_kkernel, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable, log = fake_kkernel
+    monkeypatch.setenv("FAKE_KKERNEL_MODE", "constant-vector")
+    references = _two_reference_directory(tmp_path / "references")
+    candidates = _two_reference_directory(tmp_path / "candidates")
+    board_path = tmp_path / "khive.mb"
+    report_path = tmp_path / "report.json"
+    feature_path = tmp_path / "preference-features.json"
+    khive_options = [
+        "--encoder",
+        "khive-lattice",
+        "--khive-executable",
+        str(executable),
+        "--khive-actor",
+        "lambda:preference-cli",
+        "--khive-namespace",
+        "preference-cli",
+    ]
+    assert (
+        cli.main(
+            ["build", str(references), "--output", str(board_path), *khive_options],
+            out=io.StringIO(),
+            err=io.StringIO(),
+        )
+        == 0
+    )
+
+    publish_saw_valid_report: list[bool] = []
+    original_publish = KhiveClient.publish_board
+
+    def checked_publish(client, **arguments):
+        document = json.loads(report_path.read_text(encoding="utf-8"))
+        publish_saw_valid_report.append(document["schema_version"] == "1.1")
+        return original_publish(client, **arguments)
+
+    monkeypatch.setattr(KhiveClient, "publish_board", checked_publish)
+    out = io.StringIO()
+    error = io.StringIO()
+    status = cli.main(
+        [
+            "rank",
+            str(candidates),
+            "--board",
+            str(board_path),
+            "--references",
+            str(references),
+            "--output",
+            str(report_path),
+            "--alpha",
+            "0.5",
+            "--preference-features-output",
+            str(feature_path),
+            *khive_options,
+        ],
+        out=out,
+        err=error,
+    )
+
+    assert status == 0, error.getvalue()
+    assert publish_saw_valid_report == [True]
+    artifact = read_preference_feature_artifact(feature_path)
+    board = read_board(board_path)
+    assert artifact.board_entity_id == "00000000-0000-4000-8000-000000000100"
+    assert artifact.board_id == board.board_id
+    assert artifact.source_report_sha256 == hashlib.sha256(report_path.read_bytes()).hexdigest()
+    assert len(artifact.candidates) == 2
+    report_document = json.loads(report_path.read_text(encoding="utf-8"))
+    report_assets = {asset["asset_id"]: asset for asset in report_document["assets"]}
+    for candidate in artifact.candidates:
+        reported = report_assets[candidate.label]
+        assert candidate.features.values.shape == (10,)
+        assert np.isfinite(candidate.features.values).all()
+        assert candidate.features.values[0] == 1.0
+        assert candidate.features.values[1] == 1.0
+        assert candidate.features.values[2] == 1.0
+        assert candidate.features.values[3] == pytest.approx(reported["score"])
+        assert candidate.features.values[4] == pytest.approx(
+            reported["interval"]["high"] - reported["interval"]["low"]
+        )
+        assert candidate.features.values[5] == 1.0
+        assert candidate.features.values[6] == 0.5
+        np.testing.assert_allclose(
+            candidate.features.values[7:],
+            [1.0 - reported["axes"][axis] for axis in ("palette", "tone", "composition")],
+            rtol=0.0,
+            atol=1e-7,
+        )
+    create = next(
+        call for call in _calls(log) if call["ops"][0]["tool"] == "kg.create"
+    )
+    create_args = create["ops"][0]["args"]
+    assert create_args["namespace"] == "preference-cli"
+    assert create_args["properties"]["board_id"] == board.board_id
+    assert create_args["properties"]["source_report_sha256"] == artifact.source_report_sha256
+    assert f"preference features {feature_path}" in out.getvalue()
 
 
 def test_retrieve_parser_exposes_a_focused_khive_only_surface(tmp_path):

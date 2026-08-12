@@ -559,9 +559,9 @@ Pillow or compressor implementation.
 `moodboard/khive.py` is an application adapter, not a general SDK. Every invocation uses
 `kkernel exec --ops-file ... --save-file ... --strict` with explicit `--actor`, identical
 `--expect-actor`, and explicit `--namespace`. The CLI namespace remains execution attribution;
-the same exact configured value is also injected into the closed `args` object of every
-`moodboard.model`, `moodboard.ingest`, and `moodboard.search` operation because that field selects
-the pack's durable storage and retrieval namespace. An optional config path is passed as `--config`;
+the same exact configured value is also injected into the closed `args` object of every supported
+Moodboard operation and the narrow `kg.create` board publication because those fields select
+durable storage, retrieval, and learning scope. An optional config path is passed as `--config`;
 when absent, Khive's normal environment/discovery fallback remains active. It verifies the saved JSONL manifest, byte
 checksum, row count, per-row tool/order, success flag, and strict JSON before releasing any
 result. Image base64 never appears in argv.
@@ -608,6 +608,24 @@ within the pack limit, and content references are raw 64-character lowercase BLA
 `moodboard retrieve` CLI prints those ranked locators and calls the value `cosine`; it does not
 label retrieval as style fit, coherence, or a calibrated score. It renders each name as a JSON
 string so control characters cannot forge terminal rows.
+
+ADR-149 preference export remains a separate opt-in on `rank`. The canonical producer consumes the
+candidate embedding, complete reference matrix, candidate-local member indices/effective support,
+conformal score and interval, and three classical distances while that geometry is still in memory.
+It never reconstructs missing values from the serialized report. Only scored candidates are
+eligible, and fewer than two fail rather than fabricating a pairwise pool. After `write_report`
+validates and atomically publishes the report, its exact bytes are SHA-256 hashed; only then does the
+client issue its one narrow `kg.create` operation for a live `artifact/moodboard`. The entity's closed
+properties bind board id, model key, descriptor fingerprint, report digest, feature schema, and
+producer identity. A strict response parser requires the exact Entity wire shape, matching namespace
+and properties, and null deletion/merge/content lifecycle fields.
+
+The resulting `moodboard.preference-feature-artifact.v2` stores that board entity UUID and a
+domain-separated scope digest over the board, descriptor, report, producer, schema, and independent
+candidate-pool digest. Candidate rows bind canonical Khive asset UUIDs and BlobStore content refs.
+The artifact writer is atomic. `--preference-features-output` is rejected with the classical encoder
+or when it aliases the report or `brand.mb`, before an encoder is constructed or Khive is invoked.
+This handoff does not itself call `serve`, collect judgments, or train a preference model.
 
 For each ingest, it also recomputes the Khive BlobStore v1 BLAKE3-256 `content_ref` over the
 submitted bytes and requires the same row to return that value. This detects swapped successful

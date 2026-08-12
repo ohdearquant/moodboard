@@ -16,8 +16,11 @@ import tempfile
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
+
+from moodboard.preference import FEATURE_PRODUCER_ID, FEATURE_PRODUCER_REVISION
 
 if TYPE_CHECKING:
     from moodboard.encoders import VisualDescriptor
@@ -25,6 +28,7 @@ if TYPE_CHECKING:
 __all__ = [
     "KhiveClient",
     "KhiveJudgmentResult",
+    "KhiveMoodboardEntity",
     "KhivePreferencePrediction",
     "KhiveProtocolError",
     "KhiveSearchHit",
@@ -39,8 +43,9 @@ _HEX = frozenset("0123456789abcdef")
 _SEARCH_RESULT_KEYS = frozenset({"query_asset_id", "descriptor", "experimental", "hits"})
 _SEARCH_HIT_KEYS = frozenset({"asset_id", "score", "rank", "name", "content_ref"})
 _MODEL_RESULT_KEYS = frozenset({"descriptor", "experimental"})
-_NAMESPACED_MOODBOARD_TOOLS = frozenset(
+_NAMESPACED_STORAGE_TOOLS = frozenset(
     {
+        "kg.create",
         "moodboard.model",
         "moodboard.ingest",
         "moodboard.search",
@@ -64,6 +69,39 @@ _FEATURE_NAMES = (
     "palette_compatibility",
     "tone_compatibility",
     "composition_compatibility",
+)
+_PREFERENCE_BOARD_SCHEMA_VERSION = "moodboard.preference-board.v1"
+_PREFERENCE_BOARD_DESCRIPTION = "Immutable Moodboard preference-learning scope"
+_PREFERENCE_BOARD_TAGS = ("moodboard", "preference-learning")
+_PREFERENCE_BOARD_PROPERTIES = frozenset(
+    {
+        "schema_version",
+        "board_id",
+        "model_key",
+        "descriptor_fingerprint",
+        "source_report_sha256",
+        "feature_schema_id",
+        "feature_producer_revision",
+        "feature_producer_id",
+    }
+)
+_KG_ENTITY_KEYS = frozenset(
+    {
+        "id",
+        "namespace",
+        "created_at",
+        "updated_at",
+        "kind",
+        "entity_type",
+        "name",
+        "description",
+        "properties",
+        "tags",
+        "deleted_at",
+        "merged_into",
+        "merge_event_id",
+        "content_ref",
+    }
 )
 
 
@@ -187,6 +225,21 @@ class KhiveSearchResult:
 
 
 @dataclass(frozen=True, slots=True)
+class KhiveMoodboardEntity:
+    """Validated live ``artifact/moodboard`` used as a preference scope anchor."""
+
+    entity_id: str
+    namespace: str
+    board_id: str
+    model_key: str
+    descriptor_fingerprint: str
+    source_report_sha256: str
+    feature_schema_id: str
+    feature_producer_revision: str
+    feature_producer_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class KhiveServeOccurrence:
     result_occurrence_id: str
     asset_id: str
@@ -306,6 +359,89 @@ def _validate_model_identity(model_key: Any, fingerprint: Any, context: str) -> 
         or not 1 <= int(dimension_text) <= 8192
     ):
         raise ValueError(f"{context} model_key must bind the supplied descriptor fingerprint")
+
+
+def _preference_board_properties(
+    *,
+    board_id: str,
+    model_key: str,
+    descriptor_fingerprint: str,
+    source_report_sha256: str,
+) -> dict[str, str]:
+    return {
+        "schema_version": _PREFERENCE_BOARD_SCHEMA_VERSION,
+        "board_id": board_id,
+        "model_key": model_key,
+        "descriptor_fingerprint": descriptor_fingerprint,
+        "source_report_sha256": source_report_sha256,
+        "feature_schema_id": _FEATURE_SCHEMA_ID,
+        "feature_producer_revision": FEATURE_PRODUCER_REVISION,
+        "feature_producer_id": FEATURE_PRODUCER_ID,
+    }
+
+
+def _require_rfc3339(value: Any, field: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise KhiveProtocolError(f"{field} must be an RFC 3339 timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise KhiveProtocolError(f"{field} must be an RFC 3339 timestamp") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise KhiveProtocolError(f"{field} must include an explicit UTC offset")
+
+
+def _parse_published_board(
+    value: Any,
+    *,
+    namespace: str,
+    name: str,
+    expected_properties: Mapping[str, str],
+) -> KhiveMoodboardEntity:
+    if not isinstance(value, dict):
+        raise KhiveProtocolError("kg.create moodboard result must be an object")
+    _require_exact_keys(value, _KG_ENTITY_KEYS, "kg.create moodboard result")
+    entity_id = _canonical_uuid(
+        value.get("id"), "kg.create moodboard result id", KhiveProtocolError
+    )
+    if value.get("namespace") != namespace:
+        raise KhiveProtocolError("kg.create moodboard result namespace does not match the request")
+    _require_rfc3339(value.get("created_at"), "kg.create moodboard result created_at")
+    _require_rfc3339(value.get("updated_at"), "kg.create moodboard result updated_at")
+    if value.get("kind") != "artifact" or value.get("entity_type") != "moodboard":
+        raise KhiveProtocolError("kg.create moodboard result is not artifact/moodboard")
+    if value.get("name") != name:
+        raise KhiveProtocolError("kg.create moodboard result name does not match the request")
+    if value.get("description") != _PREFERENCE_BOARD_DESCRIPTION:
+        raise KhiveProtocolError(
+            "kg.create moodboard result description does not match the request"
+        )
+    properties = value.get("properties")
+    if not isinstance(properties, dict):
+        raise KhiveProtocolError("kg.create moodboard result properties must be an object")
+    _require_exact_keys(properties, _PREFERENCE_BOARD_PROPERTIES, "kg.create moodboard properties")
+    if properties != expected_properties:
+        raise KhiveProtocolError("kg.create moodboard result properties do not match the request")
+    if value.get("tags") != list(_PREFERENCE_BOARD_TAGS):
+        raise KhiveProtocolError("kg.create moodboard result tags do not match the request")
+    if any(
+        value.get(field) is not None
+        for field in ("deleted_at", "merged_into", "merge_event_id", "content_ref")
+    ):
+        raise KhiveProtocolError(
+            "kg.create moodboard result lifecycle and content fields must all be null"
+        )
+    return KhiveMoodboardEntity(
+        entity_id=entity_id,
+        namespace=namespace,
+        board_id=properties["board_id"],
+        model_key=properties["model_key"],
+        descriptor_fingerprint=properties["descriptor_fingerprint"],
+        source_report_sha256=properties["source_report_sha256"],
+        feature_schema_id=properties["feature_schema_id"],
+        feature_producer_revision=properties["feature_producer_revision"],
+        feature_producer_id=properties["feature_producer_id"],
+    )
 
 
 def _validate_preference_candidate(value: Mapping[str, Any], field: str) -> dict[str, Any]:
@@ -745,6 +881,63 @@ class KhiveClient:
             )
         self._model_descriptor = descriptor
         return result
+
+    def publish_board(
+        self,
+        *,
+        name: str,
+        board_id: str,
+        model_key: str,
+        descriptor_fingerprint: str,
+        source_report_sha256: str,
+    ) -> KhiveMoodboardEntity:
+        """Create the one live ``artifact/moodboard`` required by ADR-149.
+
+        This remains a narrow application operation: callers cannot use the client to dispatch
+        arbitrary KG verbs or choose a different entity shape.
+        """
+
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or name.strip() != name
+            or len(name.encode("utf-8")) > 512
+        ):
+            raise ValueError("kg.create moodboard name must be a trimmed non-empty UTF-8 string")
+        _require_hex_64(board_id, "kg.create moodboard board_id", ValueError)
+        _validate_model_identity(model_key, descriptor_fingerprint, "kg.create moodboard")
+        _require_hex_64(
+            source_report_sha256, "kg.create moodboard source_report_sha256", ValueError
+        )
+        properties = _preference_board_properties(
+            board_id=board_id,
+            model_key=model_key,
+            descriptor_fingerprint=descriptor_fingerprint,
+            source_report_sha256=source_report_sha256,
+        )
+        value = self._execute(
+            (
+                _KhiveOperation(
+                    "kg.create",
+                    {
+                        "kind": "entity",
+                        "entity_kind": "artifact",
+                        "entity_type": "moodboard",
+                        "name": name,
+                        "description": _PREFERENCE_BOARD_DESCRIPTION,
+                        "properties": properties,
+                        "tags": list(_PREFERENCE_BOARD_TAGS),
+                        "skip_dedup_check": True,
+                    },
+                ),
+            )
+        )[0]
+        return _parse_published_board(
+            value,
+            namespace=self.namespace,
+            name=name,
+            expected_properties=properties,
+        )
 
     def ingest(self, arguments: Sequence[Mapping[str, Any]]) -> tuple[Any, ...]:
         """Submit one ordered `moodboard.ingest` batch and return its raw results."""
@@ -1200,7 +1393,7 @@ class KhiveClient:
         retrieval state. Low-level callers may repeat the configured value, but cannot replace
         it with a conflicting storage namespace.
         """
-        if operation.tool not in _NAMESPACED_MOODBOARD_TOOLS:
+        if operation.tool not in _NAMESPACED_STORAGE_TOOLS:
             return operation
         arguments = dict(operation.args)
         missing = object()
