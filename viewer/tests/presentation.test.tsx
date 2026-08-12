@@ -54,6 +54,21 @@ describe("editorial report presentation", () => {
     expect(screen.getByText(/FANN preference probability is not part of this report/i)).toBeTruthy();
   });
 
+  it("keeps overview measurements compact enough for the four-column desktop strip", async () => {
+    const model = await modelFor();
+    const { container } = render(
+      <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
+    );
+
+    const strip = container.querySelector(".story-strip");
+    expect(strip).not.toBeNull();
+    expect(within(strip as HTMLElement).getByText("0.5417", { exact: true })).toBeTruthy();
+    expect(within(strip as HTMLElement).queryByText("0.5416666666666666", { exact: true })).toBeNull();
+    for (const measurement of strip?.querySelectorAll("strong") ?? []) {
+      expect((measurement.textContent ?? "").length).toBeLessThanOrEqual(15);
+    }
+  });
+
   it("shows the candidate beside three simultaneous references", async () => {
     const model = await modelFor();
     const { container } = render(

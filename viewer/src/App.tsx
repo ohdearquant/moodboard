@@ -13,7 +13,14 @@ import {
 } from "react";
 
 import { createReportDecoder } from "./decoder";
-import { axisDefinitionFallback, flattenMeasurement, formatNumber, humanizeToken, shortDigest } from "./format";
+import {
+  axisDefinitionFallback,
+  flattenMeasurement,
+  formatCompactNumber,
+  formatNumber,
+  humanizeToken,
+  shortDigest,
+} from "./format";
 import type {
   AbstainedAsset,
   Asset,
@@ -490,18 +497,23 @@ function StoryStrip({ model }: { readonly model: ReportModel }): ReactNode {
       </article>
       <article>
         <p className="eyebrow">Cohesion</p>
-        <strong>{formatNumber(report.board_stats.tightness.loo_quantiles.p50)}</strong>
-        <span>LOO median · p10 {formatNumber(report.board_stats.tightness.loo_quantiles.p10)} · p90 {formatNumber(report.board_stats.tightness.loo_quantiles.p90)}</span>
+        <strong title={formatNumber(report.board_stats.tightness.loo_quantiles.p50)}>
+          {formatCompactNumber(report.board_stats.tightness.loo_quantiles.p50)}
+        </strong>
+        <span>
+          LOO median · p10 {formatCompactNumber(report.board_stats.tightness.loo_quantiles.p10)} · p90{" "}
+          {formatCompactNumber(report.board_stats.tightness.loo_quantiles.p90)}
+        </span>
       </article>
       <article>
         <p className="eyebrow">Diversity / coverage</p>
-        <strong>{formatNumber(report.board.n_eff)} / {report.board.n_references}</strong>
+        <strong title={formatNumber(report.board.n_eff)}>{formatCompactNumber(report.board.n_eff)} / {report.board.n_references}</strong>
         <span>effective support · {report.board.categories.length} declared look{report.board.categories.length === 1 ? "" : "s"}</span>
       </article>
       <article>
         <p className="eyebrow">Uncertainty</p>
-        <strong>α {formatNumber(report.board.supported_alpha)}</strong>
-        <span>finest supported distinction · requested α {formatNumber(report.board.requested_alpha)}</span>
+        <strong title={formatNumber(report.board.supported_alpha)}>α {formatCompactNumber(report.board.supported_alpha)}</strong>
+        <span>finest supported distinction · requested α {formatCompactNumber(report.board.requested_alpha)}</span>
       </article>
     </section>
   );

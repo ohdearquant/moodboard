@@ -341,7 +341,14 @@ code {
 .story-strip .story-compatibility { color: #fff; background: var(--cobalt); }
 .story-strip .story-compatibility .eyebrow,
 .story-strip .story-compatibility span { color: #dfe6ff; }
-.story-strip strong { display: block; margin-top: 1.5rem; font: 500 clamp(2rem, 3.5vw, 3.4rem) Georgia, serif; letter-spacing: -0.04em; }
+.story-strip strong {
+  display: block;
+  max-width: 100%;
+  margin-top: 1.5rem;
+  overflow-wrap: anywhere;
+  font: 500 clamp(2rem, 3.5vw, 3.4rem) / 0.95 Georgia, serif;
+  letter-spacing: -0.04em;
+}
 .story-strip article > span { display: block; margin-top: 0.65rem; color: var(--muted); font-size: 0.7rem; line-height: 1.45; }
 
 .pixel-rag-lab {
