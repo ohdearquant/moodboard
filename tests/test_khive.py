@@ -1434,9 +1434,7 @@ def test_rank_exports_real_geometry_only_after_valid_report(
             rtol=0.0,
             atol=1e-7,
         )
-    create = next(
-        call for call in _calls(log) if call["ops"][0]["tool"] == "kg.create"
-    )
+    create = next(call for call in _calls(log) if call["ops"][0]["tool"] == "kg.create")
     create_args = create["ops"][0]["args"]
     assert create_args["namespace"] == "preference-cli"
     assert create_args["properties"]["board_id"] == board.board_id

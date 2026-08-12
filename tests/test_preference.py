@@ -280,9 +280,7 @@ def test_preference_feature_artifact_reader_rejects_tampering_and_unknown_keys(
         lambda value: value["candidates"][0]["features"].__setitem__(0, 0.9),
         lambda value: value.__setitem__("feature_schema_id", "0" * 64),
         lambda value: value.__setitem__("producer_id", "0" * 64),
-        lambda value: value.__setitem__(
-            "board_entity_id", "00000000-0000-4000-8000-000000000011"
-        ),
+        lambda value: value.__setitem__("board_entity_id", "00000000-0000-4000-8000-000000000011"),
     ):
         changed = json.loads(json.dumps(document))
         mutation(changed)

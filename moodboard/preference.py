@@ -325,9 +325,7 @@ class PreferenceFeatureArtifact:
         _lower_hex_64(self.source_report_sha256, label="preference artifact source_report_sha256")
         model_prefix = f"moodboard_{self.descriptor_fingerprint}_"
         dimension = (
-            self.model_key.removeprefix(model_prefix)
-            if isinstance(self.model_key, str)
-            else ""
+            self.model_key.removeprefix(model_prefix) if isinstance(self.model_key, str) else ""
         )
         if (
             not isinstance(self.model_key, str)
@@ -337,9 +335,7 @@ class PreferenceFeatureArtifact:
             or dimension.startswith("0")
             or not 1 <= int(dimension) <= 8192
         ):
-            raise ValueError(
-                "preference artifact model_key must bind its descriptor fingerprint"
-            )
+            raise ValueError("preference artifact model_key must bind its descriptor fingerprint")
         if self.feature_schema_id != FEATURE_SCHEMA_ID:
             raise ValueError("preference artifact feature_schema_id is not the supported schema")
         if self.producer_revision != FEATURE_PRODUCER_REVISION:

@@ -1230,32 +1230,22 @@ def _cmd_rank(args: argparse.Namespace, out, err) -> int:
     if args.preference_features_output is not None:
         preference_candidate_paths = _collect_image_paths(list(args.candidates), err)
         if len(preference_candidate_paths) < 2:
-            raise ValueError(
-                "preference feature export needs at least two candidate image inputs"
-            )
+            raise ValueError("preference feature export needs at least two candidate image inputs")
         destination = args.preference_features_output.resolve(strict=False)
-        source_paths = [
-            image.path.resolve(strict=False) for image in references
-        ] + [path.resolve(strict=False) for path in preference_candidate_paths]
+        source_paths = [image.path.resolve(strict=False) for image in references] + [
+            path.resolve(strict=False) for path in preference_candidate_paths
+        ]
         if destination in source_paths:
             raise ValueError("preference feature output must not replace an input image")
-        preference_candidates_loaded = _load_all(
-            preference_candidate_paths, err, khive_visual=True
-        )
+        preference_candidates_loaded = _load_all(preference_candidate_paths, err, khive_visual=True)
         if any(
             len(candidate.item_id.encode("utf-8")) > 512
             for candidate in preference_candidates_loaded
         ):
-            raise ValueError(
-                "preference feature candidate labels must be at most 512 UTF-8 bytes"
-            )
-        candidate_hashes = [
-            candidate.content_sha256 for candidate in preference_candidates_loaded
-        ]
+            raise ValueError("preference feature candidate labels must be at most 512 UTF-8 bytes")
+        candidate_hashes = [candidate.content_sha256 for candidate in preference_candidates_loaded]
         if len(set(candidate_hashes)) != len(candidate_hashes):
-            raise ValueError(
-                "preference feature candidate inputs must have unique source bytes"
-            )
+            raise ValueError("preference feature candidate inputs must have unique source bytes")
 
     encoder = _make_encoder(args)
     if (encoder.name, encoder.revision) != (board.model_repo, board.model_revision):
@@ -1475,9 +1465,7 @@ def _cmd_rank(args: argparse.Namespace, out, err) -> int:
             source_report_sha256=source_report_sha256,
             candidates=preference_candidates,
         )
-        write_preference_feature_artifact(
-            preference_artifact, args.preference_features_output
-        )
+        write_preference_feature_artifact(preference_artifact, args.preference_features_output)
 
     _print_board_fit(board, out)
     abstained = len(candidates) - len(scores)
