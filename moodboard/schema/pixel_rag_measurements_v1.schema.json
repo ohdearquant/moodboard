@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/pixel_rag_measurements_v1.schema.json",
+  "title": "Moodboard Pixel RAG measured-input contract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "descriptor",
+    "evidence_status",
+    "generated_at",
+    "intents",
+    "khive_revision",
+    "schema_version",
+    "source_record"
+  ],
+  "properties": {
+    "descriptor": { "$ref": "#/$defs/descriptor" },
+    "evidence_status": { "enum": ["contract_fixture", "measured_run"] },
+    "generated_at": { "$ref": "#/$defs/timestamp" },
+    "intents": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        { "$ref": "#/$defs/intent" },
+        { "$ref": "#/$defs/intent" }
+      ],
+      "items": false
+    },
+    "khive_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "schema_version": { "const": "moodboard.pixel-rag-measurements.v1" },
+    "source_record": { "$ref": "#/$defs/khiveRecord" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+Z$"
+    },
+    "khiveRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_ref", "record_id"],
+      "properties": {
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "record_id": { "$ref": "#/$defs/uuid" }
+      }
+    },
+    "queryRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_ref", "record_id", "sha256"],
+      "properties": {
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "record_id": { "$ref": "#/$defs/uuid" },
+        "sha256": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpoint_sha256",
+        "dimensions",
+        "fingerprint",
+        "inference",
+        "model_key",
+        "model_name",
+        "model_revision",
+        "normalization",
+        "pooling",
+        "preprocessing",
+        "prompt",
+        "schema_version"
+      ],
+      "properties": {
+        "checkpoint_sha256": { "$ref": "#/$defs/digest" },
+        "dimensions": { "type": "integer", "minimum": 1, "maximum": 8192 },
+        "fingerprint": { "$ref": "#/$defs/digest" },
+        "inference": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "version"],
+          "properties": {
+            "provider": { "const": "lattice-embed" },
+            "version": { "const": "0.9.0" }
+          }
+        },
+        "model_key": { "type": "string", "minLength": 1 },
+        "model_name": { "const": "qwen3.5-vlm-pooled-visual" },
+        "model_revision": { "type": "string", "minLength": 1 },
+        "normalization": { "const": "l2" },
+        "pooling": { "const": "mean_visual_tokens" },
+        "preprocessing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["alignment", "matte_rgb", "max_side", "resample", "revision"],
+          "properties": {
+            "alignment": { "const": 32 },
+            "matte_rgb": { "const": [128, 128, 128] },
+            "max_side": { "const": 448 },
+            "resample": { "const": "lanczos3" },
+            "revision": { "const": "moodboard-qwen35-srgb-pad32-max448-v1" }
+          }
+        },
+        "prompt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["revision", "sha256"],
+          "properties": {
+            "revision": { "const": "moodboard-style-retrieval-v1" },
+            "sha256": {
+              "const": "a67ae9b539c243f498c75f1ea9f19e7018860948087728d6f8e65b34eef6a66e"
+            }
+          }
+        },
+        "schema_version": { "const": "moodboard.visual-descriptor.v1" }
+      }
+    },
+    "confirmation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor", "confirmed_at", "method"],
+      "properties": {
+        "actor": { "type": "string", "minLength": 1 },
+        "confirmed_at": { "$ref": "#/$defs/timestamp" },
+        "method": { "const": "human_confirmed" }
+      }
+    },
+    "region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["confirmation", "height", "kind", "label", "width", "x", "y"],
+      "properties": {
+        "confirmation": { "$ref": "#/$defs/confirmation" },
+        "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "kind": { "const": "normalized_rectangle" },
+        "label": { "type": "string", "minLength": 1 },
+        "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "hit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_ref", "rank", "record_id", "score"],
+      "properties": {
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "rank": { "type": "integer", "minimum": 1 },
+        "record_id": { "$ref": "#/$defs/uuid" },
+        "score": { "type": "number", "minimum": -1, "maximum": 1 }
+      }
+    },
+    "judgment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_ref", "gain"],
+      "properties": {
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "gain": { "type": "integer", "minimum": 0, "maximum": 3 }
+      }
+    },
+    "verificationMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "method_revision", "operator", "threshold", "value"],
+      "properties": {
+        "id": {
+          "enum": ["outside_mask_ssim", "content_retention", "intent_alignment"]
+        },
+        "method_revision": { "type": "string", "minLength": 1 },
+        "operator": { "enum": ["greater_than_or_equal", "less_than_or_equal"] },
+        "threshold": { "type": "number", "minimum": -1, "maximum": 1 },
+        "value": { "type": "number", "minimum": -1, "maximum": 1 }
+      }
+    },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["execution_mode", "provider", "service"],
+      "properties": {
+        "execution_mode": { "const": "precomputed_external" },
+        "provider": { "type": "string", "minLength": 1 },
+        "service": { "type": "string", "minLength": 1 }
+      }
+    },
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "designer_prompt",
+        "generator",
+        "hits",
+        "id",
+        "namespace",
+        "query_record",
+        "region",
+        "relevance_judgments",
+        "verification_metrics"
+      ],
+      "properties": {
+        "designer_prompt": { "type": "string", "minLength": 1 },
+        "generator": { "$ref": "#/$defs/generator" },
+        "hits": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/hit" }
+        },
+        "id": { "enum": ["local_replace", "global_restyle"] },
+        "namespace": { "type": "string", "minLength": 1 },
+        "query_record": { "$ref": "#/$defs/queryRecord" },
+        "region": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/region" }
+          ]
+        },
+        "relevance_judgments": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/judgment" }
+            }
+          ]
+        },
+        "verification_metrics": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/verificationMetric" }
+        }
+      }
+    }
+  }
+}
