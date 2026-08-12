@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import uuid
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -12,7 +15,11 @@ from moodboard.preference import (
     FEATURE_SCHEMA_CANONICAL_JSON,
     FEATURE_SCHEMA_ID,
     FEATURE_SEMANTICS_CANONICAL_JSON,
+    PreferenceCandidate,
+    PreferenceFeatureArtifact,
     build_preference_features,
+    read_preference_feature_artifact,
+    write_preference_feature_artifact,
 )
 
 
@@ -160,3 +167,114 @@ def test_build_preference_features_rejects_bad_geometry_and_local_members() -> N
     ):
         with pytest.raises(ValueError):
             build_preference_features(**(base | override))
+
+
+def _feature_row(offset: float) -> np.ndarray:
+    return np.linspace(offset, offset + 0.09, 10, dtype=np.float32)
+
+
+def test_preference_feature_artifact_round_trips_and_binds_candidate_pool(tmp_path: Path) -> None:
+    first_id = str(uuid.UUID("00000000-0000-4000-8000-000000000001"))
+    second_id = str(uuid.UUID("00000000-0000-4000-8000-000000000002"))
+    artifact = PreferenceFeatureArtifact.build(
+        board_id="a" * 64,
+        model_key="moodboard_" + "b" * 64 + "_1024",
+        descriptor_fingerprint="b" * 64,
+        source_report_sha256="c" * 64,
+        candidates=(
+            PreferenceCandidate(
+                label="first.png",
+                asset_id=first_id,
+                content_ref="d" * 64,
+                source_rank=1,
+                features=_feature_row(0.1),
+            ),
+            PreferenceCandidate(
+                label="second.png",
+                asset_id=second_id,
+                content_ref="e" * 64,
+                source_rank=2,
+                features=_feature_row(0.2),
+            ),
+        ),
+    )
+    destination = tmp_path / "features.json"
+
+    write_preference_feature_artifact(artifact, destination)
+    loaded = read_preference_feature_artifact(destination)
+
+    assert loaded == artifact
+    assert loaded.feature_schema_id == FEATURE_SCHEMA_ID
+    assert loaded.producer_id == FEATURE_PRODUCER_ID
+    assert len(loaded.candidate_pool_sha256) == 64
+    document = json.loads(destination.read_text(encoding="utf-8"))
+    assert document["candidates"][0]["features"] == artifact.candidates[0].features.as_wire()
+
+
+def test_candidate_pool_identity_moves_with_features_but_not_display_label() -> None:
+    common = {
+        "asset_id": "00000000-0000-4000-8000-000000000001",
+        "content_ref": "d" * 64,
+        "source_rank": 1,
+    }
+    first = PreferenceFeatureArtifact.build(
+        board_id="a" * 64,
+        model_key="moodboard_" + "b" * 64 + "_1024",
+        descriptor_fingerprint="b" * 64,
+        source_report_sha256="c" * 64,
+        candidates=(PreferenceCandidate(label="before.png", features=_feature_row(0.1), **common),),
+    )
+    renamed = PreferenceFeatureArtifact.build(
+        board_id=first.board_id,
+        model_key=first.model_key,
+        descriptor_fingerprint=first.descriptor_fingerprint,
+        source_report_sha256=first.source_report_sha256,
+        candidates=(PreferenceCandidate(label="after.png", features=_feature_row(0.1), **common),),
+    )
+    moved = PreferenceFeatureArtifact.build(
+        board_id=first.board_id,
+        model_key=first.model_key,
+        descriptor_fingerprint=first.descriptor_fingerprint,
+        source_report_sha256=first.source_report_sha256,
+        candidates=(
+            PreferenceCandidate(label="before.png", features=_feature_row(0.11), **common),
+        ),
+    )
+
+    assert renamed.candidate_pool_sha256 == first.candidate_pool_sha256
+    assert moved.candidate_pool_sha256 != first.candidate_pool_sha256
+
+
+def test_preference_feature_artifact_reader_rejects_tampering_and_unknown_keys(
+    tmp_path: Path,
+) -> None:
+    artifact = PreferenceFeatureArtifact.build(
+        board_id="a" * 64,
+        model_key="moodboard_" + "b" * 64 + "_1024",
+        descriptor_fingerprint="b" * 64,
+        source_report_sha256="c" * 64,
+        candidates=(
+            PreferenceCandidate(
+                label="candidate.png",
+                asset_id="00000000-0000-4000-8000-000000000001",
+                content_ref="d" * 64,
+                source_rank=1,
+                features=_feature_row(0.1),
+            ),
+        ),
+    )
+    destination = tmp_path / "features.json"
+    write_preference_feature_artifact(artifact, destination)
+    document = json.loads(destination.read_text(encoding="utf-8"))
+
+    for mutation in (
+        lambda value: value.update({"unexpected": True}),
+        lambda value: value["candidates"][0]["features"].__setitem__(0, 0.9),
+        lambda value: value.__setitem__("feature_schema_id", "0" * 64),
+        lambda value: value.__setitem__("producer_id", "0" * 64),
+    ):
+        changed = json.loads(json.dumps(document))
+        mutation(changed)
+        destination.write_text(json.dumps(changed), encoding="utf-8")
+        with pytest.raises(ValueError):
+            read_preference_feature_artifact(destination)

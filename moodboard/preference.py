@@ -20,9 +20,15 @@ and vector length stay unchanged.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
+import os
+import struct
+import tempfile
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 
 import numpy as np
@@ -36,7 +42,11 @@ __all__ = [
     "FEATURE_SCHEMA_VERSION",
     "FEATURE_SEMANTICS_CANONICAL_JSON",
     "PreferenceFeatures",
+    "PreferenceCandidate",
+    "PreferenceFeatureArtifact",
     "build_preference_features",
+    "read_preference_feature_artifact",
+    "write_preference_feature_artifact",
 ]
 
 FEATURE_SCHEMA_VERSION: Final = "moodboard.preference-features.v1"
@@ -87,9 +97,27 @@ FEATURE_SEMANTICS_CANONICAL_JSON: Final = (
 FEATURE_PRODUCER_ID: Final = hashlib.sha256(FEATURE_SEMANTICS_CANONICAL_JSON).hexdigest()
 
 _UNIT_NORM_ATOL = 1.0e-5
+_HEX = frozenset("0123456789abcdef")
+_ARTIFACT_SCHEMA_VERSION = "moodboard.preference-feature-artifact.v1"
+_MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
+_ARTIFACT_KEYS = frozenset(
+    {
+        "schema_version",
+        "board_id",
+        "model_key",
+        "descriptor_fingerprint",
+        "source_report_sha256",
+        "feature_schema_id",
+        "producer_revision",
+        "producer_id",
+        "candidate_pool_sha256",
+        "candidates",
+    }
+)
+_CANDIDATE_KEYS = frozenset({"label", "asset_id", "content_ref", "source_rank", "features"})
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class PreferenceFeatures:
     """One immutable float32 row in Khive's exact model-input order."""
 
@@ -109,6 +137,295 @@ class PreferenceFeatures:
         """Return JSON-safe numbers without changing float32 identity."""
 
         return [float(value) for value in self.values]
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, PreferenceFeatures) and np.array_equal(self.values, other.values)
+
+
+def _lower_hex_64(value: object, *, label: str) -> str:
+    if not isinstance(value, str) or len(value) != 64 or set(value) > _HEX:
+        raise ValueError(f"{label} must be 64 lowercase hexadecimal characters")
+    return value
+
+
+def _canonical_uuid(value: object, *, label: str) -> str:
+    try:
+        parsed = uuid.UUID(value) if isinstance(value, str) else None
+    except ValueError as error:
+        raise ValueError(f"{label} must be a bare canonical UUID") from error
+    if parsed is None or str(parsed) != value:
+        raise ValueError(f"{label} must be a bare canonical UUID")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class PreferenceCandidate:
+    """One scored Khive asset plus the exact frozen row shown to a user."""
+
+    label: str
+    asset_id: str
+    content_ref: str
+    source_rank: int
+    features: PreferenceFeatures | np.ndarray
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.label, str) or not self.label.strip():
+            raise ValueError("preference candidate label must be a non-empty string")
+        if len(self.label.encode("utf-8")) > 512:
+            raise ValueError("preference candidate label must be at most 512 UTF-8 bytes")
+        _canonical_uuid(self.asset_id, label="preference candidate asset_id")
+        _lower_hex_64(self.content_ref, label="preference candidate content_ref")
+        if (
+            isinstance(self.source_rank, bool)
+            or not isinstance(self.source_rank, int)
+            or self.source_rank < 1
+            or self.source_rank > 2**32 - 1
+        ):
+            raise ValueError("preference candidate source_rank must be a positive u32")
+        if not isinstance(self.features, PreferenceFeatures):
+            object.__setattr__(self, "features", PreferenceFeatures(np.asarray(self.features)))
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, PreferenceCandidate)
+            and self.label == other.label
+            and self.asset_id == other.asset_id
+            and self.content_ref == other.content_ref
+            and self.source_rank == other.source_rank
+            and self.features == other.features
+        )
+
+    def to_json_dict(self) -> dict[str, object]:
+        assert isinstance(self.features, PreferenceFeatures)
+        return {
+            "label": self.label,
+            "asset_id": self.asset_id,
+            "content_ref": self.content_ref,
+            "source_rank": self.source_rank,
+            "features": self.features.as_wire(),
+        }
+
+
+def _candidate_pool_digest(candidates: Sequence[PreferenceCandidate]) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"moodboard-candidate-pool-v1\0")
+    digest.update(bytes.fromhex(FEATURE_SCHEMA_ID))
+    digest.update(bytes.fromhex(FEATURE_PRODUCER_ID))
+    ordered = sorted(candidates, key=lambda candidate: candidate.asset_id)
+    digest.update(struct.pack("<I", len(ordered)))
+    for candidate in ordered:
+        digest.update(uuid.UUID(candidate.asset_id).bytes)
+        digest.update(bytes.fromhex(candidate.content_ref))
+        digest.update(struct.pack("<I", candidate.source_rank))
+        assert isinstance(candidate.features, PreferenceFeatures)
+        digest.update(candidate.features.values.astype("<f4", copy=False).tobytes(order="C"))
+    return digest.hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class PreferenceFeatureArtifact:
+    """Closed handoff between rank-time geometry and Khive preference events."""
+
+    schema_version: str
+    board_id: str
+    model_key: str
+    descriptor_fingerprint: str
+    source_report_sha256: str
+    feature_schema_id: str
+    producer_revision: str
+    producer_id: str
+    candidate_pool_sha256: str
+    candidates: tuple[PreferenceCandidate, ...]
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        board_id: str,
+        model_key: str,
+        descriptor_fingerprint: str,
+        source_report_sha256: str,
+        candidates: Sequence[PreferenceCandidate],
+    ) -> PreferenceFeatureArtifact:
+        frozen = tuple(candidates)
+        return cls(
+            schema_version=_ARTIFACT_SCHEMA_VERSION,
+            board_id=board_id,
+            model_key=model_key,
+            descriptor_fingerprint=descriptor_fingerprint,
+            source_report_sha256=source_report_sha256,
+            feature_schema_id=FEATURE_SCHEMA_ID,
+            producer_revision=FEATURE_PRODUCER_REVISION,
+            producer_id=FEATURE_PRODUCER_ID,
+            candidate_pool_sha256=_candidate_pool_digest(frozen),
+            candidates=frozen,
+        )
+
+    def __post_init__(self) -> None:
+        if self.schema_version != _ARTIFACT_SCHEMA_VERSION:
+            raise ValueError("unsupported preference feature artifact schema_version")
+        _lower_hex_64(self.board_id, label="preference artifact board_id")
+        _lower_hex_64(
+            self.descriptor_fingerprint, label="preference artifact descriptor_fingerprint"
+        )
+        _lower_hex_64(self.source_report_sha256, label="preference artifact source_report_sha256")
+        if not isinstance(self.model_key, str) or not self.model_key.strip():
+            raise ValueError("preference artifact model_key must be a non-empty string")
+        if len(self.model_key.encode("ascii", errors="ignore")) != len(self.model_key):
+            raise ValueError("preference artifact model_key must be ASCII")
+        if self.feature_schema_id != FEATURE_SCHEMA_ID:
+            raise ValueError("preference artifact feature_schema_id is not the supported schema")
+        if self.producer_revision != FEATURE_PRODUCER_REVISION:
+            raise ValueError("preference artifact producer_revision is not supported")
+        if self.producer_id != FEATURE_PRODUCER_ID:
+            raise ValueError("preference artifact producer_id is not supported")
+        _lower_hex_64(self.candidate_pool_sha256, label="candidate_pool_sha256")
+        if not self.candidates:
+            raise ValueError("preference artifact must contain at least one candidate")
+        if any(not isinstance(candidate, PreferenceCandidate) for candidate in self.candidates):
+            raise ValueError("preference artifact candidates must be PreferenceCandidate values")
+        asset_ids = [candidate.asset_id for candidate in self.candidates]
+        content_refs = [candidate.content_ref for candidate in self.candidates]
+        if len(set(asset_ids)) != len(asset_ids) or len(set(content_refs)) != len(content_refs):
+            raise ValueError("preference artifact candidates must have unique asset/content IDs")
+        measured = _candidate_pool_digest(self.candidates)
+        if measured != self.candidate_pool_sha256:
+            raise ValueError("preference artifact candidate_pool_sha256 does not match candidates")
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, PreferenceFeatureArtifact)
+            and self.schema_version == other.schema_version
+            and self.board_id == other.board_id
+            and self.model_key == other.model_key
+            and self.descriptor_fingerprint == other.descriptor_fingerprint
+            and self.source_report_sha256 == other.source_report_sha256
+            and self.feature_schema_id == other.feature_schema_id
+            and self.producer_revision == other.producer_revision
+            and self.producer_id == other.producer_id
+            and self.candidate_pool_sha256 == other.candidate_pool_sha256
+            and self.candidates == other.candidates
+        )
+
+    def to_json_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "board_id": self.board_id,
+            "model_key": self.model_key,
+            "descriptor_fingerprint": self.descriptor_fingerprint,
+            "source_report_sha256": self.source_report_sha256,
+            "feature_schema_id": self.feature_schema_id,
+            "producer_revision": self.producer_revision,
+            "producer_id": self.producer_id,
+            "candidate_pool_sha256": self.candidate_pool_sha256,
+            "candidates": [candidate.to_json_dict() for candidate in self.candidates],
+        }
+
+
+def _reject_duplicate_object_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key {key!r}")
+        value[key] = item
+    return value
+
+
+def _reject_json_constant(token: str) -> None:
+    raise ValueError(f"non-standard JSON constant {token!r}")
+
+
+def _exact_keys(value: dict[str, object], expected: frozenset[str], *, label: str) -> None:
+    if frozenset(value) != expected:
+        raise ValueError(f"{label} does not have the exact closed key set")
+
+
+def read_preference_feature_artifact(path: Path) -> PreferenceFeatureArtifact:
+    """Read, strictly validate, and rederive every identity-bearing digest."""
+
+    data = path.read_bytes()
+    if len(data) > _MAX_ARTIFACT_BYTES:
+        raise ValueError("preference feature artifact exceeds the 16 MiB input ceiling")
+    try:
+        document = json.loads(
+            data.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_object_keys,
+            parse_constant=_reject_json_constant,
+        )
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError(
+            f"preference feature artifact is not strict UTF-8 JSON: {error}"
+        ) from error
+    if not isinstance(document, dict):
+        raise ValueError("preference feature artifact must be a JSON object")
+    _exact_keys(document, _ARTIFACT_KEYS, label="preference feature artifact")
+    raw_candidates = document["candidates"]
+    if not isinstance(raw_candidates, list):
+        raise ValueError("preference feature artifact candidates must be an array")
+    candidates: list[PreferenceCandidate] = []
+    for index, raw in enumerate(raw_candidates):
+        if not isinstance(raw, dict):
+            raise ValueError(f"preference candidate {index} must be an object")
+        _exact_keys(raw, _CANDIDATE_KEYS, label=f"preference candidate {index}")
+        features = raw["features"]
+        if not isinstance(features, list) or len(features) != len(FEATURE_NAMES):
+            raise ValueError(f"preference candidate {index} features must have length 10")
+        if any(
+            isinstance(value, bool) or not isinstance(value, (int, float)) for value in features
+        ):
+            raise ValueError(f"preference candidate {index} features must be plain numbers")
+        candidates.append(
+            PreferenceCandidate(
+                label=raw["label"],
+                asset_id=raw["asset_id"],
+                content_ref=raw["content_ref"],
+                source_rank=raw["source_rank"],
+                features=np.asarray(features, dtype=np.float32),
+            )
+        )
+    return PreferenceFeatureArtifact(
+        schema_version=document["schema_version"],
+        board_id=document["board_id"],
+        model_key=document["model_key"],
+        descriptor_fingerprint=document["descriptor_fingerprint"],
+        source_report_sha256=document["source_report_sha256"],
+        feature_schema_id=document["feature_schema_id"],
+        producer_revision=document["producer_revision"],
+        producer_id=document["producer_id"],
+        candidate_pool_sha256=document["candidate_pool_sha256"],
+        candidates=tuple(candidates),
+    )
+
+
+def write_preference_feature_artifact(artifact: PreferenceFeatureArtifact, path: Path) -> None:
+    """Atomically publish one closed feature artifact after intrinsic validation."""
+
+    if not isinstance(artifact, PreferenceFeatureArtifact):
+        raise TypeError("artifact must be a PreferenceFeatureArtifact")
+    # __post_init__ already rederived the digest. Serializing with allow_nan=False
+    # is the final wire fence before atomic publication.
+    payload = (
+        json.dumps(
+            artifact.to_json_dict(),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _unit_rows(value: np.ndarray, *, label: str, ndim: int) -> np.ndarray:
