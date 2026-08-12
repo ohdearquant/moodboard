@@ -11,11 +11,13 @@
     "validators:write": "node scripts/generate-validators.mjs --write",
     "pixel-rag:check": "uv run --frozen --project .. --python 3.14.3 python -m moodboard.pixel_rag_viewer --check src/generated/pixel-rag-bridge.json",
     "pixel-rag:write": "uv run --frozen --project .. --python 3.14.3 python -m moodboard.pixel_rag_viewer",
+    "preference-replay:check": "uv run --frozen --project .. --python 3.14.3 python -m moodboard.preference_replay_viewer --check src/generated/preference-replay-bridge.json",
+    "preference-replay:write": "uv run --frozen --project .. --python 3.14.3 python -m moodboard.preference_replay_viewer",
     "fixture:check": "uv run --frozen --python 3.14.3 python scripts/generate_showcase_fixture.py --check tests/fixtures/showcase",
     "fixture:write": "uv run --frozen --python 3.14.3 python scripts/generate_showcase_fixture.py --write tests/fixtures/showcase",
     "build:vite": "vite build",
     "package": "node scripts/package-artifacts.mjs",
-    "build": "npm run validators:check && npm run pixel-rag:check && npm run typecheck && npm run build:vite && npm run package",
+    "build": "npm run validators:check && npm run pixel-rag:check && npm run preference-replay:check && npm run typecheck && npm run build:vite && npm run package",
     "test:ci": "npm run fixture:check && npm run validators:check && npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {

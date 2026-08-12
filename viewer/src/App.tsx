@@ -38,6 +38,10 @@ import {
   verifiedPixelRagArtifact,
 } from "./pixel-rag";
 import {
+  measuredPreferenceReplayEvidence,
+  type PreferenceReplayEvidence,
+} from "./preference-replay";
+import {
   abstainedAssets,
   activeAssetId,
   initialViewerState,
@@ -519,6 +523,125 @@ function StoryStrip({ model }: { readonly model: ReportModel }): ReactNode {
   );
 }
 
+function PreferenceReplayPanel({
+  evidence,
+}: {
+  readonly evidence: PreferenceReplayEvidence | null;
+}): ReactNode {
+  if (evidence === null) {
+    return (
+      <section className="pixel-preference preference-fallback" aria-label="Governed preference replay">
+        <div className="pixel-section-heading">
+          <div>
+            <p className="eyebrow">Preference replay · governed boundary</p>
+            <h3>Real Khive replay not frozen</h3>
+          </div>
+          <span>fallback sentinel</span>
+        </div>
+        <p>
+          This build will not substitute fixture probabilities or claim that a model adapted.
+          A measured panel appears only after the closed Khive A→B replay passes its identity,
+          support, immutability, FANN, and restart checks.
+        </p>
+        <div className="preference-fallback-grid">
+          <article>
+            <span>Support gate</span>
+            <strong>Refuse before train</strong>
+            <small>64 / 16 / 16 decisive groups plus 16 calibration ties</small>
+          </article>
+          <article>
+            <span>Evidence class</span>
+            <strong>Policy-simulated only</strong>
+            <small>No human feedback, online learning, or coherence claim</small>
+          </article>
+        </div>
+      </section>
+    );
+  }
+
+  const delta = evidence.delta;
+  const snapshots = [
+    {
+      label: "Model A · baseline snapshot",
+      model: evidence.model_a,
+      probability: delta.mean_probability_for_policy_b_preferred_before,
+      eventLabel: `${evidence.model_a.snapshot_event_count} frozen events`,
+    },
+    {
+      label: "Model B · appended-policy snapshot",
+      model: evidence.model_b,
+      probability: delta.mean_probability_for_policy_b_preferred_after,
+      eventLabel: `${evidence.model_b.snapshot_event_count} frozen events`,
+    },
+  ] as const;
+  const formattedDelta = `${delta.mean_delta >= 0 ? "+" : ""}${delta.mean_delta.toFixed(3)}`;
+
+  return (
+    <section className="pixel-preference preference-measured" aria-label="Governed preference replay">
+      <div className="pixel-section-heading">
+        <div>
+          <p className="eyebrow">Preference replay · immutable snapshots</p>
+          <h3>{delta.adaptation_direction_observed ? "Measured direction changed" : "No improvement observed"}</h3>
+        </div>
+        <span>policy-simulated · real Khive replay</span>
+      </div>
+      <p>
+        Mean probability assigned to Policy B’s preferred side across {delta.probe_count} frozen
+        probes. Labels come from disclosed feature policies—not people—and preference remains
+        separate from compatibility and coherence evidence. The replay retains {evidence.event_counts.total}
+        {" "}events; Model B adds {evidence.event_counts.model_b_appended_train_decisive} new train
+        judgments without mutating Model A.
+      </p>
+      <div className="preference-snapshots">
+        {snapshots.map((snapshot, index) => (
+          <article key={snapshot.model.preference_model_id}>
+            <span>{snapshot.label}</span>
+            <div className="preference-probability">
+              <strong>{snapshot.probability.toFixed(3)}</strong>
+              <small>mean P(B-preferred)</small>
+            </div>
+            <p>{snapshot.eventLabel}</p>
+            <dl>
+              <div>
+                <dt>Model ID</dt>
+                <dd title={snapshot.model.preference_model_id}>{shortDigest(snapshot.model.preference_model_id)}</dd>
+              </div>
+              <div>
+                <dt>Fingerprint</dt>
+                <dd title={snapshot.model.model_fingerprint}>{shortDigest(snapshot.model.model_fingerprint)}</dd>
+              </div>
+              <div>
+                <dt>Bundle</dt>
+                <dd title={snapshot.model.bundle_ref}>{shortDigest(snapshot.model.bundle_ref)}</dd>
+              </div>
+            </dl>
+            {index === 0 ? <span className="preference-arrow" aria-hidden="true">→</span> : null}
+          </article>
+        ))}
+      </div>
+      <div className={`preference-delta preference-delta-${delta.outcome}`}>
+        <span>Frozen-probe delta</span>
+        <strong>{formattedDelta}</strong>
+        <small>{delta.adaptation_direction_observed ? "improvement observed" : "no improvement observed"}</small>
+      </div>
+      <ul className="preference-verification" aria-label="Preference replay verification">
+        <li>FANN verified</li>
+        <li>A unchanged</li>
+        <li>restart exact</li>
+        <li title={evidence.support_refusal.message}>below-support refusal captured</li>
+      </ul>
+      <div className="preference-provenance">
+        <span>Feature schema · {shortDigest(evidence.bindings.feature_schema_id)}</span>
+        <span>Report · {shortDigest(evidence.bindings.source_report_sha256)}</span>
+        <span>Replay · {shortDigest(evidence.replay_fingerprint)}</span>
+      </div>
+      <ul className="preference-nonclaims" aria-label="Preference replay non-claims">
+        {evidence.non_claims.slice(0, 3).map((claim) => <li key={claim}>{claim}</li>)}
+      </ul>
+    </section>
+  );
+}
+
 function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
   const artifact = verifiedPixelRagArtifact;
   const initialIntent = artifact.intents[0];
@@ -689,35 +812,7 @@ function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
           </div>
         </section>
 
-        <section className="pixel-preference" aria-label="Preference learning before and after">
-          <div className="pixel-section-heading">
-            <div><p className="eyebrow">Preference flywheel</p><h3>Learn taste without erasing history</h3></div>
-            <span>{artifact.preference.status === "trained_snapshot" ? "trained snapshots" : "governed snapshot fixture"}</span>
-          </div>
-          <p>{artifact.preference.explanation}</p>
-          <div className="preference-snapshots">
-            {[artifact.preference.before, artifact.preference.after].map((snapshot, index) => (
-              <article key={snapshot.model_id}>
-                <span>{snapshot.label}</span>
-                <div className="preference-probability">
-                  <strong>{formatNumber(snapshot.probability)}</strong>
-                  <small>pairwise preference</small>
-                </div>
-                <p>{snapshot.preferred_asset}</p>
-                <dl>
-                  <div><dt>Model ID</dt><dd title={snapshot.model_id}>{shortDigest(snapshot.model_id)}</dd></div>
-                  <div><dt>Judgments</dt><dd>{snapshot.provenance.judgments}</dd></div>
-                  <div><dt>Bundle</dt><dd title={snapshot.provenance.bundle_ref}>{shortDigest(snapshot.provenance.bundle_ref)}</dd></div>
-                </dl>
-                {index === 0 ? <span className="preference-arrow" aria-hidden="true">→</span> : null}
-              </article>
-            ))}
-          </div>
-          <div className="preference-provenance">
-            <span>Feature schema · {shortDigest(artifact.preference.after.provenance.feature_schema_sha256)}</span>
-            <span>Run · {artifact.provenance.run_fingerprint}</span>
-          </div>
-        </section>
+        <PreferenceReplayPanel evidence={measuredPreferenceReplayEvidence} />
       </div>
     </section>
   );
@@ -1009,4 +1104,4 @@ export function ViewerApp(): ReactNode {
   return <ReportView model={state.model} activeId={activeId} filter={state.outcomeFilter} dispatch={dispatch} onFile={onFile} />;
 }
 
-export const __test = { ReportView };
+export const __test = { PreferenceReplayPanel, ReportView };

@@ -32,6 +32,14 @@ from moodboard.preference_demo import (
     pair_split,
     replay_preference_demo,
 )
+from moodboard.preference_replay_viewer import (
+    PreferenceReplayViewerBridgeError,
+    compile_viewer_preference_replay_bridge,
+    fallback_viewer_preference_replay_bridge,
+    read_viewer_preference_replay_bridge,
+    validate_viewer_preference_replay_bridge,
+    write_viewer_preference_replay_bridge,
+)
 
 
 def _stable_uuid(label: str) -> str:
@@ -338,6 +346,30 @@ def _run(tmp_path: Path, *, state: _FakeState | None = None):
     return replay, shared, output
 
 
+def _write_refingerprinted_replay(document: dict[str, Any], destination: Path) -> None:
+    core = {key: value for key, value in document.items() if key != "replay_fingerprint"}
+    canonical_core = json.dumps(
+        core,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("ascii")
+    document["replay_fingerprint"] = hashlib.sha256(
+        b"moodboard-preference-demo-replay-v1\0" + canonical_core
+    ).hexdigest()
+    destination.write_bytes(
+        json.dumps(
+            document,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("ascii")
+        + b"\n"
+    )
+
+
 def test_replay_meets_support_gates_and_never_reuses_an_unordered_pair(tmp_path: Path) -> None:
     replay, state, output = _run(tmp_path)
     document = replay.document
@@ -562,3 +594,255 @@ def test_output_is_no_clobber_before_any_khive_side_effect(tmp_path: Path) -> No
     assert output_path.read_bytes() == b"immutable prior replay\n"
     assert state.train_attempts == 0
     assert not state.served_pairs
+
+
+def test_viewer_bridge_projects_closed_measured_replay_summary(tmp_path: Path) -> None:
+    replay, _, source = _run(tmp_path / "run")
+
+    bridge = compile_viewer_preference_replay_bridge(source)
+    assert bridge["state"] == "projected"
+    assert bridge["input"] == {
+        "byte_size": len(replay.canonical_json),
+        "replay_fingerprint": replay.replay_fingerprint,
+        "schema_version": "moodboard.preference-demo-replay.v1",
+        "sha256": hashlib.sha256(replay.canonical_json).hexdigest(),
+    }
+    evidence = bridge["evidence"]
+    assert evidence["evidence_class"] == "policy_simulated"
+    assert evidence["delta"] == {
+        "adaptation_direction_observed": True,
+        "mean_delta": pytest.approx(0.56),
+        "mean_probability_for_policy_b_preferred_after": pytest.approx(0.78),
+        "mean_probability_for_policy_b_preferred_before": pytest.approx(0.22),
+        "outcome": "improvement_observed",
+        "probe_count": 8,
+    }
+    assert evidence["event_counts"] == {
+        "model_a_calibration_decisive": 16,
+        "model_a_calibration_ties": 16,
+        "model_a_test_decisive": 16,
+        "model_a_train_decisive": 64,
+        "model_b_appended_train_decisive": 96,
+        "total": 208,
+    }
+    assert evidence["model_a"]["preference_model_id"] != evidence["model_b"]["preference_model_id"]
+    assert evidence["model_a"]["bundle_ref"] == replay.document["model_a"]["content_ref"]
+    assert evidence["model_b"]["bundle_ref"] == replay.document["model_b"]["content_ref"]
+    assert evidence["verification"] == {
+        "fann_inference_verified": True,
+        "frozen_probe_count": 8,
+        "model_a_predictions_unchanged_after_model_b": True,
+        "model_snapshots_distinct": True,
+        "restart_exact": True,
+    }
+    assert evidence["bindings"]["feature_schema_id"] == _artifact().feature_schema_id
+    assert evidence["bindings"]["feature_producer_id"] == _artifact().producer_id
+    assert evidence["bindings"]["feature_producer_revision"] == _artifact().producer_revision
+    assert evidence["bindings"]["schema_version"] == _artifact().schema_version
+    assert evidence["bindings"]["source_report_sha256"] == _artifact().source_report_sha256
+    assert any("No human preference evidence" in claim for claim in evidence["non_claims"])
+    assert any("No online learning" in claim for claim in evidence["non_claims"])
+    assert any("No coherence or conformal claim" in claim for claim in evidence["non_claims"])
+
+    destination = tmp_path / "viewer-preference-replay-bridge.json"
+    write_viewer_preference_replay_bridge(bridge, destination)
+    assert read_viewer_preference_replay_bridge(destination) == bridge
+
+
+def test_viewer_bridge_fallback_is_the_only_evidence_free_sentinel() -> None:
+    bridge = fallback_viewer_preference_replay_bridge()
+    validate_viewer_preference_replay_bridge(bridge)
+    assert bridge == {
+        "evidence": None,
+        "format_version": "moodboard.viewer-preference-replay-bridge.v1",
+        "generator_revision": "moodboard.preference-replay-viewer-bridge.v1",
+        "input": None,
+        "state": "fallback",
+    }
+
+    contaminated = {**bridge, "evidence": {"evidence_class": "policy_simulated"}}
+    with pytest.raises(PreferenceReplayViewerBridgeError, match="fallback"):
+        validate_viewer_preference_replay_bridge(contaminated)
+
+
+def test_viewer_bridge_preserves_honest_no_improvement_outcome(tmp_path: Path) -> None:
+    replay, _, _ = _run(tmp_path / "run")
+    document = json.loads(replay.canonical_json)
+    before = document["delta"]["mean_probability_for_policy_b_preferred_before"]
+    after = 0.1
+    for probe in document["frozen_conflict_probes"]:
+        preferred_left = probe["policy_b_preferred_asset_id"] == probe["left"]["asset_id"]
+        prediction = probe["model_b_prediction"]
+        prediction["probability_left_given_decisive"] = after if preferred_left else 1.0 - after
+        prediction["probability_right_given_decisive"] = 1.0 - after if preferred_left else after
+        probe["probability_for_policy_b_preferred_after"] = after
+    document["delta"] = {
+        "adaptation_direction_observed": False,
+        "measurement": "frozen_policy_conflict_probes",
+        "mean_delta": after - before,
+        "mean_probability_for_policy_b_preferred_after": after,
+        "mean_probability_for_policy_b_preferred_before": before,
+    }
+    source = tmp_path / "no-improvement-replay.json"
+    _write_refingerprinted_replay(document, source)
+
+    evidence = compile_viewer_preference_replay_bridge(source)["evidence"]
+    assert evidence["delta"]["adaptation_direction_observed"] is False
+    assert evidence["delta"]["mean_delta"] < 0.0
+    assert evidence["delta"]["outcome"] == "no_improvement_observed"
+
+
+def test_viewer_bridge_rejects_replay_fingerprint_or_aggregate_drift(tmp_path: Path) -> None:
+    replay, _, source = _run(tmp_path / "run")
+    tampered = json.loads(replay.canonical_json)
+    tampered["delta"]["mean_delta"] = 0.0
+    source.write_text(
+        json.dumps(tampered, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="ascii",
+    )
+
+    with pytest.raises(PreferenceReplayViewerBridgeError, match="fingerprint"):
+        compile_viewer_preference_replay_bridge(source)
+
+
+def test_viewer_bridge_rejects_model_snapshot_event_count_drift(tmp_path: Path) -> None:
+    _, _, source = _run(tmp_path / "run")
+    bridge = compile_viewer_preference_replay_bridge(source)
+    bridge["evidence"]["model_b"]["snapshot_event_count"] -= 1
+
+    with pytest.raises(PreferenceReplayViewerBridgeError, match="snapshot event count"):
+        validate_viewer_preference_replay_bridge(bridge)
+
+
+@pytest.mark.parametrize("reader", ["compile", "read"])
+def test_viewer_bridge_rejects_oversized_regular_file_before_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reader: str
+) -> None:
+    source = tmp_path / "oversized.json"
+    with source.open("wb") as handle:
+        handle.truncate(16 * 1024 * 1024 + 1)
+    original = Path.read_bytes
+    reads: list[Path] = []
+
+    def forbidden_read(path: Path) -> bytes:
+        reads.append(path)
+        if path == source:
+            raise AssertionError("oversized source was read before the byte ceiling")
+        return original(path)
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden_read)
+    operation = (
+        compile_viewer_preference_replay_bridge
+        if reader == "compile"
+        else read_viewer_preference_replay_bridge
+    )
+    with pytest.raises(PreferenceReplayViewerBridgeError, match="byte ceiling"):
+        operation(source)
+    assert reads == []
+
+
+def test_viewer_bridge_rejects_non_regular_file_before_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "directory.json"
+    source.mkdir()
+    reads: list[Path] = []
+
+    def forbidden_read(path: Path) -> bytes:
+        reads.append(path)
+        raise AssertionError("non-regular source was read")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden_read)
+    with pytest.raises(PreferenceReplayViewerBridgeError, match="regular file"):
+        compile_viewer_preference_replay_bridge(source)
+    assert reads == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("feature_producer_id", "not-a-digest", "feature_producer_id"),
+        ("feature_producer_revision", "", "feature_producer_revision"),
+        (
+            "schema_version",
+            "moodboard.preference-feature-artifact.v1",
+            "schema_version",
+        ),
+    ],
+)
+def test_viewer_bridge_rejects_producer_binding_drift(
+    tmp_path: Path, field: str, value: str, message: str
+) -> None:
+    _, _, source = _run(tmp_path / "run")
+    bridge = compile_viewer_preference_replay_bridge(source)
+    bridge["evidence"]["bindings"][field] = value
+
+    with pytest.raises(PreferenceReplayViewerBridgeError, match=message):
+        validate_viewer_preference_replay_bridge(bridge)
+
+
+@pytest.mark.parametrize(
+    ("count", "value"),
+    [
+        ("model_a_train_decisive", 65),
+        ("model_a_calibration_decisive", 15),
+        ("model_a_calibration_ties", 17),
+        ("model_a_test_decisive", 15),
+        ("model_b_appended_train_decisive", 95),
+    ],
+)
+def test_viewer_bridge_rejects_non_demo_phase_counts(
+    tmp_path: Path, count: str, value: int
+) -> None:
+    _, _, source = _run(tmp_path / "run")
+    bridge = compile_viewer_preference_replay_bridge(source)
+    previous = bridge["evidence"]["event_counts"][count]
+    bridge["evidence"]["event_counts"][count] = value
+    bridge["evidence"]["event_counts"]["total"] += value - previous
+    bridge["evidence"]["model_b"]["snapshot_event_count"] += value - previous
+    if count != "model_b_appended_train_decisive":
+        bridge["evidence"]["model_a"]["snapshot_event_count"] += value - previous
+
+    with pytest.raises(PreferenceReplayViewerBridgeError, match="exact demo phase counts"):
+        validate_viewer_preference_replay_bridge(bridge)
+
+
+def test_viewer_bridge_rejects_support_refusal_message_drift(tmp_path: Path) -> None:
+    _, _, source = _run(tmp_path / "run")
+    bridge = compile_viewer_preference_replay_bridge(source)
+    bridge["evidence"]["support_refusal"]["message"] = (
+        "moodboard.train_preference requires at least 32 distinct decisive train "
+        "unordered-pair groups; observed 0"
+    )
+
+    with pytest.raises(PreferenceReplayViewerBridgeError, match="support refusal message"):
+        validate_viewer_preference_replay_bridge(bridge)
+
+
+def test_viewer_bridge_compiler_rejects_refingerprinted_phase_count_drift(
+    tmp_path: Path,
+) -> None:
+    replay, _, _ = _run(tmp_path / "run")
+    document = json.loads(replay.canonical_json)
+    document["phase_counts"]["model_a"]["train_decisive"] = 65
+    source = tmp_path / "phase-drift.json"
+    _write_refingerprinted_replay(document, source)
+
+    with pytest.raises(PreferenceReplayViewerBridgeError, match="exact demo phase counts"):
+        compile_viewer_preference_replay_bridge(source)
+
+
+def test_viewer_bridge_compiler_rejects_refingerprinted_support_message_drift(
+    tmp_path: Path,
+) -> None:
+    replay, _, _ = _run(tmp_path / "run")
+    document = json.loads(replay.canonical_json)
+    document["support_refusal"]["message"] = (
+        "moodboard.train_preference requires at least 32 distinct decisive train "
+        "unordered-pair groups; observed 0"
+    )
+    source = tmp_path / "support-drift.json"
+    _write_refingerprinted_replay(document, source)
+
+    with pytest.raises(PreferenceReplayViewerBridgeError, match="support refusal message"):
+        compile_viewer_preference_replay_bridge(source)

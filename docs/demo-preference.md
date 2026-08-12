@@ -147,3 +147,27 @@ The demo must always be described with all of these non-claims:
 The support refusal is itself a governance result: below the declared support, the system
 refuses to manufacture a model. A polished demo should show that refusal before showing the
 trained snapshots.
+
+## Freezing the real replay into the offline viewer
+
+The viewer consumes a separate, closed build-time bridge. It never reads preference fields from
+the Pixel RAG fixture and never fetches replay data at runtime. Until a real replay is available,
+the checked-in `fallback` sentinel contains no evidence and the UI shows no probability or
+adaptation claim.
+
+After the real replay is retained, freeze it and rebuild:
+
+```bash
+npm --prefix viewer run preference-replay:write -- \
+  --input /absolute/path/to/preference-replay.json \
+  --write src/generated/preference-replay-bridge.json
+npm --prefix viewer run build
+```
+
+The compiler accepts only the producer's canonical JSON and rederives the replay fingerprint,
+eight-probe means, delta direction, event total, descriptor-bound model key, support refusal,
+distinct model identities, FANN gates, model-A immutability, and exact restart verification. The
+bridge retains the report, feature-schema, candidate-pool, scope, model-bundle, and replay
+bindings. `policy_simulated` and the producer's human-feedback, online-learning, and coherence
+non-claims are mandatory. A measured non-positive delta is rendered as **no improvement
+observed**; it is never relabeled as adaptation.

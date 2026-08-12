@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 
 import { __test } from "../src/App";
 import { createReportDecoder } from "../src/decoder";
+import type { PreferenceReplayEvidence } from "../src/preference-replay";
 import { acceptingProbe, encodeReport, fixtureBytes, fixtureObject, toLegacy } from "./helpers";
 
 const origin = { kind: "embedded", label: "showcase fixture" } as const;
@@ -11,6 +12,81 @@ async function modelFor(bytes = fixtureBytes()) {
   const result = await createReportDecoder(acceptingProbe).decode(bytes, origin);
   if (!result.ok) throw new Error(JSON.stringify(result.issues));
   return result.model;
+}
+
+function preferenceEvidence(improved = true): PreferenceReplayEvidence {
+  const before = 0.43;
+  const after = improved ? 0.67 : 0.31;
+  return {
+    bindings: {
+      board_entity_id: "00000000-0000-4000-8000-000000000001",
+      board_id: "1".repeat(64),
+      candidate_pool_sha256: "2".repeat(64),
+      descriptor_fingerprint: "3".repeat(64),
+      feature_producer_id: "f".repeat(64),
+      feature_producer_revision: "moodboard.preference-producer.v1",
+      feature_schema_id: "4".repeat(64),
+      model_key: `moodboard_${"3".repeat(64)}_1024`,
+      schema_version: "moodboard.preference-feature-artifact.v2",
+      scope_sha256: "5".repeat(64),
+      source_report_sha256: "6".repeat(64),
+    },
+    delta: {
+      adaptation_direction_observed: improved,
+      mean_delta: after - before,
+      mean_probability_for_policy_b_preferred_after: after,
+      mean_probability_for_policy_b_preferred_before: before,
+      outcome: improved ? "improvement_observed" : "no_improvement_observed",
+      probe_count: 8,
+    },
+    event_counts: {
+      model_a_calibration_decisive: 16,
+      model_a_calibration_ties: 16,
+      model_a_test_decisive: 16,
+      model_a_train_decisive: 64,
+      model_b_appended_train_decisive: 96,
+      total: 208,
+    },
+    evidence_class: "policy_simulated",
+    model_a: {
+      bundle_ref: "7".repeat(64),
+      fann_inference_verified: true,
+      model_fingerprint: "8".repeat(64),
+      network_content_ref: "9".repeat(64),
+      preference_model_id: "00000000-0000-4000-8000-00000000000a",
+      snapshot_event_count: 112,
+    },
+    model_b: {
+      bundle_ref: "a".repeat(64),
+      fann_inference_verified: true,
+      model_fingerprint: "b".repeat(64),
+      network_content_ref: "c".repeat(64),
+      preference_model_id: "00000000-0000-4000-8000-00000000000b",
+      snapshot_event_count: 208,
+    },
+    non_claims: [
+      "No human preference evidence: policy-simulated labels only.",
+      "No online learning: immutable snapshots are retrained.",
+      "No coherence or conformal claim: preference remains separate.",
+    ],
+    replay_fingerprint: "d".repeat(64),
+    state: "measured_replay",
+    status_label: improved
+      ? "Measured policy-simulated improvement on 8 frozen probes"
+      : "Measured replay · no improvement observed on 8 frozen probes",
+    support_refusal: {
+      captured: true,
+      classification: "below_support_refusal",
+      message: "moodboard.train_preference requires at least 64 distinct decisive train unordered-pair groups; observed 0",
+    },
+    verification: {
+      fann_inference_verified: true,
+      frozen_probe_count: 8,
+      model_a_predictions_unchanged_after_model_b: true,
+      model_snapshots_distinct: true,
+      restart_exact: true,
+    },
+  };
 }
 
 describe("editorial report presentation", () => {
@@ -35,8 +111,37 @@ describe("editorial report presentation", () => {
     expect(within(lab).getByText("Whole frame")).toBeTruthy();
     expect(within(lab).getByText("demo:style:claude-lorrain")).toBeTruthy();
     expect(within(lab).getByText("nDCG@5")).toBeTruthy();
-    expect(within(lab).getByText("Model B · learned snapshot")).toBeTruthy();
+    expect(within(lab).getByText(/real Khive replay not frozen/i)).toBeTruthy();
+    expect(within(lab).getByText(/will not substitute fixture probabilities/i)).toBeTruthy();
+    expect(within(lab).queryByText("Model B · learned snapshot")).toBeNull();
     expect(container.querySelectorAll(".pixel-evidence-card")).toHaveLength(3);
+  });
+
+  it("presents a measured policy-simulated replay without human or online-learning claims", () => {
+    const evidence = preferenceEvidence();
+
+    render(<__test.PreferenceReplayPanel evidence={evidence} />);
+    const panel = screen.getByRole("region", { name: "Governed preference replay" });
+    expect(within(panel).getAllByText(/policy-simulated/i).length).toBeGreaterThanOrEqual(1);
+    expect(within(panel).getByText("0.430")).toBeTruthy();
+    expect(within(panel).getByText("0.670")).toBeTruthy();
+    expect(within(panel).getByText("+0.240")).toBeTruthy();
+    expect(within(panel).getByText(/8 frozen probes/i)).toBeTruthy();
+    expect(within(panel).getByText(/A unchanged/i)).toBeTruthy();
+    expect(within(panel).getByText(/restart exact/i)).toBeTruthy();
+    expect(within(panel).getByText(/below-support refusal captured/i)).toBeTruthy();
+    expect(within(panel).getByText(/No human preference evidence/i)).toBeTruthy();
+    expect(within(panel).getByText(/No online learning/i)).toBeTruthy();
+    expect(within(panel).getByText(/No coherence or conformal claim/i)).toBeTruthy();
+    expect(within(panel).queryByText(/human feedback learned/i)).toBeNull();
+  });
+
+  it("labels a measured negative direction as no improvement", () => {
+    const evidence = preferenceEvidence(false);
+
+    render(<__test.PreferenceReplayPanel evidence={evidence} />);
+    expect(screen.getAllByText(/no improvement observed/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText(/^improvement observed$/i)).toBeNull();
   });
 
   it("keeps compatibility, cohesion, diversity, uncertainty, and abstention distinct", async () => {
