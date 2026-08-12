@@ -34,6 +34,11 @@ detail to be checked and refuted, which is a claim about transparency rather tha
 
 ## Run it
 
+For the governed 15-image public-domain corpus used by the Adobe demo, including its atomic
+fetch command and manifest contract, see
+[`docs/adobe-demo-corpus.md`](docs/adobe-demo-corpus.md). The corpus is an integration fixture,
+not a substitute for the acceptance measurements described below.
+
 ```bash
 uv run moodboard build references/ -o brand.mb
 uv run moodboard rank candidates/ -b brand.mb -r references/ -o report.json
