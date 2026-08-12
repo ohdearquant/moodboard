@@ -233,14 +233,16 @@ _DESCRIPTOR_MODEL_NAME = "qwen3.5-vlm-pooled-visual"
 _DESCRIPTOR_PROMPT_SHA256 = "a67ae9b539c243f498c75f1ea9f19e7018860948087728d6f8e65b34eef6a66e"
 _UNIT_NORM_ATOL = 1e-5
 _KHIVE_SOURCE_MEDIA_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
-KHIVE_ADAPTER_REVISION = "moodboard-khive-adapter-v2"
-"""Pinned client-side rendition, source-ingest, and storage-namespace contract revision."""
+KHIVE_ADAPTER_REVISION = "moodboard-khive-adapter-v3"
+"""Pinned rendition, source-ingest, storage-namespace, and process-partition contract revision."""
 KHIVE_VISUAL_MATTE_RGB = (128, 128, 128)
 """The frozen v1 alpha-compositing matte shared with the Khive Moodboard pack."""
 KHIVE_REQUEST_MAX_IMAGES = 64
 """Maximum total asset occurrences admitted by one logical encoder call."""
 KHIVE_REQUEST_MAX_BYTES = 32 * 1024 * 1024
 """Maximum decoded payload bytes across all occurrences before byte deduplication."""
+_KHIVE_INGEST_PROCESS_MAX_UNIQUE = 8
+"""Maximum unique ingests sharing one bounded Khive request-read deadline."""
 _DESCRIPTOR_KEYS = frozenset(
     {
         "schema_version",
@@ -791,17 +793,20 @@ class KhiveLatticeEncoder:
                 args["caption"] = caption
             arguments.append(args)
 
-        results = self._client.ingest(arguments)
         unique_vectors: list[np.ndarray] = []
         unique_assets: list[KhiveAsset] = []
-        for index, (result, expected_content_ref) in enumerate(
-            zip(results, expected_content_refs, strict=True)
-        ):
-            asset, vector = self._validate_ingest_result(
-                result, index, byte_identity, expected_content_ref
-            )
-            unique_assets.append(asset)
-            unique_vectors.append(vector)
+        for start in range(0, len(arguments), _KHIVE_INGEST_PROCESS_MAX_UNIQUE):
+            stop = min(start + _KHIVE_INGEST_PROCESS_MAX_UNIQUE, len(arguments))
+            results = self._client.ingest(arguments[start:stop])
+            for index, (result, expected_content_ref) in enumerate(
+                zip(results, expected_content_refs[start:stop], strict=True),
+                start=start,
+            ):
+                asset, vector = self._validate_ingest_result(
+                    result, index, byte_identity, expected_content_ref
+                )
+                unique_assets.append(asset)
+                unique_vectors.append(vector)
 
         matrix = np.empty((len(payloads), self.dim), dtype=np.float64)
         assets: list[KhiveAsset] = []

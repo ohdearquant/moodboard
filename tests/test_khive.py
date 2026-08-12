@@ -94,14 +94,28 @@ ops_path = pathlib.Path(value("--ops-file"))
 save_path = pathlib.Path(value("--save-file"))
 ops = [json.loads(line) for line in ops_path.read_text().splitlines()]
 
+mode = os.environ.get("FAKE_KKERNEL_MODE", "ok")
 log_path = os.environ.get("FAKE_KKERNEL_LOG")
+prior_ingest_calls = 0
+prior_ingest_rows = 0
+if log_path and pathlib.Path(log_path).exists():
+    for line in pathlib.Path(log_path).read_text(encoding="utf-8").splitlines():
+        prior = json.loads(line)
+        ingest_rows = [op for op in prior["ops"] if op["tool"] == "moodboard.ingest"]
+        if ingest_rows:
+            prior_ingest_calls += 1
+            prior_ingest_rows += len(ingest_rows)
 if log_path:
     with open(log_path, "a", encoding="utf-8") as handle:
         handle.write(json.dumps({"argv": args, "ops": ops}, separators=(",", ":")) + "\n")
+if mode == "fail-second-ingest-process" and any(
+    op["tool"] == "moodboard.ingest" for op in ops
+) and prior_ingest_calls == 1:
+    print("deliberate second ingest process failure", file=sys.stderr)
+    raise SystemExit(93)
 
-mode = os.environ.get("FAKE_KKERNEL_MODE", "ok")
 rows = []
-ingest_index = 0
+ingest_index = prior_ingest_rows
 for op in ops:
     tool = op["tool"]
     if tool in {"kg.create", "moodboard.model", "moodboard.ingest", "moodboard.search"}:
@@ -358,6 +372,82 @@ def test_encoder_batches_in_order_and_keeps_large_image_bytes_out_of_argv(fake_k
     assert {op["args"]["namespace"] for op in ingest["ops"]} == {"moodboard-tests"}
     assert not Path(ingest["argv"][ingest["argv"].index("--ops-file") + 1]).exists()
     assert not Path(ingest["argv"][ingest["argv"].index("--save-file") + 1]).exists()
+
+
+def test_encoder_partitions_unique_ingests_into_fixed_eight_operation_processes(fake_kkernel):
+    executable, log = fake_kkernel
+    encoder = KhiveLatticeEncoder(_client(executable))
+    images = [np.full((2, 3, 3), value, dtype=np.uint8) for value in range(17)]
+
+    embedded = encoder.embed_assets(
+        images,
+        names=tuple(f"candidate-{index:02d}.png" for index in range(len(images))),
+    )
+
+    ingests = [call for call in _calls(log) if call["ops"][0]["tool"] == "moodboard.ingest"]
+    assert [len(call["ops"]) for call in ingests] == [8, 8, 1]
+    assert [operation["args"]["name"] for call in ingests for operation in call["ops"]] == [
+        f"candidate-{index:02d}.png" for index in range(len(images))
+    ]
+    np.testing.assert_array_equal(
+        embedded,
+        np.vstack([np.eye(4, dtype=np.float32)[index % 4] for index in range(len(images))]),
+    )
+    assert [asset.asset_id for asset in encoder.last_assets] == [
+        f"00000000-0000-0000-0000-{index:012x}" for index in range(1, 18)
+    ]
+
+
+def test_encoder_deduplicates_globally_before_partitioning_ingest_processes(fake_kkernel):
+    executable, log = fake_kkernel
+    encoder = KhiveLatticeEncoder(_client(executable))
+    unique = [np.full((2, 3, 3), value, dtype=np.uint8) for value in range(9)]
+    images = [*unique[:8], unique[0].copy(), unique[8]]
+    names = tuple(f"candidate-{index:02d}.png" for index in range(len(images)))
+
+    embedded = encoder.embed_assets(images, names=names)
+
+    ingests = [call for call in _calls(log) if call["ops"][0]["tool"] == "moodboard.ingest"]
+    assert [len(call["ops"]) for call in ingests] == [8, 1]
+    assert [operation["args"]["name"] for call in ingests for operation in call["ops"]] == [
+        *names[:8],
+        names[9],
+    ]
+    np.testing.assert_array_equal(embedded[0], embedded[8])
+    assert encoder.last_assets[0].asset_id == encoder.last_assets[8].asset_id
+    assert encoder.last_assets[0].content_ref == encoder.last_assets[8].content_ref
+    assert encoder.last_assets[0].created is True
+    assert encoder.last_assets[8].created is False
+
+
+def test_encoder_stops_after_a_failed_second_ingest_process_without_partial_state(
+    fake_kkernel, monkeypatch
+):
+    executable, log = fake_kkernel
+    monkeypatch.setenv("FAKE_KKERNEL_MODE", "fail-second-ingest-process")
+    encoder = KhiveLatticeEncoder(_client(executable))
+    images = [np.full((2, 3, 3), value, dtype=np.uint8) for value in range(17)]
+
+    with pytest.raises(KhiveProtocolError, match="deliberate second ingest process failure"):
+        encoder.embed(images)
+
+    ingests = [call for call in _calls(log) if call["ops"][0]["tool"] == "moodboard.ingest"]
+    assert [len(call["ops"]) for call in ingests] == [8, 8]
+    assert encoder.last_assets == ()
+
+
+def test_encoder_validates_each_ingest_process_before_starting_the_next(fake_kkernel, monkeypatch):
+    executable, log = fake_kkernel
+    monkeypatch.setenv("FAKE_KKERNEL_MODE", "ingest-extra-key")
+    encoder = KhiveLatticeEncoder(_client(executable))
+    images = [np.full((2, 3, 3), value, dtype=np.uint8) for value in range(17)]
+
+    with pytest.raises(KhiveProtocolError, match="unknown keys"):
+        encoder.embed(images)
+
+    ingests = [call for call in _calls(log) if call["ops"][0]["tool"] == "moodboard.ingest"]
+    assert [len(call["ops"]) for call in ingests] == [8]
+    assert encoder.last_assets == ()
 
 
 def test_client_passes_an_explicit_config_and_keeps_environment_fallback_optional(
@@ -688,7 +778,7 @@ def test_descriptor_canonicalization_has_a_cross_language_golden_fingerprint(fak
     assert descriptor.model_key == (
         "moodboard_5d62815b1b662fa926c58aaaf58553e3d842b615cd90f431fe6e7c1bd782ea0b_4"
     )
-    assert KHIVE_ADAPTER_REVISION == "moodboard-khive-adapter-v2"
+    assert KHIVE_ADAPTER_REVISION == "moodboard-khive-adapter-v3"
 
     synthetic = descriptor.to_json_dict()
     synthetic.pop("fingerprint")
@@ -884,6 +974,22 @@ def test_total_decoded_byte_budget_fails_before_base64_or_ingest(
 
     assert encoder.last_assets == ()
     assert len(_calls(log)) == 1
+
+
+def test_ingest_process_partitioning_cannot_reset_the_logical_call_byte_budget(
+    fake_kkernel, monkeypatch
+):
+    executable, log = fake_kkernel
+    images = [np.full((2, 3, 3), value, dtype=np.uint8) for value in range(9)]
+    one_payload_size = len(encoders_module._png_bytes(images[0], 0))
+    monkeypatch.setattr(encoders_module, "KHIVE_REQUEST_MAX_BYTES", 8 * one_payload_size)
+    encoder = KhiveLatticeEncoder(_client(executable))
+
+    with pytest.raises(ValueError, match="in-process request budget"):
+        encoder.embed(images)
+
+    assert encoder.last_assets == ()
+    assert len(_calls(log)) == 1  # model discovery only; no durable prefix
 
 
 def test_programmatic_budget_stops_before_encoding_a_later_array(fake_kkernel, monkeypatch):

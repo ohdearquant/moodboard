@@ -149,13 +149,15 @@ they are not inferred from the storage root. Moodboard sends the configured name
 vector, and retrieval state. Khive asset UUID lookup remains global; the namespace narrows vector
 candidates, so searching a globally known asset from another namespace succeeds with no hits.
 
-One Moodboard request is bounded to 64 total asset occurrences and 32 MiB of decoded bytes
-across those occurrences, before content deduplication. Admission is rolling: a source file is
-read only to the remaining budget plus one byte, and an array's exact canonical-PNG size is
-checked before encoding it. The client streams its ops JSONL, but `kkernel` currently retains
-batch JSON in process; the conservative aggregate limit prevents multi-gigabyte base64 amplification.
-Larger corpora must be deliberately partitioned into audited calls rather than being silently
-split into repeated cold model loads.
+One logical Moodboard encoder call is bounded to 64 total asset occurrences and 32 MiB of decoded
+bytes across those occurrences, before content deduplication. Admission is rolling: a source file
+is read only to the remaining budget plus one byte, and an array's exact canonical-PNG size is
+checked before encoding it. Complete-call admission and ContentRef deduplication finish before
+ingest; ordered unique assets are then submitted in groups of at most eight per serial `kkernel`
+process so one ops batch stays inside Khive's bounded shared request-read deadline. A failed group
+returns no matrix or partial local asset catalogue and prevents later groups, although already
+committed Khive operations remain durable. Larger corpora must still be deliberately partitioned
+into audited logical calls.
 
 Khive-mode CLI loading applies the same source count/byte limits before Pillow decoding, rejects
 either source side above 8192 pixels, and retains at most 256 MiB of matte-composited RGB arrays

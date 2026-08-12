@@ -522,7 +522,7 @@ ADR-0011 adds a second implementation without changing `Encoder`:
 ```python
 class KhiveLatticeEncoder:
     name: str  # "khive:" plus the descriptor's model_name
-    revision: str  # "<descriptor fingerprint>+moodboard-khive-adapter-v2"
+    revision: str  # "<descriptor fingerprint>+moodboard-khive-adapter-v3"
     dim: int  # descriptor dimensions
     descriptor: VisualDescriptor
     last_assets: tuple[KhiveAsset, ...]
@@ -551,13 +551,17 @@ path-aware source contract admits PNG, JPEG, and WebP and rejects another MIME b
 The adapter revision and a byte-exact RGBA PNG golden freeze array conversion as part of the
 encoder identity; a conversion or persistence-scope change must bump that revision. Revision 2
 retains revision 1's byte-exact PNG rendition and adds operation-level storage namespace binding.
+Revision 3 retains both and partitions globally admitted, globally byte-deduplicated unique ingests
+into ordered groups of at most eight per `kkernel` process. That process boundary is
+identity-bearing because it changes the durable failure scope even though returned vector math is
+unchanged.
 The encoder is internal and
 byte-frozen: filter-0 scanlines, a fixed zlib wrapper, manually framed DEFLATE stored blocks,
 fixed PNG chunks/CRC, and Adler-32. It does not delegate canonical byte identity to a ranged
 Pillow or compressor implementation.
 
 `moodboard/khive.py` is an application adapter, not a general SDK. Every invocation uses
-`kkernel exec --ops-file ... --save-file ... --strict` with explicit `--actor`, identical
+`kkernel exec --ops-file ... --save-file ... --strict --serial` with explicit `--actor`, identical
 `--expect-actor`, and explicit `--namespace`. The CLI namespace remains execution attribution;
 the same exact configured value is also injected into the closed `args` object of every supported
 Moodboard operation and the narrow `kg.create` board publication because those fields select
@@ -667,14 +671,25 @@ occurrence identities.
 For each ingest, it also recomputes the Khive BlobStore v1 BLAKE3-256 `content_ref` over the
 submitted bytes and requires the same row to return that value. This detects swapped successful
 rows even though every operation has the identical `moodboard.ingest` tool name.
-Byte-identical inputs are submitted once and fanned back to every original position, preventing
-parallel duplicate-creation races and duplicate inference. First-occurrence name/caption wins;
-later occurrence metadata carries `created=False`.
+Byte-identical inputs are deduplicated across the complete logical call, submitted once, and fanned
+back to every original position. First-occurrence name/caption wins; later occurrence metadata
+carries `created=False`.
 One logical call admits at most 64 total asset occurrences and 32 MiB of decoded bytes across
 those occurrences before deduplication. Source reads are bounded to remaining budget plus one;
-array geometry is checked against exact canonical-PNG size before encoding. Khive-mode CLI
-loading applies the same occurrence/source-byte gate before decode, caps either side at 8192,
-and retains at most 256 MiB of matte-composited RGB arrays. Classical loading is unchanged.
+array geometry is checked against exact canonical-PNG size before encoding. All input admission,
+byte production, ContentRef computation, and global deduplication finish before the first ingest
+process. Unique operations are then submitted in stable consecutive groups of at most eight, so one
+serial ops batch cannot consume the entire bounded Khive request-read deadline. The process groups
+do not reset either logical-call budget.
+
+Every returned group is fully validated before the next process starts. A failed process or invalid
+result stops later groups, leaves `last_assets` empty, and returns no matrix. This is not a
+transaction: operations commit independently, so a validated earlier group or a successful prefix
+of the failing group may remain durable in Khive. Same-state retry converges on the existing
+namespace-plus-ContentRef asset UUID with `created=False`, while inference and indexing run again;
+the adapter performs no compensating deletion. Khive-mode CLI loading also applies the same
+occurrence/source-byte gate before decode, caps either side at 8192, and retains at most 256 MiB of
+matte-composited RGB arrays. Classical loading is unchanged.
 
 **A gap left implicit in the specification, closed here.** The classical encoder is specified
 as "built from the palette/tone/composition features below, concatenated and L2-normalised",
