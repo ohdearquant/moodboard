@@ -24,19 +24,47 @@ if TYPE_CHECKING:
 
 __all__ = [
     "KhiveClient",
+    "KhiveJudgmentResult",
+    "KhivePreferencePrediction",
     "KhiveProtocolError",
     "KhiveSearchHit",
     "KhiveSearchRequest",
     "KhiveSearchResult",
+    "KhiveServeOccurrence",
+    "KhiveServeResult",
+    "KhiveTrainedPreferenceModel",
 ]
 
 _HEX = frozenset("0123456789abcdef")
 _SEARCH_RESULT_KEYS = frozenset({"query_asset_id", "descriptor", "experimental", "hits"})
 _SEARCH_HIT_KEYS = frozenset({"asset_id", "score", "rank", "name", "content_ref"})
 _MODEL_RESULT_KEYS = frozenset({"descriptor", "experimental"})
-_NAMESPACED_MOODBOARD_TOOLS = frozenset({"moodboard.model", "moodboard.ingest", "moodboard.search"})
+_NAMESPACED_MOODBOARD_TOOLS = frozenset(
+    {
+        "moodboard.model",
+        "moodboard.ingest",
+        "moodboard.search",
+        "moodboard.serve",
+        "moodboard.judge",
+        "moodboard.train_preference",
+        "moodboard.preference",
+    }
+)
 _DEFAULT_SEARCH_TOP_K = 20
 _MAX_SEARCH_TOP_K = 100
+_FEATURE_SCHEMA_ID = "f691fc73bf9a50d72157e21601fa579caa707bf2c448df546c63e915b4e42175"
+_FEATURE_NAMES = (
+    "visual_local_max_similarity_01",
+    "visual_local_top3_mean_similarity_01",
+    "visual_local_mean_similarity_01",
+    "style_conformal_p",
+    "style_interval_width",
+    "local_support_fraction",
+    "local_effective_support_fraction",
+    "palette_compatibility",
+    "tone_compatibility",
+    "composition_compatibility",
+)
 
 
 class KhiveProtocolError(ValueError):
@@ -159,6 +187,57 @@ class KhiveSearchResult:
 
 
 @dataclass(frozen=True, slots=True)
+class KhiveServeOccurrence:
+    result_occurrence_id: str
+    asset_id: str
+    content_ref: str
+    source_rank: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class KhiveServeResult:
+    serve_id: str
+    feature_schema_id: str
+    left: KhiveServeOccurrence
+    right: KhiveServeOccurrence
+    swap_applied: bool
+
+
+@dataclass(frozen=True, slots=True)
+class KhiveJudgmentResult:
+    judgment_id: str
+    serve_id: str
+    choice: Literal["left", "right", "tie", "abstain"]
+    reason_code: str | None
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class KhiveTrainedPreferenceModel:
+    preference_model_id: str
+    model_fingerprint: str
+    content_ref: str
+    network_sha256: str
+    network_content_ref: str
+    fann_inference_verified: bool
+    training: Mapping[str, Any]
+    calibration: Mapping[str, Any]
+    test_metrics: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class KhivePreferencePrediction:
+    preference_model_id: str
+    model_fingerprint: str
+    probability_left_given_decisive: float
+    probability_right_given_decisive: float
+    raw_fann_logit: float
+    calibrated_temperature: float
+    indifference_state: str
+    conformal_state: Literal["not_computed_by_this_verb"]
+
+
+@dataclass(frozen=True, slots=True)
 class _KhiveOperation:
     """One operation in the JSON form accepted by ``kkernel exec --ops-file``."""
 
@@ -186,6 +265,440 @@ def _json_loads(text: str, *, source: str) -> Any:
 
 def _plain_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _require_hex_64(value: Any, field: str, error_type: type[ValueError]) -> str:
+    if not _is_hex_digest(value):
+        raise error_type(f"{field} must be 64 lowercase hexadecimal characters")
+    return value
+
+
+def _finite_range(
+    value: Any,
+    field: str,
+    minimum: float,
+    maximum: float,
+    *,
+    open_low: bool = False,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field} must be a plain finite number")
+    try:
+        numeric = float(value)
+    except (OverflowError, TypeError, ValueError) as error:
+        raise ValueError(f"{field} must be a plain finite number") from error
+    lower_ok = numeric > minimum if open_low else numeric >= minimum
+    if not math.isfinite(numeric) or not lower_ok or numeric > maximum:
+        raise ValueError(f"{field} must be a plain finite number in the allowed range")
+    return numeric
+
+
+def _validate_model_identity(model_key: Any, fingerprint: Any, context: str) -> None:
+    _require_hex_64(fingerprint, f"{context} descriptor_fingerprint", ValueError)
+    prefix = f"moodboard_{fingerprint}_"
+    dimension_text = model_key.removeprefix(prefix) if isinstance(model_key, str) else ""
+    if (
+        not isinstance(model_key, str)
+        or not model_key.isascii()
+        or not model_key.startswith(prefix)
+        or not dimension_text.isdigit()
+        or dimension_text.startswith("0")
+        or not 1 <= int(dimension_text) <= 8192
+    ):
+        raise ValueError(f"{context} model_key must bind the supplied descriptor fingerprint")
+
+
+def _validate_preference_candidate(value: Mapping[str, Any], field: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"moodboard preference {field} must be an object")
+    expected = frozenset({"state", "asset_id", "content_ref", "source_rank", "features"})
+    if frozenset(value) != expected:
+        raise ValueError(f"moodboard preference {field} must have the exact candidate keys")
+    if value.get("state") != "scored":
+        raise ValueError(f"moodboard preference {field} state must be scored")
+    asset_id = _canonical_uuid(value.get("asset_id"), f"{field}.asset_id", ValueError)
+    content_ref = _require_hex_64(value.get("content_ref"), f"{field}.content_ref", ValueError)
+    source_rank = value.get("source_rank")
+    if not _plain_int(source_rank) or not 1 <= source_rank <= 2**32 - 1:
+        raise ValueError(f"moodboard preference {field}.source_rank must be a positive u32")
+    raw_features = value.get("features")
+    if not isinstance(raw_features, (list, tuple)) or len(raw_features) != len(_FEATURE_NAMES):
+        raise ValueError(f"moodboard preference {field}.features must have length 10")
+    features = [
+        _finite_range(coordinate, f"{field}.features[{index}]", 0.0, 1.0)
+        for index, coordinate in enumerate(raw_features)
+    ]
+    return {
+        "state": "scored",
+        "asset_id": asset_id,
+        "content_ref": content_ref,
+        "source_rank": source_rank,
+        "features": features,
+    }
+
+
+def _parse_occurrence(value: Any, field: str) -> KhiveServeOccurrence:
+    if not isinstance(value, dict):
+        raise KhiveProtocolError(f"{field} must be an object")
+    _require_exact_keys(
+        value,
+        frozenset({"result_occurrence_id", "asset_id", "content_ref", "source_rank"}),
+        field,
+    )
+    occurrence_id = _canonical_uuid(
+        value.get("result_occurrence_id"), f"{field}.result_occurrence_id", KhiveProtocolError
+    )
+    asset_id = _canonical_uuid(value.get("asset_id"), f"{field}.asset_id", KhiveProtocolError)
+    content_ref = _require_hex_64(
+        value.get("content_ref"), f"{field}.content_ref", KhiveProtocolError
+    )
+    source_rank = value.get("source_rank")
+    if source_rank is not None and (
+        not _plain_int(source_rank) or not 1 <= source_rank <= 2**32 - 1
+    ):
+        raise KhiveProtocolError(f"{field}.source_rank must be null or a positive u32")
+    return KhiveServeOccurrence(occurrence_id, asset_id, content_ref, source_rank)
+
+
+def _parse_scope(
+    value: Any,
+    *,
+    namespace: str,
+    actor: str,
+    board_entity_id: str,
+    board_id: str,
+    model_key: str,
+    descriptor_fingerprint: str,
+) -> None:
+    if not isinstance(value, dict):
+        raise KhiveProtocolError("moodboard preference scope must be an object")
+    expected = frozenset(
+        {
+            "namespace",
+            "actor_kind",
+            "actor_id",
+            "board_entity_id",
+            "board_id",
+            "model_key",
+            "descriptor_fingerprint",
+            "feature_schema_id",
+        }
+    )
+    _require_exact_keys(value, expected, "moodboard preference scope")
+    for field in ("namespace", "actor_kind", "actor_id"):
+        if not isinstance(value.get(field), str) or not value[field]:
+            raise KhiveProtocolError(f"moodboard preference scope {field} must be non-empty")
+    required = {
+        "namespace": namespace,
+        "board_entity_id": board_entity_id,
+        "board_id": board_id,
+        "model_key": model_key,
+        "descriptor_fingerprint": descriptor_fingerprint,
+        "feature_schema_id": _FEATURE_SCHEMA_ID,
+    }
+    if f"{value.get('actor_kind')}:{value.get('actor_id')}" != actor:
+        raise KhiveProtocolError("moodboard preference result scope actor does not match request")
+    if any(value.get(field) != expected_value for field, expected_value in required.items()):
+        raise KhiveProtocolError("moodboard preference result scope does not match the request")
+
+
+def _parse_serve_result(
+    value: Any,
+    namespace: str,
+    actor: str,
+    board_entity_id: str,
+    board_id: str,
+    model_key: str,
+    descriptor_fingerprint: str,
+) -> KhiveServeResult:
+    if not isinstance(value, dict):
+        raise KhiveProtocolError("moodboard.serve result must be an object")
+    expected = frozenset(
+        {
+            "schema_version",
+            "serve_id",
+            "scope",
+            "feature_schema",
+            "left",
+            "right",
+            "randomization",
+            "experimental",
+        }
+    )
+    _require_exact_keys(value, expected, "moodboard.serve result")
+    if (
+        value.get("schema_version") != "moodboard.preference-serve.v1"
+        or value.get("experimental") is not True
+    ):
+        raise KhiveProtocolError("moodboard.serve result has unsupported identity")
+    serve_id = _canonical_uuid(
+        value.get("serve_id"), "moodboard.serve serve_id", KhiveProtocolError
+    )
+    _parse_scope(
+        value.get("scope"),
+        namespace=namespace,
+        actor=actor,
+        board_entity_id=board_entity_id,
+        board_id=board_id,
+        model_key=model_key,
+        descriptor_fingerprint=descriptor_fingerprint,
+    )
+    schema = value.get("feature_schema")
+    if not isinstance(schema, dict):
+        raise KhiveProtocolError("moodboard.serve feature_schema must be an object")
+    _require_exact_keys(
+        schema,
+        frozenset(
+            {"schema_version", "feature_schema_id", "dtype", "bounds", "pair_transform", "features"}
+        ),
+        "moodboard.serve feature_schema",
+    )
+    if (
+        schema.get("schema_version") != "moodboard.preference-features.v1"
+        or schema.get("feature_schema_id") != _FEATURE_SCHEMA_ID
+        or schema.get("dtype") != "float32"
+        or schema.get("bounds") != [0.0, 1.0]
+        or schema.get("pair_transform") != "left_minus_right"
+        or schema.get("features") != list(_FEATURE_NAMES)
+    ):
+        raise KhiveProtocolError("moodboard.serve feature_schema does not match the client")
+    left = _parse_occurrence(value.get("left"), "moodboard.serve left")
+    right = _parse_occurrence(value.get("right"), "moodboard.serve right")
+    if left.asset_id == right.asset_id or left.content_ref == right.content_ref:
+        raise KhiveProtocolError("moodboard.serve result occurrences are not distinct")
+    randomization = value.get("randomization")
+    if not isinstance(randomization, dict):
+        raise KhiveProtocolError("moodboard.serve randomization must be an object")
+    _require_exact_keys(
+        randomization,
+        frozenset({"revision", "sha256", "swap_applied"}),
+        "moodboard.serve randomization",
+    )
+    if randomization.get("revision") != "moodboard-side-v1" or not isinstance(
+        randomization.get("swap_applied"), bool
+    ):
+        raise KhiveProtocolError("moodboard.serve randomization has unsupported identity")
+    _require_hex_64(
+        randomization.get("sha256"), "moodboard.serve randomization.sha256", KhiveProtocolError
+    )
+    return KhiveServeResult(
+        serve_id=serve_id,
+        feature_schema_id=_FEATURE_SCHEMA_ID,
+        left=left,
+        right=right,
+        swap_applied=randomization["swap_applied"],
+    )
+
+
+def _parse_judgment_result(
+    value: Any, serve_id: str, choice: str, reason_code: str | None
+) -> KhiveJudgmentResult:
+    if not isinstance(value, dict):
+        raise KhiveProtocolError("moodboard.judge result must be an object")
+    _require_exact_keys(
+        value,
+        frozenset(
+            {
+                "schema_version",
+                "judgment_id",
+                "serve_id",
+                "choice",
+                "reason_code",
+                "created",
+                "experimental",
+            }
+        ),
+        "moodboard.judge result",
+    )
+    if (
+        value.get("schema_version") != "moodboard.preference-judgment.v1"
+        or value.get("serve_id") != serve_id
+        or value.get("choice") != choice
+        or value.get("reason_code") != reason_code
+        or not isinstance(value.get("created"), bool)
+        or value.get("experimental") is not True
+    ):
+        raise KhiveProtocolError("moodboard.judge result does not match the request")
+    judgment_id = _canonical_uuid(
+        value.get("judgment_id"), "moodboard.judge judgment_id", KhiveProtocolError
+    )
+    return KhiveJudgmentResult(judgment_id, serve_id, choice, reason_code, value["created"])
+
+
+def _parse_trained_model(
+    value: Any,
+    *,
+    namespace: str,
+    actor: str,
+    board_entity_id: str,
+    board_id: str,
+    model_key: str,
+    descriptor_fingerprint: str,
+) -> KhiveTrainedPreferenceModel:
+    if not isinstance(value, dict):
+        raise KhiveProtocolError("moodboard.train_preference result must be an object")
+    expected = frozenset(
+        {
+            "schema_version",
+            "preference_model_id",
+            "content_ref",
+            "model_fingerprint",
+            "network_content_ref",
+            "network_sha256",
+            "created",
+            "scope",
+            "training",
+            "calibration",
+            "test_metrics",
+            "fann_inference_verified",
+            "experimental",
+        }
+    )
+    _require_exact_keys(value, expected, "moodboard.train_preference result")
+    if (
+        value.get("schema_version") != "moodboard.preference-model.v1"
+        or value.get("fann_inference_verified") is not True
+        or value.get("experimental") is not True
+        or not isinstance(value.get("created"), bool)
+    ):
+        raise KhiveProtocolError("moodboard.train_preference result has unsupported identity")
+    model_id = _canonical_uuid(
+        value.get("preference_model_id"),
+        "moodboard.train_preference preference_model_id",
+        KhiveProtocolError,
+    )
+    for field in ("content_ref", "model_fingerprint", "network_content_ref", "network_sha256"):
+        _require_hex_64(value.get(field), f"moodboard.train_preference {field}", KhiveProtocolError)
+    for field in ("training", "calibration", "test_metrics", "scope"):
+        if not isinstance(value.get(field), dict):
+            raise KhiveProtocolError(f"moodboard.train_preference {field} must be an object")
+    _parse_scope(
+        value["scope"],
+        namespace=namespace,
+        actor=actor,
+        board_entity_id=board_entity_id,
+        board_id=board_id,
+        model_key=model_key,
+        descriptor_fingerprint=descriptor_fingerprint,
+    )
+    return KhiveTrainedPreferenceModel(
+        model_id,
+        value["model_fingerprint"],
+        value["content_ref"],
+        value["network_sha256"],
+        value["network_content_ref"],
+        True,
+        value["training"],
+        value["calibration"],
+        value["test_metrics"],
+    )
+
+
+def _parse_preference_prediction(
+    value: Any,
+    preference_model_id: str,
+    source_report_sha256: str,
+    *,
+    namespace: str,
+    actor: str,
+    board_entity_id: str,
+    board_id: str,
+    model_key: str,
+    descriptor_fingerprint: str,
+    left: Mapping[str, Any],
+    right: Mapping[str, Any],
+) -> KhivePreferencePrediction:
+    if not isinstance(value, dict):
+        raise KhiveProtocolError("moodboard.preference result must be an object")
+    expected = frozenset(
+        {
+            "schema_version",
+            "prediction_kind",
+            "conditional_on",
+            "probability_left_given_decisive",
+            "probability_right_given_decisive",
+            "raw_fann_logit",
+            "calibrated_temperature",
+            "indifference",
+            "conformal_evidence",
+            "preference_model_id",
+            "model_content_ref",
+            "model_fingerprint",
+            "source_report_sha256",
+            "scope",
+            "left",
+            "right",
+            "experimental",
+        }
+    )
+    _require_exact_keys(value, expected, "moodboard.preference result")
+    if (
+        value.get("schema_version") != "moodboard.preference.v1"
+        or value.get("prediction_kind") != "learned_pairwise_preference"
+        or value.get("conditional_on") != "decisive_judgment"
+        or value.get("preference_model_id") != preference_model_id
+        or value.get("source_report_sha256") != source_report_sha256
+        or value.get("experimental") is not True
+    ):
+        raise KhiveProtocolError("moodboard.preference result does not match the request")
+    left_probability = _finite_range(
+        value.get("probability_left_given_decisive"), "probability_left", 0.0, 1.0
+    )
+    right_probability = _finite_range(
+        value.get("probability_right_given_decisive"), "probability_right", 0.0, 1.0
+    )
+    if not math.isclose(left_probability + right_probability, 1.0, rel_tol=0.0, abs_tol=1e-12):
+        raise KhiveProtocolError("moodboard.preference probabilities must sum to one")
+    raw_logit = _finite_range(value.get("raw_fann_logit"), "raw_fann_logit", -1e30, 1e30)
+    temperature = _finite_range(
+        value.get("calibrated_temperature"), "calibrated_temperature", 0.0, 1e30, open_low=True
+    )
+    indifference = value.get("indifference")
+    conformal = value.get("conformal_evidence")
+    if not isinstance(indifference, dict) or indifference.get("state") not in {
+        "inside_calibrated_band",
+        "outside_calibrated_band",
+    }:
+        raise KhiveProtocolError("moodboard.preference indifference is invalid")
+    if not isinstance(conformal, dict) or conformal.get("state") != "not_computed_by_this_verb":
+        raise KhiveProtocolError("moodboard.preference must keep conformal evidence separate")
+    for field in ("model_content_ref", "model_fingerprint"):
+        _require_hex_64(value.get(field), f"moodboard.preference {field}", KhiveProtocolError)
+    _parse_scope(
+        value.get("scope"),
+        namespace=namespace,
+        actor=actor,
+        board_entity_id=board_entity_id,
+        board_id=board_id,
+        model_key=model_key,
+        descriptor_fingerprint=descriptor_fingerprint,
+    )
+    for field, requested in (("left", left), ("right", right)):
+        occurrence = value.get(field)
+        if not isinstance(occurrence, dict):
+            raise KhiveProtocolError(f"moodboard.preference result {field} must be an object")
+        _require_exact_keys(
+            occurrence,
+            frozenset({"asset_id", "content_ref"}),
+            f"moodboard.preference result {field}",
+        )
+        if (
+            occurrence.get("asset_id") != requested["asset_id"]
+            or occurrence.get("content_ref") != requested["content_ref"]
+        ):
+            raise KhiveProtocolError(
+                f"moodboard.preference result {field} does not match requested identity"
+            )
+    return KhivePreferencePrediction(
+        preference_model_id,
+        value["model_fingerprint"],
+        left_probability,
+        right_probability,
+        raw_logit,
+        temperature,
+        indifference["state"],
+        "not_computed_by_this_verb",
+    )
 
 
 class KhiveClient:
@@ -252,6 +765,238 @@ class KhiveClient:
         assert self._model_descriptor is not None  # established by model() or an earlier call
         value = self._execute((_KhiveOperation("moodboard.search", request.to_arguments()),))[0]
         return self._parse_search_result(value, request, self._model_descriptor)
+
+    def serve(
+        self,
+        *,
+        board_entity_id: str,
+        board_id: str,
+        model_key: str,
+        descriptor_fingerprint: str,
+        source_report_sha256: str,
+        candidates: Sequence[Mapping[str, Any]],
+        candidate_pool_sha256: str,
+        policy_revision: str = "moodboard-demo-pairs-v1",
+        pair_propensity: float | None = None,
+    ) -> KhiveServeResult:
+        """Persist one randomized, occurrence-bound comparison presentation."""
+
+        _canonical_uuid(board_entity_id, "moodboard.serve board_entity_id", ValueError)
+        _require_hex_64(board_id, "moodboard.serve board_id", ValueError)
+        _validate_model_identity(model_key, descriptor_fingerprint, "moodboard.serve")
+        _require_hex_64(source_report_sha256, "moodboard.serve source_report_sha256", ValueError)
+        _require_hex_64(candidate_pool_sha256, "moodboard.serve candidate_pool_sha256", ValueError)
+        if len(candidates) != 2:
+            raise ValueError("moodboard.serve requires exactly two candidates")
+        validated = [
+            _validate_preference_candidate(value, f"candidates[{index}]")
+            for index, value in enumerate(candidates)
+        ]
+        if (
+            validated[0]["asset_id"] == validated[1]["asset_id"]
+            or validated[0]["content_ref"] == validated[1]["content_ref"]
+        ):
+            raise ValueError("moodboard.serve candidates must have distinct asset and content IDs")
+        if (
+            not isinstance(policy_revision, str)
+            or not policy_revision.strip()
+            or policy_revision.strip() != policy_revision
+            or len(policy_revision.encode("utf-8")) > 128
+        ):
+            raise ValueError("moodboard.serve policy_revision must be a trimmed non-empty string")
+        if pair_propensity is not None:
+            _finite_range(
+                pair_propensity, "moodboard.serve pair_propensity", 0.0, 1.0, open_low=True
+            )
+        selection: dict[str, Any] = {
+            "policy_revision": policy_revision,
+            "candidate_pool_sha256": candidate_pool_sha256,
+        }
+        if pair_propensity is not None:
+            selection["pair_propensity"] = pair_propensity
+        value = self._execute(
+            (
+                _KhiveOperation(
+                    "moodboard.serve",
+                    {
+                        "board_entity_id": board_entity_id,
+                        "board_id": board_id,
+                        "descriptor": {
+                            "model_key": model_key,
+                            "descriptor_fingerprint": descriptor_fingerprint,
+                        },
+                        "feature_schema_id": _FEATURE_SCHEMA_ID,
+                        "source_report_sha256": source_report_sha256,
+                        "candidates": validated,
+                        "selection": selection,
+                        "presentation": {
+                            "preference_probability_shown": False,
+                            "source_rank_shown": True,
+                        },
+                    },
+                ),
+            )
+        )[0]
+        return _parse_serve_result(
+            value,
+            self.namespace,
+            self.actor,
+            board_entity_id,
+            board_id,
+            model_key,
+            descriptor_fingerprint,
+        )
+
+    def judge(
+        self,
+        *,
+        serve_id: str,
+        left_result_occurrence_id: str,
+        right_result_occurrence_id: str,
+        choice: Literal["left", "right", "tie", "abstain"],
+        reason_code: str | None = None,
+        response_ms: int | None = None,
+    ) -> KhiveJudgmentResult:
+        """Append one exact immutable judgment; retries remain server-idempotent."""
+
+        for field, value in (
+            ("serve_id", serve_id),
+            ("left_result_occurrence_id", left_result_occurrence_id),
+            ("right_result_occurrence_id", right_result_occurrence_id),
+        ):
+            _canonical_uuid(value, f"moodboard.judge {field}", ValueError)
+        if choice not in {"left", "right", "tie", "abstain"}:
+            raise ValueError("moodboard.judge choice must be left, right, tie, or abstain")
+        allowed = {
+            "left": {None, "style", "palette", "tone", "composition", "other"},
+            "right": {None, "style", "palette", "tone", "composition", "other"},
+            "tie": {None, "equally_good", "equally_bad", "other"},
+            "abstain": {
+                "insufficient_context",
+                "both_unacceptable",
+                "render_failure",
+                "other",
+            },
+        }
+        if reason_code not in allowed[choice]:
+            raise ValueError("moodboard.judge reason_code is incompatible with choice")
+        if response_ms is not None and (
+            not _plain_int(response_ms) or not 0 <= response_ms <= 3_600_000
+        ):
+            raise ValueError("moodboard.judge response_ms must be an integer from 0 to 3600000")
+        arguments: dict[str, Any] = {
+            "serve_id": serve_id,
+            "left_result_occurrence_id": left_result_occurrence_id,
+            "right_result_occurrence_id": right_result_occurrence_id,
+            "choice": choice,
+        }
+        if reason_code is not None:
+            arguments["reason_code"] = reason_code
+        if response_ms is not None:
+            arguments["response_ms"] = response_ms
+        value = self._execute((_KhiveOperation("moodboard.judge", arguments),))[0]
+        return _parse_judgment_result(value, serve_id, choice, reason_code)
+
+    def train_preference(
+        self,
+        *,
+        board_entity_id: str,
+        board_id: str,
+        model_key: str,
+        descriptor_fingerprint: str,
+    ) -> KhiveTrainedPreferenceModel:
+        """Train and publish the actor/board scoped immutable FANN model."""
+
+        _canonical_uuid(board_entity_id, "moodboard.train_preference board_entity_id", ValueError)
+        _require_hex_64(board_id, "moodboard.train_preference board_id", ValueError)
+        _validate_model_identity(model_key, descriptor_fingerprint, "moodboard.train_preference")
+        value = self._execute(
+            (
+                _KhiveOperation(
+                    "moodboard.train_preference",
+                    {
+                        "board_entity_id": board_entity_id,
+                        "board_id": board_id,
+                        "descriptor": {
+                            "model_key": model_key,
+                            "descriptor_fingerprint": descriptor_fingerprint,
+                        },
+                        "feature_schema_id": _FEATURE_SCHEMA_ID,
+                    },
+                ),
+            )
+        )[0]
+        return _parse_trained_model(
+            value,
+            namespace=self.namespace,
+            actor=self.actor,
+            board_entity_id=board_entity_id,
+            board_id=board_id,
+            model_key=model_key,
+            descriptor_fingerprint=descriptor_fingerprint,
+        )
+
+    def preference(
+        self,
+        *,
+        preference_model_id: str,
+        board_entity_id: str,
+        board_id: str,
+        model_key: str,
+        descriptor_fingerprint: str,
+        source_report_sha256: str,
+        left: Mapping[str, Any],
+        right: Mapping[str, Any],
+    ) -> KhivePreferencePrediction:
+        """Run the loaded FANN head without merging it into coherence evidence."""
+
+        _canonical_uuid(preference_model_id, "moodboard.preference preference_model_id", ValueError)
+        _canonical_uuid(board_entity_id, "moodboard.preference board_entity_id", ValueError)
+        _require_hex_64(board_id, "moodboard.preference board_id", ValueError)
+        _validate_model_identity(model_key, descriptor_fingerprint, "moodboard.preference")
+        _require_hex_64(
+            source_report_sha256, "moodboard.preference source_report_sha256", ValueError
+        )
+        left_value = _validate_preference_candidate(left, "left")
+        right_value = _validate_preference_candidate(right, "right")
+        if (
+            left_value["asset_id"] == right_value["asset_id"]
+            or left_value["content_ref"] == right_value["content_ref"]
+        ):
+            raise ValueError("moodboard.preference candidates must have distinct identities")
+        value = self._execute(
+            (
+                _KhiveOperation(
+                    "moodboard.preference",
+                    {
+                        "preference_model_id": preference_model_id,
+                        "board_entity_id": board_entity_id,
+                        "board_id": board_id,
+                        "descriptor": {
+                            "model_key": model_key,
+                            "descriptor_fingerprint": descriptor_fingerprint,
+                        },
+                        "feature_schema_id": _FEATURE_SCHEMA_ID,
+                        "source_report_sha256": source_report_sha256,
+                        "left": left_value,
+                        "right": right_value,
+                    },
+                ),
+            )
+        )[0]
+        return _parse_preference_prediction(
+            value,
+            preference_model_id,
+            source_report_sha256,
+            namespace=self.namespace,
+            actor=self.actor,
+            board_entity_id=board_entity_id,
+            board_id=board_id,
+            model_key=model_key,
+            descriptor_fingerprint=descriptor_fingerprint,
+            left=left_value,
+            right=right_value,
+        )
 
     @staticmethod
     def _parse_search_result(

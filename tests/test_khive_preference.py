@@ -1,0 +1,404 @@
+from __future__ import annotations
+
+import stat
+import uuid
+from pathlib import Path
+
+import pytest
+
+from moodboard.khive import KhiveClient, KhiveProtocolError
+from moodboard.preference import FEATURE_SCHEMA_ID
+
+FAKE_PREFERENCE_KKERNEL = r"""#!/usr/bin/env python3
+import hashlib
+import json
+import pathlib
+import sys
+
+
+def value(flag):
+    return sys.argv[sys.argv.index(flag) + 1]
+
+
+ops = [json.loads(line) for line in pathlib.Path(value("--ops-file")).read_text().splitlines()]
+save_path = pathlib.Path(value("--save-file"))
+rows = []
+for operation in ops:
+    tool = operation["tool"]
+    args = operation["args"]
+    if args.get("namespace") != value("--namespace"):
+        raise SystemExit(91)
+    if tool == "moodboard.serve":
+        result = {
+            "schema_version": "moodboard.preference-serve.v1",
+            "serve_id": "00000000-0000-4000-8000-000000000101",
+            "scope": {
+                "namespace": args["namespace"],
+                "actor_kind": "lambda",
+                "actor_id": "adobe-demo",
+                "board_entity_id": args["board_entity_id"],
+                "board_id": args["board_id"],
+                "model_key": args["descriptor"]["model_key"],
+                "descriptor_fingerprint": args["descriptor"]["descriptor_fingerprint"],
+                "feature_schema_id": args["feature_schema_id"],
+            },
+            "feature_schema": {
+                "schema_version": "moodboard.preference-features.v1",
+                "feature_schema_id": args["feature_schema_id"],
+                "dtype": "float32",
+                "bounds": [0.0, 1.0],
+                "pair_transform": "left_minus_right",
+                "features": [
+                    "visual_local_max_similarity_01",
+                    "visual_local_top3_mean_similarity_01",
+                    "visual_local_mean_similarity_01",
+                    "style_conformal_p",
+                    "style_interval_width",
+                    "local_support_fraction",
+                    "local_effective_support_fraction",
+                    "palette_compatibility",
+                    "tone_compatibility",
+                    "composition_compatibility",
+                ],
+            },
+            "left": {
+                "result_occurrence_id": "00000000-0000-4000-8000-000000000102",
+                "asset_id": args["candidates"][0]["asset_id"],
+                "content_ref": args["candidates"][0]["content_ref"],
+                "source_rank": args["candidates"][0]["source_rank"],
+            },
+            "right": {
+                "result_occurrence_id": "00000000-0000-4000-8000-000000000103",
+                "asset_id": args["candidates"][1]["asset_id"],
+                "content_ref": args["candidates"][1]["content_ref"],
+                "source_rank": args["candidates"][1]["source_rank"],
+            },
+            "randomization": {
+                "revision": "moodboard-side-v1",
+                "sha256": "a" * 64,
+                "swap_applied": False,
+            },
+            "experimental": True,
+        }
+    elif tool == "moodboard.judge":
+        result = {
+            "schema_version": "moodboard.preference-judgment.v1",
+            "judgment_id": "00000000-0000-5000-8000-000000000104",
+            "serve_id": args["serve_id"],
+            "choice": args["choice"],
+            "reason_code": args.get("reason_code"),
+            "created": True,
+            "experimental": True,
+        }
+    elif tool == "moodboard.train_preference":
+        result = {
+            "schema_version": "moodboard.preference-model.v1",
+            "preference_model_id": "00000000-0000-4000-8000-000000000105",
+            "content_ref": "b" * 64,
+            "model_fingerprint": "c" * 64,
+            "network_content_ref": "d" * 64,
+            "network_sha256": "e" * 64,
+            "created": True,
+            "scope": {
+                "namespace": args["namespace"],
+                "actor_kind": "lambda",
+                "actor_id": "adobe-demo",
+                "board_entity_id": args["board_entity_id"],
+                "board_id": args["board_id"],
+                "model_key": args["descriptor"]["model_key"],
+                "descriptor_fingerprint": args["descriptor"]["descriptor_fingerprint"],
+                "feature_schema_id": args["feature_schema_id"],
+            },
+            "training": {"snapshot_sha256": "f" * 64},
+            "calibration": {"temperature": 1.25, "tie_band_half_width": 0.08},
+            "test_metrics": {"accuracy": 0.8125, "brier": 0.19, "log_loss": 0.55},
+            "fann_inference_verified": True,
+            "experimental": True,
+        }
+    elif tool == "moodboard.preference":
+        result = {
+            "schema_version": "moodboard.preference.v1",
+            "prediction_kind": "learned_pairwise_preference",
+            "conditional_on": "decisive_judgment",
+            "probability_left_given_decisive": 0.75,
+            "probability_right_given_decisive": 0.25,
+            "raw_fann_logit": 0.8,
+            "calibrated_temperature": 1.25,
+            "indifference": {
+                "state": "outside_calibrated_band",
+                "probability_margin_from_half": 0.25,
+                "calibrated_half_width": 0.08,
+            },
+            "conformal_evidence": {
+                "state": "not_computed_by_this_verb",
+                "note": "learned preference is not a conformal p-value or coherence statistic",
+            },
+            "preference_model_id": args["preference_model_id"],
+            "model_content_ref": "b" * 64,
+            "model_fingerprint": "c" * 64,
+            "source_report_sha256": args["source_report_sha256"],
+            "scope": {
+                "namespace": args["namespace"],
+                "actor_kind": "lambda",
+                "actor_id": "adobe-demo",
+                "board_entity_id": args["board_entity_id"],
+                "board_id": args["board_id"],
+                "model_key": args["descriptor"]["model_key"],
+                "descriptor_fingerprint": args["descriptor"]["descriptor_fingerprint"],
+                "feature_schema_id": args["feature_schema_id"],
+            },
+            "left": {
+                "asset_id": args["left"]["asset_id"],
+                "content_ref": args["left"]["content_ref"],
+            },
+            "right": {
+                "asset_id": args["right"]["asset_id"],
+                "content_ref": args["right"]["content_ref"],
+            },
+            "experimental": True,
+        }
+    else:
+        raise SystemExit(92)
+    rows.append({"ok": True, "result": result, "tool": tool, "usage": {}})
+
+payload = b"".join((json.dumps(row, separators=(",", ":")) + "\n").encode() for row in rows)
+save_path.write_bytes(payload)
+print(json.dumps({
+    "path": str(save_path.resolve()),
+    "rows": len(rows),
+    "checksum": hashlib.sha256(payload).hexdigest(),
+    "summary": {"total": len(rows), "succeeded": len(rows), "failed": 0, "aborted": 0},
+}, separators=(",", ":")))
+"""
+
+
+@pytest.fixture
+def preference_client(tmp_path: Path) -> tuple[KhiveClient, Path]:
+    executable = tmp_path / "kkernel-preference-fake"
+    executable.write_text(FAKE_PREFERENCE_KKERNEL, encoding="utf-8")
+    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+    return (
+        KhiveClient(
+            executable=executable,
+            actor="lambda:adobe-demo",
+            namespace="adobe-demo",
+        ),
+        executable,
+    )
+
+
+def _candidate(index: int) -> dict[str, object]:
+    return {
+        "state": "scored",
+        "asset_id": str(uuid.UUID(int=index)),
+        "content_ref": f"{index:x}" * 64,
+        "source_rank": index,
+        "features": [float(index) / 10.0] * 10,
+    }
+
+
+def _scope() -> dict[str, str]:
+    return {
+        "board_entity_id": "00000000-0000-4000-8000-000000000010",
+        "board_id": "a" * 64,
+        "model_key": "moodboard_" + "b" * 64 + "_1024",
+        "descriptor_fingerprint": "b" * 64,
+        "source_report_sha256": "c" * 64,
+    }
+
+
+def test_preference_client_typed_full_loop(preference_client) -> None:
+    client, _ = preference_client
+    scope = _scope()
+    served = client.serve(
+        board_entity_id=scope["board_entity_id"],
+        board_id=scope["board_id"],
+        model_key=scope["model_key"],
+        descriptor_fingerprint=scope["descriptor_fingerprint"],
+        source_report_sha256=scope["source_report_sha256"],
+        candidates=(_candidate(1), _candidate(2)),
+        candidate_pool_sha256="d" * 64,
+    )
+    assert served.serve_id == "00000000-0000-4000-8000-000000000101"
+    assert served.left.asset_id == _candidate(1)["asset_id"]
+    assert served.feature_schema_id == FEATURE_SCHEMA_ID
+
+    judged = client.judge(
+        serve_id=served.serve_id,
+        left_result_occurrence_id=served.left.result_occurrence_id,
+        right_result_occurrence_id=served.right.result_occurrence_id,
+        choice="left",
+        reason_code="style",
+        response_ms=1250,
+    )
+    assert judged.choice == "left" and judged.created is True
+
+    trained = client.train_preference(
+        board_entity_id=scope["board_entity_id"],
+        board_id=scope["board_id"],
+        model_key=scope["model_key"],
+        descriptor_fingerprint=scope["descriptor_fingerprint"],
+    )
+    assert trained.preference_model_id == "00000000-0000-4000-8000-000000000105"
+    assert trained.fann_inference_verified is True
+
+    prediction = client.preference(
+        preference_model_id=trained.preference_model_id,
+        board_entity_id=scope["board_entity_id"],
+        board_id=scope["board_id"],
+        model_key=scope["model_key"],
+        descriptor_fingerprint=scope["descriptor_fingerprint"],
+        source_report_sha256=scope["source_report_sha256"],
+        left=_candidate(1),
+        right=_candidate(2),
+    )
+    assert prediction.probability_left_given_decisive == 0.75
+    assert prediction.probability_right_given_decisive == 0.25
+    assert prediction.conformal_state == "not_computed_by_this_verb"
+
+
+def test_preference_client_accepts_any_descriptor_bound_positive_dimension(
+    preference_client,
+) -> None:
+    client, _ = preference_client
+    scope = _scope()
+    fingerprint = scope["descriptor_fingerprint"]
+    served = client.serve(
+        board_entity_id=scope["board_entity_id"],
+        board_id=scope["board_id"],
+        model_key=f"moodboard_{fingerprint}_4",
+        descriptor_fingerprint=fingerprint,
+        source_report_sha256=scope["source_report_sha256"],
+        candidates=(_candidate(1), _candidate(2)),
+        candidate_pool_sha256="d" * 64,
+    )
+    assert served.feature_schema_id == FEATURE_SCHEMA_ID
+
+
+@pytest.mark.parametrize(
+    ("method", "arguments"),
+    [
+        (
+            "serve",
+            {
+                "board_entity_id": "bad",
+                "board_id": "a" * 64,
+                "model_key": "model",
+                "descriptor_fingerprint": "b" * 64,
+                "source_report_sha256": "c" * 64,
+                "candidates": (_candidate(1), _candidate(2)),
+                "candidate_pool_sha256": "d" * 64,
+            },
+        ),
+        (
+            "judge",
+            {
+                "serve_id": "00000000-0000-4000-8000-000000000101",
+                "left_result_occurrence_id": "00000000-0000-4000-8000-000000000102",
+                "right_result_occurrence_id": "00000000-0000-4000-8000-000000000103",
+                "choice": "maybe",
+            },
+        ),
+    ],
+)
+def test_preference_client_rejects_invalid_inputs_before_process(
+    preference_client, method: str, arguments: dict[str, object]
+) -> None:
+    client, executable = preference_client
+    before = executable.stat().st_atime_ns
+    with pytest.raises(ValueError):
+        getattr(client, method)(**arguments)
+    assert executable.stat().st_atime_ns == before
+
+
+def test_preference_parser_rejects_probability_noncomplement(
+    monkeypatch, preference_client
+) -> None:
+    client, _ = preference_client
+    original = client._execute
+
+    def broken(operations):
+        result = original(operations)[0]
+        result["probability_right_given_decisive"] = 0.30
+        return (result,)
+
+    monkeypatch.setattr(client, "_execute", broken)
+    scope = _scope()
+    with pytest.raises(KhiveProtocolError, match="sum to one"):
+        client.preference(
+            preference_model_id="00000000-0000-4000-8000-000000000105",
+            board_entity_id=scope["board_entity_id"],
+            board_id=scope["board_id"],
+            model_key=scope["model_key"],
+            descriptor_fingerprint=scope["descriptor_fingerprint"],
+            source_report_sha256=scope["source_report_sha256"],
+            left=_candidate(1),
+            right=_candidate(2),
+        )
+
+
+def test_serve_parser_rejects_scope_attribution_drift(monkeypatch, preference_client) -> None:
+    client, _ = preference_client
+    original = client._execute
+
+    def broken(operations):
+        result = original(operations)[0]
+        result["scope"]["namespace"] = "foreign"
+        return (result,)
+
+    monkeypatch.setattr(client, "_execute", broken)
+    scope = _scope()
+    with pytest.raises(KhiveProtocolError, match="scope"):
+        client.serve(
+            board_entity_id=scope["board_entity_id"],
+            board_id=scope["board_id"],
+            model_key=scope["model_key"],
+            descriptor_fingerprint=scope["descriptor_fingerprint"],
+            source_report_sha256=scope["source_report_sha256"],
+            candidates=(_candidate(1), _candidate(2)),
+            candidate_pool_sha256="d" * 64,
+        )
+
+
+def test_trained_model_parser_rejects_scope_drift(monkeypatch, preference_client) -> None:
+    client, _ = preference_client
+    original = client._execute
+
+    def broken(operations):
+        result = original(operations)[0]
+        result["scope"]["board_id"] = "0" * 64
+        return (result,)
+
+    monkeypatch.setattr(client, "_execute", broken)
+    scope = _scope()
+    with pytest.raises(KhiveProtocolError, match="scope"):
+        client.train_preference(
+            board_entity_id=scope["board_entity_id"],
+            board_id=scope["board_id"],
+            model_key=scope["model_key"],
+            descriptor_fingerprint=scope["descriptor_fingerprint"],
+        )
+
+
+def test_prediction_parser_rejects_candidate_identity_drift(monkeypatch, preference_client) -> None:
+    client, _ = preference_client
+    original = client._execute
+
+    def broken(operations):
+        result = original(operations)[0]
+        result["left"]["asset_id"] = "00000000-0000-4000-8000-000000000099"
+        return (result,)
+
+    monkeypatch.setattr(client, "_execute", broken)
+    scope = _scope()
+    with pytest.raises(KhiveProtocolError, match="left"):
+        client.preference(
+            preference_model_id="00000000-0000-4000-8000-000000000105",
+            board_entity_id=scope["board_entity_id"],
+            board_id=scope["board_id"],
+            model_key=scope["model_key"],
+            descriptor_fingerprint=scope["descriptor_fingerprint"],
+            source_report_sha256=scope["source_report_sha256"],
+            left=_candidate(1),
+            right=_candidate(2),
+        )
