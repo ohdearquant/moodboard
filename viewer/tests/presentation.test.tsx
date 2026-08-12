@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 
 import { __test } from "../src/App";
 import { createReportDecoder } from "../src/decoder";
@@ -14,6 +14,31 @@ async function modelFor(bytes = fixtureBytes()) {
 }
 
 describe("editorial report presentation", () => {
+  it("routes the same source through two honest, intent-specific Pixel RAG views", async () => {
+    const model = await modelFor();
+    const { container } = render(
+      <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
+    );
+
+    const lab = screen.getByRole("region", { name: "Pixel RAG intent lab" });
+    expect(within(lab).getByRole("heading", { name: "Same pixels. Different evidence." })).toBeTruthy();
+    expect(
+      within(lab).getByRole("button", { name: /replace apple tree with lemon tree/i }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(within(lab).getByText("Confirmed tree mask")).toBeTruthy();
+    expect(within(lab).getByText("demo:replace:lemon-tree")).toBeTruthy();
+    expect(within(lab).getAllByText(/Public domain|CC0/).length).toBeGreaterThanOrEqual(3);
+    expect(within(lab).getByText(/external generator boundary/i)).toBeTruthy();
+    expect(within(lab).getAllByText(/immutable Khive output/i).length).toBeGreaterThanOrEqual(1);
+
+    fireEvent.click(within(lab).getByRole("button", { name: /restyle as Claude Lorrain/i }));
+    expect(within(lab).getByText("Whole frame")).toBeTruthy();
+    expect(within(lab).getByText("demo:style:claude-lorrain")).toBeTruthy();
+    expect(within(lab).getByText("nDCG@5")).toBeTruthy();
+    expect(within(lab).getByText("Model B · learned snapshot")).toBeTruthy();
+    expect(container.querySelectorAll(".pixel-evidence-card")).toHaveLength(3);
+  });
+
   it("keeps compatibility, cohesion, diversity, uncertainty, and abstention distinct", async () => {
     const model = await modelFor();
     render(<__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />);

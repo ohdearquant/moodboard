@@ -27,6 +27,10 @@ import type {
   ScoredAsset,
 } from "./model";
 import {
+  type PixelRagMediaRef,
+  verifiedPixelRagArtifact,
+} from "./pixel-rag";
+import {
   abstainedAssets,
   activeAssetId,
   initialViewerState,
@@ -503,6 +507,211 @@ function StoryStrip({ model }: { readonly model: ReportModel }): ReactNode {
   );
 }
 
+function pixelRagMediaSource(media: PixelRagMediaRef, model: ReportModel): SafeThumbnailSource | undefined {
+  return media.kind === "report_candidate"
+    ? model.candidateSources.get(media.id)
+    : model.referenceSources.get(media.id);
+}
+
+function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
+  const artifact = verifiedPixelRagArtifact;
+  const initialIntent = artifact.intents[0];
+  if (!initialIntent) throw new Error("Verified Pixel RAG artifact has no intents");
+  const [activeIntentId, setActiveIntentId] = useState(initialIntent.id);
+  const intent = artifact.intents.find((candidate) => candidate.id === activeIntentId) ?? initialIntent;
+  const source = pixelRagMediaSource(artifact.source.media, model);
+
+  return (
+    <section className="pixel-rag-lab" aria-label="Pixel RAG intent lab">
+      <header className="pixel-rag-header">
+        <div>
+          <p className="eyebrow">Pixel RAG · governed evidence routing</p>
+          <h2>Same pixels. <em>Different evidence.</em></h2>
+        </div>
+        <div className={`pixel-run-status pixel-run-${artifact.evidence_status}`}>
+          <span>{artifact.evidence_status === "measured_run" ? "Measured run" : "Contract fixture"}</span>
+          <p>{artifact.status_label}</p>
+        </div>
+      </header>
+
+      <p className="pixel-rag-deck">
+        Intent changes the editable region, retrieval namespace, evidence corpus, conditioning plan,
+        and verifier. The source bytes stay immutable.
+      </p>
+
+      <div className="intent-switcher" role="group" aria-label="Choose Pixel RAG intent">
+        {artifact.intents.map((candidate, index) => (
+          <button
+            key={candidate.id}
+            type="button"
+            aria-pressed={candidate.id === intent.id}
+            onClick={() => setActiveIntentId(candidate.id)}
+          >
+            <span>0{index + 1}</span>
+            <span>
+              <small>{candidate.eyebrow}</small>
+              <strong>{candidate.title}</strong>
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <div className="pixel-rag-workbench">
+        <aside className="pixel-source-panel">
+          <div className="pixel-panel-title">
+            <span>Source · immutable</span>
+            <span>{intent.query.granularity === "confirmed_mask" ? "Region query" : "Global query"}</span>
+          </div>
+          <div className={`pixel-source-frame pixel-source-${intent.query.granularity}`}>
+            <SafeImage
+              source={source}
+              alt={`Source asset ${artifact.source.asset_id}`}
+              fallback="Source fixture does not resolve in this report."
+            />
+            {intent.query.granularity === "confirmed_mask" ? (
+              <div className="pixel-mask" aria-label="Confirmed editable mask overlay">
+                <span>editable</span>
+              </div>
+            ) : (
+              <div className="pixel-frame-ring" aria-hidden="true" />
+            )}
+          </div>
+          <dl className="pixel-source-identity">
+            <div><dt>Asset</dt><dd>{artifact.source.asset_id}</dd></div>
+            <div><dt>SHA-256</dt><dd title={artifact.source.content_sha256}>{shortDigest(artifact.source.content_sha256)}</dd></div>
+            <div><dt>BlobStore</dt><dd title={artifact.source.khive.content_ref}>{shortDigest(artifact.source.khive.content_ref)}</dd></div>
+          </dl>
+          <div className="pixel-prompt">
+            <p className="eyebrow">Designer intent</p>
+            <blockquote>{intent.prompt}</blockquote>
+          </div>
+        </aside>
+
+        <div className="pixel-query-panel">
+          <div className="pixel-query-facts">
+            <article>
+              <span>Query granularity</span>
+              <strong>{intent.query.label}</strong>
+              <small>{intent.query.mask_ref ? `mask · ${shortDigest(intent.query.mask_ref)}` : "all pixels editable; layout protected by verifier"}</small>
+            </article>
+            <article>
+              <span>Active Khive namespace</span>
+              <strong>{intent.query.namespace}</strong>
+              <small>{intent.query.corpus_label}</small>
+            </article>
+          </div>
+          <p className="pixel-rationale">{intent.query.rationale}</p>
+
+          <div className="pixel-evidence-heading">
+            <div>
+              <p className="eyebrow">Ranked visual evidence</p>
+              <h3>References the generator may condition on</h3>
+            </div>
+            <span>Khive retrieval · Lattice descriptor · top 3</span>
+          </div>
+          <div className="pixel-evidence-grid">
+            {intent.evidence.map((hit) => (
+              <article className="pixel-evidence-card" key={hit.asset_id}>
+                <div className="pixel-hit-image">
+                  <SafeImage
+                    source={pixelRagMediaSource(hit.media, model)}
+                    alt={`Retrieved evidence ${hit.title}`}
+                    fallback="Evidence preview does not resolve in this report."
+                  />
+                  <span>#{hit.rank}</span>
+                </div>
+                <div className="pixel-hit-copy">
+                  <div className="pixel-hit-score">
+                    <span>cosine</span>
+                    <strong>{formatNumber(hit.score.value)}</strong>
+                  </div>
+                  <h4>{hit.title}</h4>
+                  <p>{hit.rationale}</p>
+                  <dl>
+                    <div><dt>Creator</dt><dd>{hit.creator}</dd></div>
+                    <div><dt>License</dt><dd>{hit.license.label}</dd></div>
+                    <div><dt>Content</dt><dd title={hit.content_sha256}>{shortDigest(hit.content_sha256)}</dd></div>
+                    <div><dt>Khive ref</dt><dd title={hit.khive.content_ref}>{shortDigest(hit.khive.content_ref)}</dd></div>
+                  </dl>
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <ol className="pixel-pipeline" aria-label="Pixel RAG control pipeline">
+        {intent.pipeline.map((stage, index) => (
+          <li key={stage.id} className={stage.id === "generator" ? "pixel-stage-external" : ""}>
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <div>
+              <strong>{stage.label}</strong>
+              <small>{stage.detail}</small>
+            </div>
+          </li>
+        ))}
+      </ol>
+
+      <div className="pixel-results-grid">
+        <section className="pixel-verification" aria-label="Recorded retrieval and verification metrics">
+          <div className="pixel-section-heading">
+            <div><p className="eyebrow">Quantitative checks</p><h3>Retrieval and edit verification</h3></div>
+            <span>{artifact.evidence_status === "measured_run" ? "recorded evaluation" : "fixture contract · not an empirical claim"}</span>
+          </div>
+          <div className="pixel-metrics">
+            {intent.metrics.map((metric) => (
+              <article key={metric.id}>
+                <span>{metric.label}</span>
+                <strong>{metric.display}</strong>
+                <small>{metric.passed ? "meets" : "misses"} target {metric.target}</small>
+              </article>
+            ))}
+          </div>
+          <div className="pixel-output">
+            <span>{intent.output.label}</span>
+            <strong>Immutable Khive output</strong>
+            <p>{intent.output.caveat}</p>
+            <dl>
+              <div><dt>New asset</dt><dd title={intent.output.content_ref}>{shortDigest(intent.output.content_ref)}</dd></div>
+              <div><dt>Rollback</dt><dd title={intent.output.rollback_ref}>{shortDigest(intent.output.rollback_ref)}</dd></div>
+            </dl>
+          </div>
+        </section>
+
+        <section className="pixel-preference" aria-label="Preference learning before and after">
+          <div className="pixel-section-heading">
+            <div><p className="eyebrow">Preference flywheel</p><h3>Learn taste without erasing history</h3></div>
+            <span>{artifact.preference.status === "trained_snapshot" ? "trained snapshots" : "governed snapshot fixture"}</span>
+          </div>
+          <p>{artifact.preference.explanation}</p>
+          <div className="preference-snapshots">
+            {[artifact.preference.before, artifact.preference.after].map((snapshot, index) => (
+              <article key={snapshot.model_id}>
+                <span>{snapshot.label}</span>
+                <div className="preference-probability">
+                  <strong>{formatNumber(snapshot.probability)}</strong>
+                  <small>pairwise preference</small>
+                </div>
+                <p>{snapshot.preferred_asset}</p>
+                <dl>
+                  <div><dt>Model ID</dt><dd title={snapshot.model_id}>{shortDigest(snapshot.model_id)}</dd></div>
+                  <div><dt>Judgments</dt><dd>{snapshot.provenance.judgments}</dd></div>
+                  <div><dt>Bundle</dt><dd title={snapshot.provenance.bundle_ref}>{shortDigest(snapshot.provenance.bundle_ref)}</dd></div>
+                </dl>
+                {index === 0 ? <span className="preference-arrow" aria-hidden="true">→</span> : null}
+              </article>
+            ))}
+          </div>
+          <div className="preference-provenance">
+            <span>Feature schema · {shortDigest(artifact.preference.after.provenance.feature_schema_sha256)}</span>
+            <span>Run · {artifact.provenance.run_fingerprint}</span>
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
 function ScoreOverview({ model, activeId }: { readonly model: ReportModel; readonly activeId: string | null }): ReactNode {
   const assets = rankedAssets(model);
   if (assets.length === 0) return null;
@@ -734,6 +943,7 @@ function ReportView({
         </div>
       </header>
       <StoryStrip model={model} />
+      <PixelRagLab model={model} />
       <ReportDiagnostics model={model} />
       <ScoreOverview model={model} activeId={activeId} />
       <TieList model={model} />
