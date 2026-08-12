@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from moodboard.khive import KhiveClient, KhiveProtocolError
+from moodboard.khive import (
+    KhiveClient,
+    KhiveJudgmentRequest,
+    KhivePreferenceRequest,
+    KhiveProtocolError,
+    KhiveServeRequest,
+)
 from moodboard.preference import (
     FEATURE_PRODUCER_ID,
     FEATURE_PRODUCER_REVISION,
@@ -24,12 +30,17 @@ def value(flag):
     return sys.argv[sys.argv.index(flag) + 1]
 
 
+if "--serial" not in sys.argv:
+    raise SystemExit(92)
+
+
 ops = [json.loads(line) for line in pathlib.Path(value("--ops-file")).read_text().splitlines()]
 save_path = pathlib.Path(value("--save-file"))
 rows = []
-for operation in ops:
+for operation_index, operation in enumerate(ops, start=1):
     tool = operation["tool"]
     args = operation["args"]
+    identity_base = 100 + (operation_index - 1) * 10
     if args.get("namespace") != value("--namespace"):
         raise SystemExit(91)
     if tool == "kg.create":
@@ -76,7 +87,7 @@ for operation in ops:
     elif tool == "moodboard.serve":
         result = {
             "schema_version": "moodboard.preference-serve.v1",
-            "serve_id": "00000000-0000-4000-8000-000000000101",
+            "serve_id": f"00000000-0000-4000-8000-{identity_base + 1:012d}",
             "scope": {
                 "namespace": args["namespace"],
                 "actor_kind": "lambda",
@@ -107,13 +118,13 @@ for operation in ops:
                 ],
             },
             "left": {
-                "result_occurrence_id": "00000000-0000-4000-8000-000000000102",
+                "result_occurrence_id": f"00000000-0000-4000-8000-{identity_base + 2:012d}",
                 "asset_id": args["candidates"][0]["asset_id"],
                 "content_ref": args["candidates"][0]["content_ref"],
                 "source_rank": args["candidates"][0]["source_rank"],
             },
             "right": {
-                "result_occurrence_id": "00000000-0000-4000-8000-000000000103",
+                "result_occurrence_id": f"00000000-0000-4000-8000-{identity_base + 3:012d}",
                 "asset_id": args["candidates"][1]["asset_id"],
                 "content_ref": args["candidates"][1]["content_ref"],
                 "source_rank": args["candidates"][1]["source_rank"],
@@ -128,7 +139,7 @@ for operation in ops:
     elif tool == "moodboard.judge":
         result = {
             "schema_version": "moodboard.preference-judgment.v1",
-            "judgment_id": "00000000-0000-5000-8000-000000000104",
+            "judgment_id": f"00000000-0000-5000-8000-{identity_base + 4:012d}",
             "serve_id": args["serve_id"],
             "choice": args["choice"],
             "reason_code": args.get("reason_code"),
@@ -376,6 +387,147 @@ def test_preference_client_typed_full_loop(preference_client) -> None:
     assert prediction.probability_left_given_decisive == 0.75
     assert prediction.probability_right_given_decisive == 0.25
     assert prediction.conformal_state == "not_computed_by_this_verb"
+
+
+def test_preference_batch_methods_use_one_ordered_process_per_batch(
+    monkeypatch, preference_client
+) -> None:
+    client, _ = preference_client
+    scope = _scope()
+    execute_calls: list[tuple[str, ...]] = []
+    original = client._execute
+
+    def counted(operations):
+        execute_calls.append(tuple(operation.tool for operation in operations))
+        return original(operations)
+
+    monkeypatch.setattr(client, "_execute", counted)
+    served = client.batch_serve(
+        board_entity_id=scope["board_entity_id"],
+        board_id=scope["board_id"],
+        model_key=scope["model_key"],
+        descriptor_fingerprint=scope["descriptor_fingerprint"],
+        source_report_sha256=scope["source_report_sha256"],
+        requests=(
+            KhiveServeRequest(
+                candidates=(_candidate(1), _candidate(2)),
+                candidate_pool_sha256="d" * 64,
+                policy_revision="policy-a/first",
+            ),
+            KhiveServeRequest(
+                candidates=(_candidate(3), _candidate(4)),
+                candidate_pool_sha256="d" * 64,
+                policy_revision="policy-a/second",
+            ),
+        ),
+    )
+    assert [row.left.asset_id for row in served] == [
+        _candidate(1)["asset_id"],
+        _candidate(3)["asset_id"],
+    ]
+    assert len({row.serve_id for row in served}) == 2
+    assert (
+        len(
+            {
+                occurrence.result_occurrence_id
+                for row in served
+                for occurrence in (row.left, row.right)
+            }
+        )
+        == 4
+    )
+
+    judged = client.batch_judge(
+        requests=tuple(
+            KhiveJudgmentRequest(
+                serve_id=row.serve_id,
+                left_result_occurrence_id=row.left.result_occurrence_id,
+                right_result_occurrence_id=row.right.result_occurrence_id,
+                choice="left",
+                reason_code="other",
+            )
+            for row in served
+        )
+    )
+    assert [row.serve_id for row in judged] == [row.serve_id for row in served]
+
+    predicted = client.batch_preference(
+        preference_model_id="00000000-0000-4000-8000-000000000105",
+        board_entity_id=scope["board_entity_id"],
+        board_id=scope["board_id"],
+        model_key=scope["model_key"],
+        descriptor_fingerprint=scope["descriptor_fingerprint"],
+        source_report_sha256=scope["source_report_sha256"],
+        requests=(
+            KhivePreferenceRequest(left=_candidate(1), right=_candidate(2)),
+            KhivePreferenceRequest(left=_candidate(3), right=_candidate(4)),
+        ),
+    )
+    assert [row.probability_left_given_decisive for row in predicted] == [0.75, 0.75]
+    assert execute_calls == [
+        ("moodboard.serve", "moodboard.serve"),
+        ("moodboard.judge", "moodboard.judge"),
+        ("moodboard.preference", "moodboard.preference"),
+    ]
+
+
+def test_preference_batch_validates_every_item_before_process(preference_client) -> None:
+    client, executable = preference_client
+    before = executable.stat().st_atime_ns
+    scope = _scope()
+
+    with pytest.raises(ValueError, match="candidates"):
+        client.batch_serve(
+            board_entity_id=scope["board_entity_id"],
+            board_id=scope["board_id"],
+            model_key=scope["model_key"],
+            descriptor_fingerprint=scope["descriptor_fingerprint"],
+            source_report_sha256=scope["source_report_sha256"],
+            requests=(
+                KhiveServeRequest(
+                    candidates=(_candidate(1), _candidate(2)),
+                    candidate_pool_sha256="d" * 64,
+                ),
+                KhiveServeRequest(
+                    candidates=(_candidate(3),),
+                    candidate_pool_sha256="d" * 64,
+                ),
+            ),
+        )
+
+    assert executable.stat().st_atime_ns == before
+
+
+def test_preference_batches_reject_empty_before_process(monkeypatch, preference_client) -> None:
+    client, _ = preference_client
+    scope = _scope()
+    execute_calls = 0
+
+    def unexpected_execute(_operations):
+        nonlocal execute_calls
+        execute_calls += 1
+        raise AssertionError("invalid batch reached the process boundary")
+
+    monkeypatch.setattr(client, "_execute", unexpected_execute)
+    common = {
+        "board_entity_id": scope["board_entity_id"],
+        "board_id": scope["board_id"],
+        "model_key": scope["model_key"],
+        "descriptor_fingerprint": scope["descriptor_fingerprint"],
+        "source_report_sha256": scope["source_report_sha256"],
+    }
+    with pytest.raises(ValueError, match="must not be empty"):
+        client.batch_serve(**common, requests=())
+    with pytest.raises(ValueError, match="must not be empty"):
+        client.batch_judge(requests=())
+    with pytest.raises(ValueError, match="must not be empty"):
+        client.batch_preference(
+            **common,
+            preference_model_id="00000000-0000-4000-8000-000000000105",
+            requests=(),
+        )
+
+    assert execute_calls == 0
 
 
 def test_preference_client_accepts_any_descriptor_bound_positive_dimension(

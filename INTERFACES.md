@@ -627,6 +627,43 @@ The artifact writer is atomic. `--preference-features-output` is rejected with t
 or when it aliases the report or `brand.mb`, before an encoder is constructed or Khive is invoked.
 This handoff does not itself call `serve`, collect judgments, or train a preference model.
 
+The governed replay adds three narrow typed batch items and corresponding client methods; this is
+still not a generic Khive SDK:
+
+```python
+@dataclass(frozen=True)
+class KhiveServeRequest:
+    candidates: Sequence[Mapping[str, Any]]
+    candidate_pool_sha256: str
+    policy_revision: str = "moodboard-demo-pairs-v1"
+    pair_propensity: float | None = None
+
+
+@dataclass(frozen=True)
+class KhiveJudgmentRequest:
+    serve_id: str
+    left_result_occurrence_id: str
+    right_result_occurrence_id: str
+    choice: Literal["left", "right", "tie", "abstain"]
+    reason_code: str | None = None
+    response_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class KhivePreferenceRequest:
+    left: Mapping[str, Any]
+    right: Mapping[str, Any]
+```
+
+`batch_serve`, `batch_judge`, and `batch_preference` reject empty input, validate the complete
+ordered input before starting `kkernel`, submit only their one fixed Moodboard verb, and return one
+typed result per input row after the existing manifest checksum, tool-order, row-count, and success
+checks. The adapter always requests `kkernel exec --serial`: ops-file parsing may chunk the input,
+but physical pack execution is sequential and preserves occurrence-dependent ordering without
+reader contention. Their singleton counterparts delegate to a one-item batch. Serve and judgment
+remain separate batches because displayed-side labels depend on Khive's returned randomized
+occurrence identities.
+
 For each ingest, it also recomputes the Khive BlobStore v1 BLAKE3-256 `content_ref` over the
 submitted bytes and requires the same row to return that value. This detects swapped successful
 rows even though every operation has the identical `moodboard.ingest` tool name.

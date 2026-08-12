@@ -28,9 +28,12 @@ from typing import Any, Final, Literal, Protocol
 import numpy as np
 
 from moodboard.khive import (
+    KhiveJudgmentRequest,
     KhiveJudgmentResult,
     KhivePreferencePrediction,
+    KhivePreferenceRequest,
     KhiveProtocolError,
+    KhiveServeRequest,
     KhiveServeResult,
     KhiveTrainedPreferenceModel,
 )
@@ -43,8 +46,10 @@ from moodboard.preference import (
 )
 
 __all__ = [
+    "CALIBRATION_TIE_POLICY",
     "POLICY_A",
     "POLICY_B",
+    "CalibrationTiePolicy",
     "FeaturePolicy",
     "PreferenceDemoError",
     "PreferenceDemoReplay",
@@ -125,6 +130,44 @@ class FeaturePolicy:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class CalibrationTiePolicy:
+    """Disclosed feature-margin rule used only for synthetic tie calibration."""
+
+    revision: str
+    label: str
+    selection_rule: str
+    base_policy: FeaturePolicy
+
+    @property
+    def policy_id(self) -> str:
+        payload = _canonical_bytes(
+            {
+                "base_policy_id": self.base_policy.policy_id,
+                "evidence_class": "policy_simulated",
+                "feature_schema_id": FEATURE_SCHEMA_ID,
+                "label": self.label,
+                "revision": self.revision,
+                "selection_rule": self.selection_rule,
+            }
+        )
+        return hashlib.sha256(b"moodboard-calibration-tie-policy-v1\0" + payload).hexdigest()
+
+    def to_json_dict(self, *, selection_threshold: float) -> dict[str, object]:
+        if not math.isfinite(selection_threshold) or selection_threshold < 0.0:
+            raise ValueError("tie-policy selection threshold must be finite and non-negative")
+        return {
+            "base_policy_id": self.base_policy.policy_id,
+            "evidence_class": "policy_simulated",
+            "feature_schema_id": FEATURE_SCHEMA_ID,
+            "label": self.label,
+            "policy_id": self.policy_id,
+            "revision": self.revision,
+            "selection_rule": self.selection_rule,
+            "selection_threshold_absolute_policy_a_margin": selection_threshold,
+        }
+
+
 _POLICY_A_WEIGHTS: Final = (
     0.24,
     0.18,
@@ -148,19 +191,25 @@ POLICY_B: Final = FeaturePolicy(
     label="counter_style_exploration_policy",
     weights=tuple(-weight for weight in _POLICY_A_WEIGHTS),
 )
+CALIBRATION_TIE_POLICY: Final = CalibrationTiePolicy(
+    revision="adobe-demo-calibration-tie-policy.v1",
+    label="lowest_policy_a_margin_calibration_ties",
+    selection_rule="lowest_absolute_policy_a_margin_among_unused_calibration_pairs",
+    base_policy=POLICY_A,
+)
 
 
 class _PreferenceClient(Protocol):
     actor: str
     namespace: str
 
-    def serve(self, **arguments: Any) -> KhiveServeResult: ...
+    def batch_serve(self, **arguments: Any) -> tuple[KhiveServeResult, ...]: ...
 
-    def judge(self, **arguments: Any) -> KhiveJudgmentResult: ...
+    def batch_judge(self, **arguments: Any) -> tuple[KhiveJudgmentResult, ...]: ...
 
     def train_preference(self, **arguments: Any) -> KhiveTrainedPreferenceModel: ...
 
-    def preference(self, **arguments: Any) -> KhivePreferencePrediction: ...
+    def batch_preference(self, **arguments: Any) -> tuple[KhivePreferencePrediction, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +238,15 @@ class _Selection:
     probes: tuple[_Pair, ...]
     b_train: tuple[_Pair, ...]
     extras: tuple[_Pair, ...]
+    calibration_tie_threshold: float
+
+
+@dataclass(frozen=True, slots=True)
+class _EventSpec:
+    pair: _Pair
+    phase: Literal["model_a_decisive", "model_a_tie", "model_b_append"]
+    policy: FeaturePolicy | CalibrationTiePolicy
+    tie: bool
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -259,6 +317,10 @@ def _policy_preferred(pair: _Pair, policy: FeaturePolicy) -> PreferenceCandidate
     if lower_score == upper_score:
         return None
     return pair.lower if lower_score > upper_score else pair.upper
+
+
+def _absolute_policy_margin(pair: _Pair, policy: FeaturePolicy) -> float:
+    return abs(policy.score(pair.lower.features.values) - policy.score(pair.upper.features.values))
 
 
 def _all_pairs(artifact: PreferenceFeatureArtifact) -> tuple[_Pair, ...]:
@@ -339,6 +401,22 @@ def _select_pairs(artifact: PreferenceFeatureArtifact) -> _Selection:
         )
 
     a_train = take(_TRAIN_MINIMUM, label="model A train", split="train", policy=POLICY_A)
+    available_calibration = [
+        pair for pair in all_pairs if pair.pair_id not in used and pair.split == "calibration"
+    ]
+    available_calibration.sort(
+        key=lambda pair: (_absolute_policy_margin(pair, POLICY_A), pair.pair_id)
+    )
+    if len(available_calibration) < _CALIBRATION_TIES_MINIMUM:
+        raise PreferenceDemoError(
+            "governed candidate pool cannot allocate 16 distinct lowest-margin calibration "
+            f"ties; found {len(available_calibration)}"
+        )
+    a_calibration_ties = tuple(available_calibration[:_CALIBRATION_TIES_MINIMUM])
+    used.update(pair.pair_id for pair in a_calibration_ties)
+    calibration_tie_threshold = max(
+        _absolute_policy_margin(pair, POLICY_A) for pair in a_calibration_ties
+    )
     a_calibration = take(
         _CALIBRATION_MINIMUM,
         label="model A calibration",
@@ -346,11 +424,6 @@ def _select_pairs(artifact: PreferenceFeatureArtifact) -> _Selection:
         policy=POLICY_A,
     )
     a_test = take(_TEST_MINIMUM, label="model A test", split="test", policy=POLICY_A)
-    a_calibration_ties = take(
-        _CALIBRATION_TIES_MINIMUM,
-        label="model A calibration ties",
-        split="calibration",
-    )
     probes = take(_PROBE_COUNT, label="frozen A/B conflict probes", require_conflict=True)
     b_train = take(
         _B_APPEND_COUNT,
@@ -369,6 +442,7 @@ def _select_pairs(artifact: PreferenceFeatureArtifact) -> _Selection:
         probes=probes,
         b_train=b_train,
         extras=extras,
+        calibration_tie_threshold=calibration_tie_threshold,
     )
 
 
@@ -426,20 +500,6 @@ def _train_arguments(artifact: PreferenceFeatureArtifact) -> dict[str, str]:
     }
 
 
-def _preference_arguments(
-    artifact: PreferenceFeatureArtifact,
-    model: KhiveTrainedPreferenceModel,
-    pair: _Pair,
-) -> dict[str, object]:
-    return {
-        **_train_arguments(artifact),
-        "preference_model_id": model.preference_model_id,
-        "source_report_sha256": artifact.source_report_sha256,
-        "left": _candidate_wire(pair.lower),
-        "right": _candidate_wire(pair.upper),
-    }
-
-
 def _capture_initial_support_refusal(
     client: _PreferenceClient, artifact: PreferenceFeatureArtifact
 ) -> dict[str, object]:
@@ -466,77 +526,120 @@ def _capture_initial_support_refusal(
     )
 
 
-def _record_event(
+def _record_events(
     *,
     client: _PreferenceClient,
     artifact: PreferenceFeatureArtifact,
-    pair: _Pair,
-    phase: Literal["model_a_decisive", "model_a_tie", "model_b_append"],
-    policy: FeaturePolicy,
-    tie: bool,
-    event_index: int,
-) -> dict[str, object]:
-    candidates = [_candidate_wire(pair.lower), _candidate_wire(pair.upper)]
-    serve = client.serve(
+    specs: Sequence[_EventSpec],
+    event_index_start: int,
+    calibration_tie_threshold: float,
+) -> tuple[dict[str, object], ...]:
+    if not specs:
+        return ()
+    serve_requests = tuple(
+        KhiveServeRequest(
+            candidates=(_candidate_wire(spec.pair.lower), _candidate_wire(spec.pair.upper)),
+            candidate_pool_sha256=artifact.candidate_pool_sha256,
+            policy_revision=(f"policy-simulated/{spec.policy.revision}/{spec.phase}"),
+        )
+        for spec in specs
+    )
+    serves = client.batch_serve(
         **_train_arguments(artifact),
         source_report_sha256=artifact.source_report_sha256,
-        candidates=candidates,
-        candidate_pool_sha256=artifact.candidate_pool_sha256,
-        policy_revision=f"policy-simulated/{policy.revision}/{phase}",
+        requests=serve_requests,
     )
-    _validate_serve_result(serve, pair=pair, artifact=artifact)
+    if len(serves) != len(specs):
+        raise PreferenceDemoError("Khive batch serve result count drifted from submitted order")
+    for serve, spec in zip(serves, specs, strict=True):
+        _validate_serve_result(serve, pair=spec.pair, artifact=artifact)
 
-    preferred = None if tie else _policy_preferred(pair, policy)
-    if not tie and preferred is None:
-        raise PreferenceDemoError("a decisive simulated-policy event has equal feature scores")
-    if tie:
-        choice: Literal["left", "right", "tie"] = "tie"
-        reason_code = "equally_good"
-    else:
-        assert preferred is not None
-        choice = "left" if serve.left.asset_id == preferred.asset_id else "right"
-        reason_code = "other"
-    judgment = client.judge(
-        serve_id=serve.serve_id,
-        left_result_occurrence_id=serve.left.result_occurrence_id,
-        right_result_occurrence_id=serve.right.result_occurrence_id,
-        choice=choice,
-        reason_code=reason_code,
-    )
-    if not judgment.created:
-        raise PreferenceDemoError("Khive returned an existing judgment during a fresh replay")
-    if judgment.serve_id != serve.serve_id or judgment.choice != choice:
-        raise PreferenceDemoError("Khive judgment result drifted from the submitted judgment")
+    labels: list[tuple[PreferenceCandidate | None, Literal["left", "right", "tie"], str]] = []
+    judgment_requests: list[KhiveJudgmentRequest] = []
+    for serve, spec in zip(serves, specs, strict=True):
+        if spec.tie:
+            if not isinstance(spec.policy, CalibrationTiePolicy):
+                raise PreferenceDemoError("calibration tie event lacks its disclosed tie policy")
+            margin = _absolute_policy_margin(spec.pair, spec.policy.base_policy)
+            if margin > calibration_tie_threshold:
+                raise PreferenceDemoError(
+                    "calibration tie exceeds its disclosed selection threshold"
+                )
+            preferred = None
+            choice: Literal["left", "right", "tie"] = "tie"
+            reason_code = "other"
+        else:
+            if not isinstance(spec.policy, FeaturePolicy):
+                raise PreferenceDemoError("decisive event lacks a disclosed feature policy")
+            preferred = _policy_preferred(spec.pair, spec.policy)
+            if preferred is None:
+                raise PreferenceDemoError(
+                    "a decisive simulated-policy event has equal feature scores"
+                )
+            choice = "left" if serve.left.asset_id == preferred.asset_id else "right"
+            reason_code = "other"
+        labels.append((preferred, choice, reason_code))
+        judgment_requests.append(
+            KhiveJudgmentRequest(
+                serve_id=serve.serve_id,
+                left_result_occurrence_id=serve.left.result_occurrence_id,
+                right_result_occurrence_id=serve.right.result_occurrence_id,
+                choice=choice,
+                reason_code=reason_code,
+            )
+        )
+    judgments = client.batch_judge(requests=tuple(judgment_requests))
+    if len(judgments) != len(specs):
+        raise PreferenceDemoError("Khive batch judgment result count drifted from submitted order")
 
-    displayed_by_ref = {pair.lower.content_ref: pair.lower, pair.upper.content_ref: pair.upper}
-    displayed_left = displayed_by_ref[serve.left.content_ref]
-    displayed_right = displayed_by_ref[serve.right.content_ref]
-    return {
-        "choice": choice,
-        "displayed_candidates": {
-            "left": _candidate_identity(displayed_left),
-            "right": _candidate_identity(displayed_right),
-        },
-        "event_index": event_index,
-        "judgment_id": judgment.judgment_id,
-        "pair_id": pair.pair_id,
-        "phase": phase,
-        "policy_id": policy.policy_id,
-        "policy_revision": policy.revision,
-        "randomized_occurrence_provenance": {
-            "left_result_occurrence_id": serve.left.result_occurrence_id,
-            "right_result_occurrence_id": serve.right.result_occurrence_id,
-            "swap_applied": serve.swap_applied,
-        },
-        "reason_code": reason_code,
-        "semantic_preferred_asset_id": None if preferred is None else preferred.asset_id,
-        "serve_id": serve.serve_id,
-        "split": pair.split,
-        "submitted_candidates": [
-            _candidate_identity(pair.lower),
-            _candidate_identity(pair.upper),
-        ],
-    }
+    documents: list[dict[str, object]] = []
+    for offset, (spec, serve, judgment, label) in enumerate(
+        zip(specs, serves, judgments, labels, strict=True)
+    ):
+        preferred, choice, reason_code = label
+        if not judgment.created:
+            raise PreferenceDemoError("Khive returned an existing judgment during a fresh replay")
+        if judgment.serve_id != serve.serve_id or judgment.choice != choice:
+            raise PreferenceDemoError("Khive judgment result drifted from the submitted judgment")
+
+        pair = spec.pair
+        displayed_by_ref = {pair.lower.content_ref: pair.lower, pair.upper.content_ref: pair.upper}
+        displayed_left = displayed_by_ref[serve.left.content_ref]
+        displayed_right = displayed_by_ref[serve.right.content_ref]
+        document: dict[str, object] = {
+            "choice": choice,
+            "displayed_candidates": {
+                "left": _candidate_identity(displayed_left),
+                "right": _candidate_identity(displayed_right),
+            },
+            "event_index": event_index_start + offset,
+            "judgment_id": judgment.judgment_id,
+            "pair_id": pair.pair_id,
+            "phase": spec.phase,
+            "policy_id": spec.policy.policy_id,
+            "policy_revision": spec.policy.revision,
+            "randomized_occurrence_provenance": {
+                "left_result_occurrence_id": serve.left.result_occurrence_id,
+                "right_result_occurrence_id": serve.right.result_occurrence_id,
+                "swap_applied": serve.swap_applied,
+            },
+            "reason_code": reason_code,
+            "semantic_preferred_asset_id": None if preferred is None else preferred.asset_id,
+            "serve_id": serve.serve_id,
+            "split": pair.split,
+            "submitted_candidates": [
+                _candidate_identity(pair.lower),
+                _candidate_identity(pair.upper),
+            ],
+        }
+        if spec.tie:
+            document["tie_policy"] = {
+                "absolute_policy_a_margin": _absolute_policy_margin(pair, POLICY_A),
+                "selection_rule": CALIBRATION_TIE_POLICY.selection_rule,
+                "selection_threshold_absolute_policy_a_margin": calibration_tie_threshold,
+            }
+        documents.append(document)
+    return tuple(documents)
 
 
 def _assert_side_label_support(
@@ -546,6 +649,7 @@ def _assert_side_label_support(
     events: list[dict[str, object]],
     extras: Sequence[_Pair],
     used: set[str],
+    calibration_tie_threshold: float,
 ) -> None:
     """Use reserved pairs only if real randomized display lacks one label in a split."""
 
@@ -563,15 +667,20 @@ def _assert_side_label_support(
             if _policy_preferred(pair, POLICY_A) is None:
                 continue
             used.add(pair.pair_id)
-            events.append(
-                _record_event(
+            events.extend(
+                _record_events(
                     client=client,
                     artifact=artifact,
-                    pair=pair,
-                    phase="model_a_decisive",
-                    policy=POLICY_A,
-                    tie=False,
-                    event_index=len(events) + 1,
+                    specs=(
+                        _EventSpec(
+                            pair=pair,
+                            phase="model_a_decisive",
+                            policy=POLICY_A,
+                            tie=False,
+                        ),
+                    ),
+                    event_index_start=len(events) + 1,
+                    calibration_tie_threshold=calibration_tie_threshold,
                 )
             )
             labels.add(events[-1]["choice"])
@@ -605,29 +714,85 @@ def _validate_model(
     *,
     phase_counts: Mapping[str, int],
     cumulative_train_decisive: int,
+    expected_snapshot_event_count: int,
 ) -> None:
     if not model.fann_inference_verified:
         raise PreferenceDemoError("Khive did not verify FANN inference for the trained model")
-    raw_counts = model.training.get("split_counts")
+    training = model.training
+    if training.get("split_revision") != _SPLIT_REVISION:
+        raise PreferenceDemoError("Khive trained model changed the unordered-pair split revision")
+    snapshot_sha256 = training.get("snapshot_sha256")
+    if not isinstance(snapshot_sha256, str):
+        raise PreferenceDemoError("Khive trained model omitted its snapshot digest")
+    try:
+        _require_hex_64(snapshot_sha256, label="training.snapshot_sha256")
+    except ValueError as error:
+        raise PreferenceDemoError(
+            "Khive trained model returned an invalid snapshot digest"
+        ) from error
+    excluded_probability_shown = training.get("excluded_probability_shown")
+    if isinstance(excluded_probability_shown, bool) or excluded_probability_shown != 0:
+        raise PreferenceDemoError("Khive trained model contains probability-shown contamination")
+    raw_counts = training.get("split_counts")
     if not isinstance(raw_counts, Mapping):
         raise PreferenceDemoError("Khive trained model omitted split-count provenance")
+    if set(raw_counts) != {"train", "calibration", "test"}:
+        raise PreferenceDemoError("Khive trained model changed the closed split-count set")
     expected_decisive = {
         "train": cumulative_train_decisive,
         "calibration": phase_counts["calibration_decisive"],
         "test": phase_counts["test_decisive"],
     }
-    for split, minimum in expected_decisive.items():
+    count_fields = {
+        "decisive_groups",
+        "decisive_judgments",
+        "left_labels",
+        "right_labels",
+        "tie_groups",
+        "tie_judgments",
+        "abstain_groups",
+        "abstain_judgments",
+    }
+    for split, expected in expected_decisive.items():
         split_counts = raw_counts.get(split)
         if not isinstance(split_counts, Mapping):
             raise PreferenceDemoError(f"Khive trained model omitted {split} split counts")
-        if split_counts.get("decisive_groups") != minimum:
+        if set(split_counts) != count_fields:
+            raise PreferenceDemoError(
+                f"Khive trained model {split} split changed its closed count fields"
+            )
+        for field in count_fields:
+            value = split_counts.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise PreferenceDemoError(
+                    f"Khive trained model {split} {field} is not a non-negative integer"
+                )
+        if split_counts["decisive_groups"] != expected:
             raise PreferenceDemoError(f"Khive trained model {split} decisive support drifted")
-        if not split_counts.get("left_labels") or not split_counts.get("right_labels"):
+        if split_counts["decisive_judgments"] != expected:
+            raise PreferenceDemoError(
+                f"Khive trained model {split} decisive judgment support drifted"
+            )
+        if not split_counts["left_labels"] or not split_counts["right_labels"]:
             raise PreferenceDemoError(f"Khive trained model {split} lacks both side labels")
-    calibration = raw_counts["calibration"]
-    assert isinstance(calibration, Mapping)
-    if calibration.get("tie_groups") != phase_counts["calibration_ties"]:
-        raise PreferenceDemoError("Khive trained model calibration tie support drifted")
+        if split_counts["left_labels"] + split_counts["right_labels"] != expected:
+            raise PreferenceDemoError(
+                f"Khive trained model {split} randomized-side label support drifted"
+            )
+        expected_ties = phase_counts["calibration_ties"] if split == "calibration" else 0
+        if (
+            split_counts["tie_groups"] != expected_ties
+            or split_counts["tie_judgments"] != expected_ties
+        ):
+            raise PreferenceDemoError(f"Khive trained model {split} tie support drifted")
+        if split_counts["abstain_groups"] != 0 or split_counts["abstain_judgments"] != 0:
+            raise PreferenceDemoError(f"Khive trained model {split} abstain support drifted")
+    snapshot_event_count = training.get("snapshot_event_count")
+    if (
+        isinstance(snapshot_event_count, bool)
+        or snapshot_event_count != expected_snapshot_event_count
+    ):
+        raise PreferenceDemoError("Khive trained model snapshot event count drifted")
 
 
 def _model_document(model: KhiveTrainedPreferenceModel) -> dict[str, object]:
@@ -687,12 +852,24 @@ def _predict_probes(
     model: KhiveTrainedPreferenceModel,
     probes: Sequence[_Pair],
 ) -> tuple[KhivePreferencePrediction, ...]:
-    predictions: list[KhivePreferencePrediction] = []
-    for pair in probes:
-        prediction = client.preference(**_preference_arguments(artifact, model, pair))
+    common = _train_arguments(artifact)
+    predictions = client.batch_preference(
+        **common,
+        preference_model_id=model.preference_model_id,
+        source_report_sha256=artifact.source_report_sha256,
+        requests=tuple(
+            KhivePreferenceRequest(
+                left=_candidate_wire(pair.lower),
+                right=_candidate_wire(pair.upper),
+            )
+            for pair in probes
+        ),
+    )
+    if len(predictions) != len(probes):
+        raise PreferenceDemoError("Khive batch preference result count drifted from probe order")
+    for prediction in predictions:
         _validate_prediction(prediction, model)
-        predictions.append(prediction)
-    return tuple(predictions)
+    return predictions
 
 
 def _assert_distinct_models(
@@ -771,39 +948,40 @@ def replay_preference_demo(
     events: list[dict[str, object]] = []
     used: set[str] = set()
 
-    def record_many(
-        pairs: Sequence[_Pair],
-        *,
-        phase: Literal["model_a_decisive", "model_a_tie", "model_b_append"],
-        policy: FeaturePolicy,
-        tie: bool,
-    ) -> None:
-        for pair in pairs:
-            if pair.pair_id in used:
+    def record_specs(specs: Sequence[_EventSpec]) -> None:
+        for spec in specs:
+            if spec.pair.pair_id in used:
                 raise PreferenceDemoError("selection attempted to reuse an unordered pair")
-            used.add(pair.pair_id)
-            events.append(
-                _record_event(
-                    client=client,
-                    artifact=artifact,
-                    pair=pair,
-                    phase=phase,
-                    policy=policy,
-                    tie=tie,
-                    event_index=len(events) + 1,
-                )
+            used.add(spec.pair.pair_id)
+        events.extend(
+            _record_events(
+                client=client,
+                artifact=artifact,
+                specs=specs,
+                event_index_start=len(events) + 1,
+                calibration_tie_threshold=selection.calibration_tie_threshold,
             )
+        )
 
-    record_many(selection.a_train, phase="model_a_decisive", policy=POLICY_A, tie=False)
-    record_many(selection.a_calibration, phase="model_a_decisive", policy=POLICY_A, tie=False)
-    record_many(selection.a_test, phase="model_a_decisive", policy=POLICY_A, tie=False)
-    record_many(selection.a_calibration_ties, phase="model_a_tie", policy=POLICY_A, tie=True)
+    initial_specs = tuple(
+        _EventSpec(pair, "model_a_decisive", POLICY_A, False)
+        for pair in (
+            *selection.a_train,
+            *selection.a_calibration,
+            *selection.a_test,
+        )
+    ) + tuple(
+        _EventSpec(pair, "model_a_tie", CALIBRATION_TIE_POLICY, True)
+        for pair in selection.a_calibration_ties
+    )
+    record_specs(initial_specs)
     _assert_side_label_support(
         client=client,
         artifact=artifact,
         events=events,
         extras=selection.extras,
         used=used,
+        calibration_tie_threshold=selection.calibration_tie_threshold,
     )
 
     phase_counts = _event_counts(events)
@@ -813,6 +991,7 @@ def replay_preference_demo(
         model_a,
         phase_counts=model_a_counts,
         cumulative_train_decisive=model_a_counts["train_decisive"],
+        expected_snapshot_event_count=len(events),
     )
     before = _predict_probes(
         client=client,
@@ -821,7 +1000,9 @@ def replay_preference_demo(
         probes=selection.probes,
     )
 
-    record_many(selection.b_train, phase="model_b_append", policy=POLICY_B, tie=False)
+    record_specs(
+        tuple(_EventSpec(pair, "model_b_append", POLICY_B, False) for pair in selection.b_train)
+    )
     phase_counts = _event_counts(events)
     model_b = client.train_preference(**_train_arguments(artifact))
     _validate_model(
@@ -831,6 +1012,7 @@ def replay_preference_demo(
             phase_counts["model_a"]["train_decisive"]
             + phase_counts["model_b_append"]["train_decisive"]
         ),
+        expected_snapshot_event_count=len(events),
     )
     _assert_distinct_models(model_a, model_b)
     after = _predict_probes(
@@ -933,15 +1115,24 @@ def replay_preference_demo(
         "model_b": _model_document(model_b),
         "namespace": namespace,
         "non_claims": [
-            "No human preference evidence: all labels come from disclosed feature-only policies.",
+            "No human preference evidence: decisive and tie labels come from separately "
+            "disclosed feature-only policies.",
             "No online learning: Khive retrains and publishes immutable model snapshots.",
             "No coherence or conformal claim: preference inference remains a separate signal.",
             "No causal personalization or user-study claim.",
             "No generalization claim beyond this governed demo artifact and frozen probe set.",
             "A-to-B delta measures only policy-B probability on frozen A/B conflict probes.",
+            "Unit-test doubles are orchestration checks, not adaptation evidence; demo "
+            "readiness requires a real Khive replay with the measured direction gate satisfied.",
         ],
         "phase_counts": phase_counts,
-        "policies": {"model_a": POLICY_A.to_json_dict(), "model_b": POLICY_B.to_json_dict()},
+        "policies": {
+            "calibration_ties": CALIBRATION_TIE_POLICY.to_json_dict(
+                selection_threshold=selection.calibration_tie_threshold
+            ),
+            "model_a": POLICY_A.to_json_dict(),
+            "model_b": POLICY_B.to_json_dict(),
+        },
         "restart_verification": {
             "exact_prediction_equality": True,
             "model_fingerprint_equal": True,

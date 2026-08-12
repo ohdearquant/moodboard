@@ -27,13 +27,16 @@ if TYPE_CHECKING:
 
 __all__ = [
     "KhiveClient",
+    "KhiveJudgmentRequest",
     "KhiveJudgmentResult",
     "KhiveMoodboardEntity",
+    "KhivePreferenceRequest",
     "KhivePreferencePrediction",
     "KhiveProtocolError",
     "KhiveSearchHit",
     "KhiveSearchRequest",
     "KhiveSearchResult",
+    "KhiveServeRequest",
     "KhiveServeOccurrence",
     "KhiveServeResult",
     "KhiveTrainedPreferenceModel",
@@ -248,6 +251,16 @@ class KhiveServeOccurrence:
 
 
 @dataclass(frozen=True, slots=True)
+class KhiveServeRequest:
+    """One typed pair presentation inside a narrow Moodboard serve batch."""
+
+    candidates: Sequence[Mapping[str, Any]]
+    candidate_pool_sha256: str
+    policy_revision: str = "moodboard-demo-pairs-v1"
+    pair_propensity: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class KhiveServeResult:
     serve_id: str
     feature_schema_id: str
@@ -257,12 +270,32 @@ class KhiveServeResult:
 
 
 @dataclass(frozen=True, slots=True)
+class KhiveJudgmentRequest:
+    """One occurrence-bound judgment inside a narrow Moodboard judgment batch."""
+
+    serve_id: str
+    left_result_occurrence_id: str
+    right_result_occurrence_id: str
+    choice: Literal["left", "right", "tie", "abstain"]
+    reason_code: str | None = None
+    response_ms: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class KhiveJudgmentResult:
     judgment_id: str
     serve_id: str
     choice: Literal["left", "right", "tie", "abstain"]
     reason_code: str | None
     created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class KhivePreferenceRequest:
+    """One scored occurrence pair inside a narrow Moodboard inference batch."""
+
+    left: Mapping[str, Any]
+    right: Mapping[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -974,41 +1007,96 @@ class KhiveClient:
     ) -> KhiveServeResult:
         """Persist one randomized, occurrence-bound comparison presentation."""
 
+        return self.batch_serve(
+            board_entity_id=board_entity_id,
+            board_id=board_id,
+            model_key=model_key,
+            descriptor_fingerprint=descriptor_fingerprint,
+            source_report_sha256=source_report_sha256,
+            requests=(
+                KhiveServeRequest(
+                    candidates=candidates,
+                    candidate_pool_sha256=candidate_pool_sha256,
+                    policy_revision=policy_revision,
+                    pair_propensity=pair_propensity,
+                ),
+            ),
+        )[0]
+
+    def batch_serve(
+        self,
+        *,
+        board_entity_id: str,
+        board_id: str,
+        model_key: str,
+        descriptor_fingerprint: str,
+        source_report_sha256: str,
+        requests: Sequence[KhiveServeRequest],
+    ) -> tuple[KhiveServeResult, ...]:
+        """Persist an ordered batch of independent randomized pair presentations."""
+
         _canonical_uuid(board_entity_id, "moodboard.serve board_entity_id", ValueError)
         _require_hex_64(board_id, "moodboard.serve board_id", ValueError)
         _validate_model_identity(model_key, descriptor_fingerprint, "moodboard.serve")
         _require_hex_64(source_report_sha256, "moodboard.serve source_report_sha256", ValueError)
-        _require_hex_64(candidate_pool_sha256, "moodboard.serve candidate_pool_sha256", ValueError)
-        if len(candidates) != 2:
-            raise ValueError("moodboard.serve requires exactly two candidates")
-        validated = [
-            _validate_preference_candidate(value, f"candidates[{index}]")
-            for index, value in enumerate(candidates)
-        ]
-        if (
-            validated[0]["asset_id"] == validated[1]["asset_id"]
-            or validated[0]["content_ref"] == validated[1]["content_ref"]
-        ):
-            raise ValueError("moodboard.serve candidates must have distinct asset and content IDs")
-        if (
-            not isinstance(policy_revision, str)
-            or not policy_revision.strip()
-            or policy_revision.strip() != policy_revision
-            or len(policy_revision.encode("utf-8")) > 128
-        ):
-            raise ValueError("moodboard.serve policy_revision must be a trimmed non-empty string")
-        if pair_propensity is not None:
-            _finite_range(
-                pair_propensity, "moodboard.serve pair_propensity", 0.0, 1.0, open_low=True
+        request_rows = tuple(requests)
+        if not request_rows:
+            raise ValueError("moodboard.batch_serve requests must not be empty")
+        operations: list[_KhiveOperation] = []
+        for request_index, request in enumerate(request_rows):
+            if not isinstance(request, KhiveServeRequest):
+                raise ValueError(
+                    f"moodboard.batch_serve requests[{request_index}] must be KhiveServeRequest"
+                )
+            _require_hex_64(
+                request.candidate_pool_sha256,
+                f"moodboard.serve requests[{request_index}].candidate_pool_sha256",
+                ValueError,
             )
-        selection: dict[str, Any] = {
-            "policy_revision": policy_revision,
-            "candidate_pool_sha256": candidate_pool_sha256,
-        }
-        if pair_propensity is not None:
-            selection["pair_propensity"] = pair_propensity
-        value = self._execute(
-            (
+            if len(request.candidates) != 2:
+                raise ValueError(
+                    f"moodboard.serve requests[{request_index}].candidates must contain exactly two"
+                )
+            validated = [
+                _validate_preference_candidate(
+                    candidate,
+                    f"requests[{request_index}].candidates[{candidate_index}]",
+                )
+                for candidate_index, candidate in enumerate(request.candidates)
+            ]
+            if (
+                validated[0]["asset_id"] == validated[1]["asset_id"]
+                or validated[0]["content_ref"] == validated[1]["content_ref"]
+            ):
+                raise ValueError(
+                    f"moodboard.serve requests[{request_index}].candidates must have distinct "
+                    "asset and content IDs"
+                )
+            if (
+                not isinstance(request.policy_revision, str)
+                or not request.policy_revision.strip()
+                or request.policy_revision.strip() != request.policy_revision
+                or len(request.policy_revision.encode("utf-8")) > 128
+            ):
+                raise ValueError(
+                    f"moodboard.serve requests[{request_index}].policy_revision must be a "
+                    "trimmed non-empty string"
+                )
+            if request.pair_propensity is not None:
+                _finite_range(
+                    request.pair_propensity,
+                    f"moodboard.serve requests[{request_index}].pair_propensity",
+                    0.0,
+                    1.0,
+                    open_low=True,
+                )
+            selection: dict[str, Any] = {
+                "policy_revision": request.policy_revision,
+                "candidate_pool_sha256": request.candidate_pool_sha256,
+            }
+            if request.pair_propensity is not None:
+                selection["pair_propensity"] = request.pair_propensity
+            operations.append(
                 _KhiveOperation(
                     "moodboard.serve",
                     {
@@ -1027,18 +1115,32 @@ class KhiveClient:
                             "source_rank_shown": True,
                         },
                     },
-                ),
+                )
             )
-        )[0]
-        return _parse_serve_result(
-            value,
-            self.namespace,
-            self.actor,
-            board_entity_id,
-            board_id,
-            model_key,
-            descriptor_fingerprint,
+        values = self._execute(tuple(operations))
+        results = tuple(
+            _parse_serve_result(
+                value,
+                self.namespace,
+                self.actor,
+                board_entity_id,
+                board_id,
+                model_key,
+                descriptor_fingerprint,
+            )
+            for value in values
         )
+        serve_ids = [result.serve_id for result in results]
+        occurrence_ids = [
+            occurrence.result_occurrence_id
+            for result in results
+            for occurrence in (result.left, result.right)
+        ]
+        if len(set(serve_ids)) != len(serve_ids) or len(set(occurrence_ids)) != len(occurrence_ids):
+            raise KhiveProtocolError(
+                "moodboard.batch_serve returned duplicate serve or occurrence identities"
+            )
+        return results
 
     def judge(
         self,
@@ -1052,14 +1154,27 @@ class KhiveClient:
     ) -> KhiveJudgmentResult:
         """Append one exact immutable judgment; retries remain server-idempotent."""
 
-        for field, value in (
-            ("serve_id", serve_id),
-            ("left_result_occurrence_id", left_result_occurrence_id),
-            ("right_result_occurrence_id", right_result_occurrence_id),
-        ):
-            _canonical_uuid(value, f"moodboard.judge {field}", ValueError)
-        if choice not in {"left", "right", "tie", "abstain"}:
-            raise ValueError("moodboard.judge choice must be left, right, tie, or abstain")
+        return self.batch_judge(
+            requests=(
+                KhiveJudgmentRequest(
+                    serve_id=serve_id,
+                    left_result_occurrence_id=left_result_occurrence_id,
+                    right_result_occurrence_id=right_result_occurrence_id,
+                    choice=choice,
+                    reason_code=reason_code,
+                    response_ms=response_ms,
+                ),
+            )
+        )[0]
+
+    def batch_judge(
+        self, *, requests: Sequence[KhiveJudgmentRequest]
+    ) -> tuple[KhiveJudgmentResult, ...]:
+        """Append an ordered batch of exact occurrence-bound judgments."""
+
+        request_rows = tuple(requests)
+        if not request_rows:
+            raise ValueError("moodboard.batch_judge requests must not be empty")
         allowed = {
             "left": {None, "style", "palette", "tone", "composition", "other"},
             "right": {None, "style", "palette", "tone", "composition", "other"},
@@ -1071,24 +1186,59 @@ class KhiveClient:
                 "other",
             },
         }
-        if reason_code not in allowed[choice]:
-            raise ValueError("moodboard.judge reason_code is incompatible with choice")
-        if response_ms is not None and (
-            not _plain_int(response_ms) or not 0 <= response_ms <= 3_600_000
-        ):
-            raise ValueError("moodboard.judge response_ms must be an integer from 0 to 3600000")
-        arguments: dict[str, Any] = {
-            "serve_id": serve_id,
-            "left_result_occurrence_id": left_result_occurrence_id,
-            "right_result_occurrence_id": right_result_occurrence_id,
-            "choice": choice,
-        }
-        if reason_code is not None:
-            arguments["reason_code"] = reason_code
-        if response_ms is not None:
-            arguments["response_ms"] = response_ms
-        value = self._execute((_KhiveOperation("moodboard.judge", arguments),))[0]
-        return _parse_judgment_result(value, serve_id, choice, reason_code)
+        operations: list[_KhiveOperation] = []
+        serve_ids: set[str] = set()
+        for request_index, request in enumerate(request_rows):
+            if not isinstance(request, KhiveJudgmentRequest):
+                raise ValueError(
+                    f"moodboard.batch_judge requests[{request_index}] must be KhiveJudgmentRequest"
+                )
+            for field, value in (
+                ("serve_id", request.serve_id),
+                ("left_result_occurrence_id", request.left_result_occurrence_id),
+                ("right_result_occurrence_id", request.right_result_occurrence_id),
+            ):
+                _canonical_uuid(
+                    value,
+                    f"moodboard.judge requests[{request_index}].{field}",
+                    ValueError,
+                )
+            if request.serve_id in serve_ids:
+                raise ValueError("moodboard.batch_judge cannot submit one serve more than once")
+            serve_ids.add(request.serve_id)
+            if request.choice not in allowed:
+                raise ValueError("moodboard.judge choice must be left, right, tie, or abstain")
+            if request.reason_code not in allowed[request.choice]:
+                raise ValueError("moodboard.judge reason_code is incompatible with choice")
+            if request.response_ms is not None and (
+                not _plain_int(request.response_ms) or not 0 <= request.response_ms <= 3_600_000
+            ):
+                raise ValueError("moodboard.judge response_ms must be an integer from 0 to 3600000")
+            arguments: dict[str, Any] = {
+                "serve_id": request.serve_id,
+                "left_result_occurrence_id": request.left_result_occurrence_id,
+                "right_result_occurrence_id": request.right_result_occurrence_id,
+                "choice": request.choice,
+            }
+            if request.reason_code is not None:
+                arguments["reason_code"] = request.reason_code
+            if request.response_ms is not None:
+                arguments["response_ms"] = request.response_ms
+            operations.append(_KhiveOperation("moodboard.judge", arguments))
+        values = self._execute(tuple(operations))
+        results = tuple(
+            _parse_judgment_result(
+                value,
+                request.serve_id,
+                request.choice,
+                request.reason_code,
+            )
+            for value, request in zip(values, request_rows, strict=True)
+        )
+        judgment_ids = [result.judgment_id for result in results]
+        if len(set(judgment_ids)) != len(judgment_ids):
+            raise KhiveProtocolError("moodboard.batch_judge returned duplicate judgment identities")
+        return results
 
     def train_preference(
         self,
@@ -1143,6 +1293,29 @@ class KhiveClient:
     ) -> KhivePreferencePrediction:
         """Run the loaded FANN head without merging it into coherence evidence."""
 
+        return self.batch_preference(
+            preference_model_id=preference_model_id,
+            board_entity_id=board_entity_id,
+            board_id=board_id,
+            model_key=model_key,
+            descriptor_fingerprint=descriptor_fingerprint,
+            source_report_sha256=source_report_sha256,
+            requests=(KhivePreferenceRequest(left=left, right=right),),
+        )[0]
+
+    def batch_preference(
+        self,
+        *,
+        preference_model_id: str,
+        board_entity_id: str,
+        board_id: str,
+        model_key: str,
+        descriptor_fingerprint: str,
+        source_report_sha256: str,
+        requests: Sequence[KhivePreferenceRequest],
+    ) -> tuple[KhivePreferencePrediction, ...]:
+        """Run one immutable FANN model over an ordered batch of scored pairs."""
+
         _canonical_uuid(preference_model_id, "moodboard.preference preference_model_id", ValueError)
         _canonical_uuid(board_entity_id, "moodboard.preference board_entity_id", ValueError)
         _require_hex_64(board_id, "moodboard.preference board_id", ValueError)
@@ -1150,15 +1323,33 @@ class KhiveClient:
         _require_hex_64(
             source_report_sha256, "moodboard.preference source_report_sha256", ValueError
         )
-        left_value = _validate_preference_candidate(left, "left")
-        right_value = _validate_preference_candidate(right, "right")
-        if (
-            left_value["asset_id"] == right_value["asset_id"]
-            or left_value["content_ref"] == right_value["content_ref"]
-        ):
-            raise ValueError("moodboard.preference candidates must have distinct identities")
-        value = self._execute(
-            (
+        request_rows = tuple(requests)
+        if not request_rows:
+            raise ValueError("moodboard.batch_preference requests must not be empty")
+        operations: list[_KhiveOperation] = []
+        validated_pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for request_index, request in enumerate(request_rows):
+            if not isinstance(request, KhivePreferenceRequest):
+                raise ValueError(
+                    f"moodboard.batch_preference requests[{request_index}] must be "
+                    "KhivePreferenceRequest"
+                )
+            left_value = _validate_preference_candidate(
+                request.left, f"requests[{request_index}].left"
+            )
+            right_value = _validate_preference_candidate(
+                request.right, f"requests[{request_index}].right"
+            )
+            if (
+                left_value["asset_id"] == right_value["asset_id"]
+                or left_value["content_ref"] == right_value["content_ref"]
+            ):
+                raise ValueError(
+                    f"moodboard.preference requests[{request_index}] candidates must have "
+                    "distinct identities"
+                )
+            validated_pairs.append((left_value, right_value))
+            operations.append(
                 _KhiveOperation(
                     "moodboard.preference",
                     {
@@ -1174,21 +1365,24 @@ class KhiveClient:
                         "left": left_value,
                         "right": right_value,
                     },
-                ),
+                )
             )
-        )[0]
-        return _parse_preference_prediction(
-            value,
-            preference_model_id,
-            source_report_sha256,
-            namespace=self.namespace,
-            actor=self.actor,
-            board_entity_id=board_entity_id,
-            board_id=board_id,
-            model_key=model_key,
-            descriptor_fingerprint=descriptor_fingerprint,
-            left=left_value,
-            right=right_value,
+        values = self._execute(tuple(operations))
+        return tuple(
+            _parse_preference_prediction(
+                value,
+                preference_model_id,
+                source_report_sha256,
+                namespace=self.namespace,
+                actor=self.actor,
+                board_entity_id=board_entity_id,
+                board_id=board_id,
+                model_key=model_key,
+                descriptor_fingerprint=descriptor_fingerprint,
+                left=left_value,
+                right=right_value,
+            )
+            for value, (left_value, right_value) in zip(values, validated_pairs, strict=True)
         )
 
     @staticmethod
@@ -1306,9 +1500,11 @@ class KhiveClient:
     def _execute(self, operations: Sequence[_KhiveOperation]) -> tuple[Any, ...]:
         """Return one result per operation, or expose no result and raise.
 
-        ``--strict`` makes Khive signal a failed row in its process status.  The checks below
-        are still required: a truncated result file, a mismatched manifest, or an executable
-        that does not honour strict mode must not be accepted just because its status is zero.
+        ``--serial`` makes the physical execution order match the submitted order and prevents
+        concurrent readers from contending on shared pack state. ``--strict`` makes Khive signal
+        a failed row in its process status. The checks below are still required: a truncated
+        result file, a mismatched manifest, or an executable that does not honour strict mode must
+        not be accepted just because its status is zero.
         """
         submitted = tuple(self._bind_storage_namespace(operation) for operation in operations)
         if not submitted:
@@ -1357,6 +1553,7 @@ class KhiveClient:
                     "verbose",
                     "--output-format",
                     "json",
+                    "--serial",
                     "--strict",
                 ]
             )

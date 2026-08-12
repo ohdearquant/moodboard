@@ -84,6 +84,8 @@ def descriptor(revision="weights-r1"):
 args = sys.argv[1:]
 if not args or args[0] != "exec":
     raise SystemExit(90)
+if "--serial" not in args:
+    raise SystemExit(92)
 
 def value(flag):
     return args[args.index(flag) + 1]
@@ -349,6 +351,7 @@ def test_encoder_batches_in_order_and_keeps_large_image_bytes_out_of_argv(fake_k
     assert "--ops-file" in ingest["argv"]
     assert "--save-file" in ingest["argv"]
     assert "--strict" in ingest["argv"]
+    assert "--serial" in ingest["argv"]
     assert ingest["argv"][ingest["argv"].index("--actor") + 1] == "lambda:moodboard-tests"
     assert ingest["argv"][ingest["argv"].index("--expect-actor") + 1] == ("lambda:moodboard-tests")
     assert ingest["argv"][ingest["argv"].index("--namespace") + 1] == "moodboard-tests"

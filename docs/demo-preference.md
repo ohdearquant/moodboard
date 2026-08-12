@@ -1,10 +1,11 @@
 # Governed preference replay for the Adobe demo
 
-The preference replay demonstrates a narrow, auditable claim: Khive can collect
-randomized pairwise events over Moodboard's governed 10-dimensional feature artifact,
-refuse training below its support floor, publish immutable FANN model snapshots, and
-measure how a second disclosed **simulated feature policy** changes predictions on a
-frozen conflict set.
+The preference replay demonstrates a narrow, auditable claim: Khive can collect randomized
+pairwise events over Moodboard's governed 10-dimensional feature artifact, refuse training below
+its support floor, publish immutable FANN model snapshots, and measure how a second disclosed
+**simulated feature policy** changes predictions on a frozen conflict set. A separate disclosed
+feature-margin policy supplies synthetic calibration ties; those ties are never attributed to
+Policy A or to a person.
 
 It is deliberately separate from coherence and conformal evidence. It is also separate
 from Pixel RAG retrieval quality (hubness, MMR, precision, and nDCG). Those are different
@@ -22,9 +23,10 @@ Generate the governed artifact and its Khive board entity in the namespace that 
 the replay. Use a fresh `policy-simulated` actor/board scope for every replay; a new namespace
 for the whole rank-and-replay run is the cleanest isolation. The actor must contain
 `policy-simulated`, for example `lambda:adobe-demo-policy-simulated`. This prevents these
-synthetic events from being attributed to a human. Existing events are not deleted or
-ignored. Contamination is caught either by the exact initial zero-train support refusal or by
-the trained model's exact split-count checks.
+synthetic events from being attributed to a human. Existing events are not deleted or ignored.
+Contamination is caught either by the exact initial zero-train support refusal or by exact
+post-training checks over decisive groups and judgments, tie groups and judgments, abstains,
+exposed-probability exclusions, split revision, and total snapshot event count.
 
 The callable entry point is `moodboard.preference_demo.replay_preference_demo`. Both the
 initial client and the client returned by `restart_client_factory` must point at the same
@@ -73,13 +75,16 @@ matches Khive's `moodboard-pair-split-v1`: SHA-256 over board ID, descriptor fin
 feature schema ID, and ascending content refs, then buckets 0–13 train, 14–16 calibration,
 and 17–19 test.
 
-1. Validate the closed feature artifact and preflight all pair capacity.
+1. Validate the closed feature artifact and preflight all pair capacity. The 16 calibration ties
+   are the unused calibration pairs with the smallest absolute Policy-A feature margin, with pair
+   ID as the deterministic tie-break. The replay records every margin, the realized threshold,
+   selection rule, and the independent calibration-tie policy identity.
 2. Call `train_preference` with zero judgments and retain the exact below-support refusal.
-3. Append distinct Policy A pairs: 64 train decisive, 16 calibration decisive, 16 test
-   decisive, and 16 different calibration ties. Khive randomizes display side; if a real
-   split happens to lack either a displayed-left or displayed-right winning label, the
-   replay adds distinct reserved pairs until both exist. `phase_counts` records the realized
-   counts rather than pretending the repair did not happen.
+3. Append distinct Policy A pairs: 64 train decisive, 16 calibration decisive, and 16 test
+   decisive, plus the 16 separately attributed calibration-tie-policy pairs. Khive randomizes
+   display side; if a real split happens to lack either a displayed-left or displayed-right
+   winning label, the replay adds distinct reserved pairs until both exist. `phase_counts`
+   records the realized counts rather than pretending the repair did not happen.
 4. Train immutable model A and infer on eight unjudged, frozen pairs where Policy A and
    Policy B prefer opposite candidates.
 5. Append 96 **new** train pairs labeled by Policy B. They are deterministically selected
@@ -96,6 +101,16 @@ winner, split, and policy ID. Returned occurrence identities must bind exactly t
 submitted candidates and reported swap; a mismatched Khive response fails before judgment.
 No unordered pair is reused across decisive labels, ties, probes, or the second phase.
 
+The client submits each independent phase through narrow typed `batch_serve`, `batch_judge`, and
+`batch_preference` methods. All items are validated before the subprocess starts, and Khive's
+ordered JSONL manifest is checked exactly as for singleton calls. Empty batches fail before a
+subprocess starts. Each invocation uses `kkernel exec --serial`; Khive may parse a large ops file
+in bounded chunks, but pack operations execute physically in input order without shared-reader
+contention. The normal no-repair replay uses 11 `kkernel` executions rather than 451: one support
+refusal, two serve batches, two judgment batches, two model publications, and four probe-inference
+batches. Serve and judgment remain separate because the displayed-side choice cannot be known
+before Khive returns its randomized occurrences.
+
 The output is canonical UTF-8 JSON with no wall-clock field. Its `replay_fingerprint` binds
 the complete realized trace, including Khive's occurrence provenance and immutable model
 identities. Pair selection is deterministic for one governed artifact. A genuinely fresh
@@ -111,14 +126,23 @@ direction. Khive's published training provenance retains train/calibration/test 
 optimizer identity, calibration, held-out metrics, network hashes, and verified FANN
 inference.
 
+The unit-test client deliberately checks orchestration, ordering, fail-closed validation, and
+delta arithmetic only. It is not learning evidence. Demo readiness requires a replay against the
+real pinned `kkernel`, and its measured `adaptation_direction_observed=true` result must be
+retained as the integration artifact. A false gate is a valid measured outcome, but it cannot be
+presented as adaptation.
+
 The demo must always be described with all of these non-claims:
 
-- Labels are `policy_simulated`; they are not human preference observations.
+- Decisive and calibration-tie labels are `policy_simulated` under separately disclosed policies;
+  they are not human preference observations.
 - This is immutable snapshot retraining, not online learning.
 - Preference probability is not a coherence score or conformal p-value.
 - The replay is not causal personalization and is not a user study.
 - It makes no generalization claim beyond this artifact and frozen probe set.
 - The A-to-B delta is only a frozen policy-conflict probe measurement.
+- Test-double deltas are not demo evidence; only the retained real-Khive replay satisfies the
+  integration gate.
 
 The support refusal is itself a governance result: below the declared support, the system
 refuses to manufacture a model. A polished demo should show that refusal before showing the
