@@ -118,7 +118,7 @@ rows = []
 ingest_index = prior_ingest_rows
 for op in ops:
     tool = op["tool"]
-    if tool in {"kg.create", "moodboard.model", "moodboard.ingest", "moodboard.search"}:
+    if tool in {"create", "moodboard.model", "moodboard.ingest", "moodboard.search"}:
         if op["args"].get("namespace") != value("--namespace"):
             print(
                 "operation namespace does not match kkernel attribution namespace",
@@ -164,7 +164,7 @@ for op in ops:
         elif mode == "ingest-missing-key":
             result.pop("created")
         ingest_index += 1
-    elif tool == "kg.create":
+    elif tool == "create":
         result = {
             "id": "00000000-0000-4000-8000-000000000100",
             "namespace": op["args"]["namespace"],
@@ -1543,7 +1543,9 @@ def test_rank_exports_real_geometry_only_after_valid_report(
             rtol=0.0,
             atol=1e-7,
         )
-    create = next(call for call in _calls(log) if call["ops"][0]["tool"] == "kg.create")
+    calls = _calls(log)
+    assert not any(op["tool"] == "kg.create" for call in calls for op in call["ops"])
+    create = next(call for call in calls if call["ops"][0]["tool"] == "create")
     create_args = create["ops"][0]["args"]
     assert create_args["namespace"] == "preference-cli"
     assert create_args["properties"]["board_id"] == board.board_id

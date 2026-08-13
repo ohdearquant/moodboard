@@ -43,7 +43,7 @@ for operation_index, operation in enumerate(ops, start=1):
     identity_base = 100 + (operation_index - 1) * 10
     if args.get("namespace") != value("--namespace"):
         raise SystemExit(91)
-    if tool == "kg.create":
+    if tool == "create":
         expected_properties = {
             "schema_version": "moodboard.preference-board.v1",
             "board_id": "a" * 64,

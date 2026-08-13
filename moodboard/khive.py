@@ -48,7 +48,7 @@ _SEARCH_HIT_KEYS = frozenset({"asset_id", "score", "rank", "name", "content_ref"
 _MODEL_RESULT_KEYS = frozenset({"descriptor", "experimental"})
 _NAMESPACED_STORAGE_TOOLS = frozenset(
     {
-        "kg.create",
+        "create",
         "moodboard.model",
         "moodboard.ingest",
         "moodboard.search",
@@ -432,37 +432,33 @@ def _parse_published_board(
     expected_properties: Mapping[str, str],
 ) -> KhiveMoodboardEntity:
     if not isinstance(value, dict):
-        raise KhiveProtocolError("kg.create moodboard result must be an object")
-    _require_exact_keys(value, _KG_ENTITY_KEYS, "kg.create moodboard result")
-    entity_id = _canonical_uuid(
-        value.get("id"), "kg.create moodboard result id", KhiveProtocolError
-    )
+        raise KhiveProtocolError("create moodboard result must be an object")
+    _require_exact_keys(value, _KG_ENTITY_KEYS, "create moodboard result")
+    entity_id = _canonical_uuid(value.get("id"), "create moodboard result id", KhiveProtocolError)
     if value.get("namespace") != namespace:
-        raise KhiveProtocolError("kg.create moodboard result namespace does not match the request")
-    _require_rfc3339(value.get("created_at"), "kg.create moodboard result created_at")
-    _require_rfc3339(value.get("updated_at"), "kg.create moodboard result updated_at")
+        raise KhiveProtocolError("create moodboard result namespace does not match the request")
+    _require_rfc3339(value.get("created_at"), "create moodboard result created_at")
+    _require_rfc3339(value.get("updated_at"), "create moodboard result updated_at")
     if value.get("kind") != "artifact" or value.get("entity_type") != "moodboard":
-        raise KhiveProtocolError("kg.create moodboard result is not artifact/moodboard")
+        raise KhiveProtocolError("create moodboard result is not artifact/moodboard")
     if value.get("name") != name:
-        raise KhiveProtocolError("kg.create moodboard result name does not match the request")
+        raise KhiveProtocolError("create moodboard result name does not match the request")
     if value.get("description") != _PREFERENCE_BOARD_DESCRIPTION:
-        raise KhiveProtocolError(
-            "kg.create moodboard result description does not match the request"
-        )
+        raise KhiveProtocolError("create moodboard result description does not match the request")
     properties = value.get("properties")
     if not isinstance(properties, dict):
-        raise KhiveProtocolError("kg.create moodboard result properties must be an object")
-    _require_exact_keys(properties, _PREFERENCE_BOARD_PROPERTIES, "kg.create moodboard properties")
+        raise KhiveProtocolError("create moodboard result properties must be an object")
+    _require_exact_keys(properties, _PREFERENCE_BOARD_PROPERTIES, "create moodboard properties")
     if properties != expected_properties:
-        raise KhiveProtocolError("kg.create moodboard result properties do not match the request")
+        raise KhiveProtocolError("create moodboard result properties do not match the request")
     if value.get("tags") != list(_PREFERENCE_BOARD_TAGS):
-        raise KhiveProtocolError("kg.create moodboard result tags do not match the request")
+        raise KhiveProtocolError("create moodboard result tags do not match the request")
     if any(
         value.get(field) is not None
         for field in ("deleted_at", "merged_into", "merge_event_id", "content_ref")
     ):
         raise KhiveProtocolError(
-            "kg.create moodboard result lifecycle and content fields must all be null"
+            "create moodboard result lifecycle and content fields must all be null"
         )
     return KhiveMoodboardEntity(
         entity_id=entity_id,
@@ -936,12 +932,10 @@ class KhiveClient:
             or name.strip() != name
             or len(name.encode("utf-8")) > 512
         ):
-            raise ValueError("kg.create moodboard name must be a trimmed non-empty UTF-8 string")
-        _require_hex_64(board_id, "kg.create moodboard board_id", ValueError)
-        _validate_model_identity(model_key, descriptor_fingerprint, "kg.create moodboard")
-        _require_hex_64(
-            source_report_sha256, "kg.create moodboard source_report_sha256", ValueError
-        )
+            raise ValueError("create moodboard name must be a trimmed non-empty UTF-8 string")
+        _require_hex_64(board_id, "create moodboard board_id", ValueError)
+        _validate_model_identity(model_key, descriptor_fingerprint, "create moodboard")
+        _require_hex_64(source_report_sha256, "create moodboard source_report_sha256", ValueError)
         properties = _preference_board_properties(
             board_id=board_id,
             model_key=model_key,
@@ -951,7 +945,7 @@ class KhiveClient:
         value = self._execute(
             (
                 _KhiveOperation(
-                    "kg.create",
+                    "create",
                     {
                         "kind": "entity",
                         "entity_kind": "artifact",

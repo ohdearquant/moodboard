@@ -564,7 +564,7 @@ Pillow or compressor implementation.
 `kkernel exec --ops-file ... --save-file ... --strict --serial` with explicit `--actor`, identical
 `--expect-actor`, and explicit `--namespace`. The CLI namespace remains execution attribution;
 the same exact configured value is also injected into the closed `args` object of every supported
-Moodboard operation and the narrow `kg.create` board publication because those fields select
+Moodboard operation and the narrow bare `create` board publication because those fields select
 durable storage, retrieval, and learning scope. An optional config path is passed as `--config`;
 when absent, Khive's normal environment/discovery fallback remains active. It verifies the saved JSONL manifest, byte
 checksum, row count, per-row tool/order, success flag, and strict JSON before releasing any
@@ -619,7 +619,10 @@ conformal score and interval, and three classical distances while that geometry 
 It never reconstructs missing values from the serialized report. Only scored candidates are
 eligible, and fewer than two fail rather than fabricating a pairwise pool. After `write_report`
 validates and atomically publishes the report, its exact bytes are SHA-256 hashed; only then does the
-client issue its one narrow `kg.create` operation for a live `artifact/moodboard`. The entity's closed
+client issue its one narrow bare `create` operation for a live `artifact/moodboard`. Khive's
+registered verb name is canonical here; the adapter has no compatibility fallback to the
+unregistered `kg.create` spelling.
+The entity's closed
 properties bind board id, model key, descriptor fingerprint, report digest, feature schema, and
 producer identity. A strict response parser requires the exact Entity wire shape, matching namespace
 and properties, and null deletion/merge/content lifecycle fields.
