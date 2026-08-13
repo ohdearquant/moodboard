@@ -423,13 +423,36 @@ function AxisRow({ definition, value, legacy }: {
   );
 }
 
-function ScoredOutcome({ asset }: { readonly asset: ScoredAsset }): ReactNode {
+function conformalFitTierLabel(asset: Asset, model: ReportModel): string {
+  if (asset.state === "abstained") {
+    return `No conformal fit tier · abstained: ${humanizeToken(asset.reason)}`;
+  }
+  const ranks = model.report.assets
+    .filter((candidate): candidate is ScoredAsset => candidate.state === "scored")
+    .map((candidate) => candidate.rank)
+    .filter((rank, index, values) => values.indexOf(rank) === index)
+    .toSorted((left, right) => left - right);
+  const tier = ranks.indexOf(asset.rank) + 1;
+  const tieCount = model.report.assets.filter(
+    (candidate) => candidate.state === "scored" && candidate.rank === asset.rank,
+  ).length;
+  const tie = tieCount === 1 ? "no exact-score tie" : `${tieCount}-way tie`;
+  return `Fit tier ${tier} of ${ranks.length} · ${tie} · board-fit p ${formatNumber(asset.score)}`;
+}
+
+function reportedCompetitionRank(asset: Asset): string {
+  return asset.state === "scored"
+    ? `reported competition rank ${asset.rank}`
+    : "outside the ranking";
+}
+
+function ScoredOutcome({ asset, model }: { readonly asset: ScoredAsset; readonly model: ReportModel }): ReactNode {
   return (
     <section className="outcome outcome-scored" aria-labelledby={`outcome-${asset.asset_id}`}>
       <div className="outcome-heading">
         <div>
           <p className="eyebrow">Compatibility evidence</p>
-          <h4 id={`outcome-${asset.asset_id}`}>Rank {asset.rank} · reported inlier p-value {formatNumber(asset.score)}</h4>
+          <h4 id={`outcome-${asset.asset_id}`}>{conformalFitTierLabel(asset, model)}</h4>
         </div>
         <span className="category-pill">{asset.category_id} · n={asset.n_local}</span>
       </div>
@@ -475,6 +498,7 @@ function AssetCard({ asset, model, active, dispatch }: {
       dispatch({ type: "select", assetId: asset.asset_id });
     }
   };
+  const tierLabel = conformalFitTierLabel(asset, model);
   return (
     <article
       className={`asset-card asset-${asset.state} ${active ? "asset-active" : ""}`}
@@ -488,9 +512,9 @@ function AssetCard({ asset, model, active, dispatch }: {
       onKeyDown={selectOnKey}
     >
       <header className="asset-header">
-        <span className="asset-index">{asset.state === "scored" ? String(asset.rank).padStart(2, "0") : "—"}</span>
+        <span className="asset-index">{asset.state === "scored" ? tierLabel.match(/^Fit tier (\d+)/u)?.[1]?.padStart(2, "0") ?? "—" : "—"}</span>
         <div>
-          <p className="eyebrow">{asset.state === "scored" ? "Ranked candidate" : "Unranked candidate"}</p>
+          <p className="eyebrow">{asset.state === "scored" ? "Conformal fit tier" : "Unranked candidate"}</p>
           <h3>{asset.asset_id}</h3>
         </div>
         <FlagList flags={asset.flags} />
@@ -499,7 +523,7 @@ function AssetCard({ asset, model, active, dispatch }: {
         <CandidatePreview asset={asset} model={model} />
         <ReferenceTriptych asset={asset} model={model} />
       </div>
-      {asset.state === "scored" ? <ScoredOutcome asset={asset} /> : <AbstainedOutcome asset={asset} />}
+      {asset.state === "scored" ? <ScoredOutcome asset={asset} model={model} /> : <AbstainedOutcome asset={asset} />}
       <AxisTable asset={asset} model={model} />
     </article>
   );
@@ -509,12 +533,18 @@ function StoryStrip({ model }: { readonly model: ReportModel }): ReactNode {
   const report = model.report;
   const scored = report.assets.filter((asset) => asset.state === "scored").length;
   const abstained = report.assets.length - scored;
+  const families = groupDeterministicVariants(model);
+  const completeVariantCorpus = families.length * 3 === report.assets.length;
   return (
     <section className="story-strip" aria-label="Board measurement overview">
       <article className="story-compatibility">
         <p className="eyebrow">Compatibility</p>
-        <strong>{scored} measured</strong>
-        <span>{abstained} abstained · candidate-level evidence below</span>
+        <strong>{scored} evaluated</strong>
+        <span>
+          {abstained} abstained · {completeVariantCorpus
+            ? `${families.length} source artworks × 3 deterministic views`
+            : `${report.assets.length} candidate records`}
+        </span>
       </article>
       <article>
         <p className="eyebrow">Cohesion</p>
@@ -540,15 +570,37 @@ function StoryStrip({ model }: { readonly model: ReportModel }): ReactNode {
   );
 }
 
+function MechanismGuide(): ReactNode {
+  return (
+    <section className="mechanism-guide" aria-label="Three independent evidence mechanisms">
+      <article>
+        <span>01 · Board fit</span>
+        <strong>Does this variant resemble the reference board?</strong>
+        <p>Visual embeddings become k-nearest cosine nonconformity, then one board-relative conformal p-value. Higher p means stronger compatibility; equal p shares a fit tier. No reranker.</p>
+      </article>
+      <article>
+        <span>02 · Firefly iteration</span>
+        <strong>Did an edit preserve the protected pixels?</strong>
+        <p>Generation and locality verification form a separate loop. Its outputs do not change board fit.</p>
+      </article>
+      <article>
+        <span>03 · Pairwise preference</span>
+        <strong>Did a newly retrained immutable snapshot respond?</strong>
+        <p>A separate FANN replay measures eight untouched pairs. It publishes a new snapshot—no online update—and does not rerank the 24 images.</p>
+      </article>
+    </section>
+  );
+}
+
 function GovernedReferenceBoard({ model }: { readonly model: ReportModel }): ReactNode {
   return (
     <section className="reference-board" aria-label="Governed reference board">
       <div className="section-heading reference-board-heading">
         <div>
           <p className="eyebrow">Governed source set</p>
-          <h2>Governed reference board · {model.report.references.length} immutable references</h2>
+          <h2>Scoring baseline · {model.report.references.length} original artworks</h2>
         </div>
-        <p>No similarity score is inferred at board level. Identity stays attached to every tile.</p>
+        <p>These immutable originals define the board; every candidate fit tier is calibrated against this exact set.</p>
       </div>
       <div className="reference-board-strip">
         {model.report.references.map((reference, index) => (
@@ -573,6 +625,195 @@ function GovernedReferenceBoard({ model }: { readonly model: ReportModel }): Rea
   );
 }
 
+type DeterministicVariantKind = "original" | "center-crop" | "horizontal-mirror";
+
+interface DeterministicVariantFamily {
+  readonly sourceId: string;
+  readonly original: Asset;
+  readonly transforms: readonly [Asset, Asset];
+  readonly reference: ReferenceEntry | null;
+  readonly originalReusesReferenceBytes: boolean;
+}
+
+interface PendingVariantFamily {
+  readonly sourceId: string;
+  original?: Asset;
+  centerCrop?: Asset;
+  horizontalMirror?: Asset;
+}
+
+const DETERMINISTIC_VARIANT_SUFFIXES: ReadonlyArray<{
+  readonly suffix: string;
+  readonly kind: DeterministicVariantKind;
+}> = [
+  { suffix: "--original.jpg", kind: "original" },
+  { suffix: "--center-crop-90pct.png", kind: "center-crop" },
+  { suffix: "--horizontal-mirror.png", kind: "horizontal-mirror" },
+];
+
+function deterministicVariantIdentity(assetId: string): {
+  readonly sourceId: string;
+  readonly kind: DeterministicVariantKind;
+} | null {
+  const matched = DETERMINISTIC_VARIANT_SUFFIXES.find(({ suffix }) => assetId.endsWith(suffix));
+  if (!matched) return null;
+  const sourceId = assetId.slice(0, -matched.suffix.length);
+  return sourceId.length > 0 ? { sourceId, kind: matched.kind } : null;
+}
+
+function groupDeterministicVariants(model: ReportModel): readonly DeterministicVariantFamily[] {
+  const pending = new Map<string, PendingVariantFamily>();
+  for (const asset of model.report.assets) {
+    const identity = deterministicVariantIdentity(asset.asset_id);
+    if (!identity) continue;
+    const family = pending.get(identity.sourceId) ?? { sourceId: identity.sourceId };
+    if (identity.kind === "original") family.original = asset;
+    if (identity.kind === "center-crop") family.centerCrop = asset;
+    if (identity.kind === "horizontal-mirror") family.horizontalMirror = asset;
+    pending.set(identity.sourceId, family);
+  }
+
+  return Array.from(pending.values()).flatMap((family) => {
+    if (!family.original || !family.centerCrop || !family.horizontalMirror) return [];
+    const originalHash = family.original.image?.content_sha256;
+    const reference = originalHash
+      ? model.report.references.find((candidate) => candidate.content_sha256 === originalHash) ?? null
+      : null;
+    return [{
+      sourceId: family.sourceId,
+      original: family.original,
+      transforms: [family.centerCrop, family.horizontalMirror] as const,
+      reference,
+      originalReusesReferenceBytes: reference !== null,
+    }];
+  });
+}
+
+function variantLabel(asset: Asset): string {
+  const identity = deterministicVariantIdentity(asset.asset_id);
+  if (identity?.kind === "original") return "Original";
+  if (identity?.kind === "center-crop") return "90% center crop";
+  if (identity?.kind === "horizontal-mirror") return "Horizontal mirror";
+  return asset.asset_id;
+}
+
+function CandidateTile({
+  asset,
+  model,
+  active,
+  loading,
+  dispatch,
+}: {
+  readonly asset: Asset;
+  readonly model: ReportModel;
+  readonly active: boolean;
+  readonly loading: "eager" | "lazy";
+  readonly dispatch: Dispatch<ViewerAction>;
+}): ReactNode {
+  const image = asset.image;
+  const tierLabel = conformalFitTierLabel(asset, model);
+  return (
+    <button
+      type="button"
+      className={`candidate-hero-tile candidate-hero-${asset.state} ${active ? "candidate-hero-active" : ""}`}
+      data-asset-id={asset.asset_id}
+      aria-label={`Inspect candidate ${asset.asset_id}`}
+      aria-pressed={active}
+      onClick={() => dispatch({ type: "inspect", assetId: asset.asset_id })}
+    >
+      <span className="candidate-hero-image">
+        <SafeImage
+          source={model.candidateSources.get(asset.asset_id)}
+          alt={`Candidate ${asset.asset_id}`}
+          fallback={image ? "Candidate preview could not be rendered." : "Candidate preview unavailable in report 1.0."}
+          width={image?.thumbnail.width}
+          height={image?.thumbnail.height}
+          loading={loading}
+        />
+        <i>{asset.state === "scored" ? tierLabel.split(" · ")[0]?.toUpperCase() : "REFUSED"}</i>
+      </span>
+      <strong title={asset.asset_id}>{asset.asset_id}</strong>
+      <small>{tierLabel}</small>
+    </button>
+  );
+}
+
+function VariantFamilyCard({
+  family,
+  index,
+  model,
+  selectedId,
+  dispatch,
+}: {
+  readonly family: DeterministicVariantFamily;
+  readonly index: number;
+  readonly model: ReportModel;
+  readonly selectedId: string | null;
+  readonly dispatch: Dispatch<ViewerAction>;
+}): ReactNode {
+  const variants = [family.original, ...family.transforms];
+  return (
+    <article className="variant-family-card" data-testid="variant-source-family">
+      <header>
+        <span>{String(index + 1).padStart(2, "0")} · source family</span>
+        <h3 title={family.sourceId}>{family.sourceId}</h3>
+      </header>
+      <div className="variant-family-gallery">
+        {variants.map((asset, variantIndex) => (
+          <button
+            key={asset.asset_id}
+            type="button"
+            className={`variant-family-tile ${variantIndex === 0 ? "variant-family-original" : ""}`}
+            data-asset-id={asset.asset_id}
+            aria-label={`Inspect candidate ${asset.asset_id}`}
+            aria-pressed={asset.asset_id === selectedId}
+            onClick={() => dispatch({ type: "inspect", assetId: asset.asset_id })}
+          >
+            <span className="variant-family-image">
+              <SafeImage
+                source={model.candidateSources.get(asset.asset_id)}
+                alt={`${family.sourceId}, ${variantLabel(asset)}`}
+                fallback={asset.image ? "Candidate preview could not be rendered." : "Candidate preview unavailable in report 1.0."}
+                width={asset.image?.thumbnail.width}
+                height={asset.image?.thumbnail.height}
+                loading={index < 4 ? "eager" : "lazy"}
+              />
+            </span>
+            <strong>{variantLabel(asset)}</strong>
+            {variantIndex === 0 && family.originalReusesReferenceBytes ? (
+              <mark title={family.reference?.content_sha256}>Same bytes as reference</mark>
+            ) : null}
+            <small>{conformalFitTierLabel(asset, model)}</small>
+          </button>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function FullCandidateAudit({ ordered, model }: {
+  readonly ordered: readonly Asset[];
+  readonly model: ReportModel;
+}): ReactNode {
+  return (
+    <details className="full-candidate-audit">
+      <summary>
+        <span>Full {ordered.length}-candidate record</span>
+        <small>Reported order retained for deterministic audit</small>
+      </summary>
+      <ol>
+        {ordered.map((asset, index) => (
+          <li key={asset.asset_id}>
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <strong>{asset.asset_id}</strong>
+            <small>{conformalFitTierLabel(asset, model)} · {reportedCompetitionRank(asset)}</small>
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
 function CandidateHeroGrid({
   model,
   activeId,
@@ -584,52 +825,61 @@ function CandidateHeroGrid({
 }): ReactNode {
   const ordered = [...rankedAssets(model), ...abstainedAssets(model)];
   const selectedId = activeId ?? ordered[0]?.asset_id ?? null;
+  const families = groupDeterministicVariants(model);
+  const groupedAssetCount = families.reduce((count) => count + 3, 0);
+  const showsFamilies = families.length > 0 && groupedAssetCount === ordered.length;
   if (ordered.length === 0) return null;
 
+  const declaredModel = model.report.board.representation.style.model;
+  const methodNote = /qwen|lattice/i.test(declaredModel)
+    ? "Qwen/Lattice embeddings feed k-nearest cosine nonconformity, then full-conformal board-fit. Higher p means stronger board compatibility; order is p high to low, and equal p-values share a fit tier. No reranker changes or breaks ties."
+    : `This report declares ${declaredModel} for k-nearest cosine nonconformity and conformal board-fit. Higher p means stronger compatibility; equal p-values share a tier, with no reranker.`;
+
   return (
-    <section className="candidate-hero" aria-label={`${ordered.length} candidate overview`}>
+    <section className="candidate-hero" aria-label={showsFamilies ? "Deterministic variant stress test" : `${ordered.length} candidate overview`}>
       <div className="section-heading candidate-hero-heading">
         <div>
-          <p className="eyebrow">Complete candidate field</p>
-          <h2>{ordered.length} measured outputs, one scan.</h2>
+          <p className="eyebrow">{showsFamilies ? "Deterministic source families" : "Complete candidate field"}</p>
+          <h2>{showsFamilies ? `${families.length} originals · three measured views each.` : `${ordered.length} measured outputs, one scan.`}</h2>
         </div>
-        <p>Engine rank first; equal ranks and abstentions retain report order. Select a tile for its full evidence card.</p>
+        <p>Higher p means stronger board compatibility. Equal p-values share a fit tier; report order only keeps equal values deterministic.</p>
       </div>
-      <div className="candidate-hero-grid">
-        {ordered.map((asset, index) => {
-          const image = asset.image;
-          const active = asset.asset_id === selectedId;
-          return (
-            <button
+      {showsFamilies ? (
+        <p className="variant-corpus-note">
+          This is a deterministic stress test, not 24 generated images: each of the 8 references reappears unchanged once, beside a 90% crop and a mirror, to verify byte identity and transform sensitivity.
+        </p>
+      ) : null}
+      <p className="ranking-method-note">{methodNote}</p>
+      {showsFamilies ? (
+        <>
+          <div className="variant-family-grid">
+            {families.map((family, index) => (
+              <VariantFamilyCard
+                key={family.sourceId}
+                family={family}
+                index={index}
+                model={model}
+                selectedId={selectedId}
+                dispatch={dispatch}
+              />
+            ))}
+          </div>
+          <FullCandidateAudit ordered={ordered} model={model} />
+        </>
+      ) : (
+        <div className="candidate-hero-grid">
+          {ordered.map((asset, index) => (
+            <CandidateTile
               key={asset.asset_id}
-              type="button"
-              className={`candidate-hero-tile candidate-hero-${asset.state} ${active ? "candidate-hero-active" : ""}`}
-              data-asset-id={asset.asset_id}
-              aria-label={`Inspect candidate ${asset.asset_id}`}
-              aria-pressed={active}
-              onClick={() => dispatch({ type: "inspect", assetId: asset.asset_id })}
-            >
-              <span className="candidate-hero-image">
-                <SafeImage
-                  source={model.candidateSources.get(asset.asset_id)}
-                  alt={`Candidate ${asset.asset_id}`}
-                  fallback={image ? "Candidate preview could not be rendered." : "Candidate preview unavailable in report 1.0."}
-                  width={image?.thumbnail.width}
-                  height={image?.thumbnail.height}
-                  loading={index < 12 ? "eager" : "lazy"}
-                />
-                <i>{asset.state === "scored" ? `#${asset.rank}` : "REFUSED"}</i>
-              </span>
-              <strong title={asset.asset_id}>{asset.asset_id}</strong>
-              <small>
-                {asset.state === "scored"
-                  ? `conformal p ${String(asset.score)}`
-                  : humanizeToken(asset.reason)}
-              </small>
-            </button>
-          );
-        })}
-      </div>
+              asset={asset}
+              model={model}
+              active={asset.asset_id === selectedId}
+              loading={index < 12 ? "eager" : "lazy"}
+              dispatch={dispatch}
+            />
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -639,27 +889,70 @@ function CoreVerificationLine({ model }: { readonly model: ReportModel }): React
   const abstained = model.report.assets.length - scored;
   return (
     <p className="core-verification-line" aria-label="Core report verification">
-      Verified · {model.report.references.length} governed references · {model.report.assets.length} candidate outcomes · {scored} scored · {abstained} abstained · engine rank preserved · no merged preference score
+      Verified · {model.report.references.length} governed references · {model.report.assets.length} candidate outcomes · {scored} scored · {abstained} abstained · reported fit tiers preserved · no merged preference score
     </p>
   );
 }
 
+function displayAssetLabel(assetId: string): string {
+  const tokens = assetId
+    .replace(/^style_/, "")
+    .replace(/--(?:original\.jpg|center-crop-90pct\.png|horizontal-mirror\.png)$/u, "")
+    .split("_");
+  const [rawArtist = "Unknown", ...rawTitle] = tokens;
+  const artist = rawArtist === "vangogh"
+    ? "Van Gogh"
+    : rawArtist.charAt(0).toUpperCase() + rawArtist.slice(1);
+  const title = rawTitle
+    .map((token, index) => index === 0 ? token.charAt(0).toUpperCase() + token.slice(1) : token)
+    .join(" ");
+  return title ? `${artist} · ${title}` : artist;
+}
+
+function preferenceAssetSource(
+  model: ReportModel,
+  label: string,
+): SafeThumbnailSource | undefined {
+  return model.candidateSources.get(label);
+}
+
+function preferenceFitTierLabel(model: ReportModel, label: string): string {
+  const asset = model.assetsById.get(label);
+  return asset ? conformalFitTierLabel(asset, model) : "Fit tier unavailable · asset/report identity mismatch";
+}
+
+function percentage(value: number): string {
+  return `${(value * 100).toFixed(3)}%`;
+}
+
 function PreferenceReplayPanel({
   evidence,
+  model,
 }: {
   readonly evidence: PreferenceReplayEvidence | null;
+  readonly model: ReportModel;
 }): ReactNode {
   if (evidence === null) return null;
+  if (model.documentSha256 !== evidence.bindings.source_report_sha256) {
+    return (
+      <aside className="preference-source-mismatch" role="status">
+        <strong>Preference replay not shown.</strong>
+        <span>The frozen pairwise evidence source report does not match this loaded report.</span>
+      </aside>
+    );
+  }
   const delta = evidence.delta;
   const probes = evidence.probes.toSorted((left, right) => right.delta - left.delta);
+  const concrete = evidence.probes[0];
+  const featureCount = evidence.policies.model_a.feature_names.length;
   const snapshots = [
     {
-      label: "Model A · baseline snapshot",
+      label: `Snapshot A · ${humanizeToken(evidence.policies.model_a.label)}`,
       model: evidence.model_a,
       probability: delta.mean_probability_for_policy_b_preferred_before,
     },
     {
-      label: "Model B · appended-policy snapshot",
+      label: `Snapshot B · after ${humanizeToken(evidence.policies.model_b.label)}`,
       model: evidence.model_b,
       probability: delta.mean_probability_for_policy_b_preferred_after,
     },
@@ -672,52 +965,120 @@ function PreferenceReplayPanel({
           <p className="eyebrow">
             Independent preference mechanism replay · policy_simulated · not trained on these Firefly outputs
           </p>
-          <h2>A frozen policy replay, before and after.</h2>
+          <h2>Can retraining publish a different immutable pairwise model?</h2>
         </div>
-        <p>Real Khive replay · immutable FANN snapshots · eight sidecar-bound probes</p>
+        <p>Same 24 image corpus · separate pairwise evidence head · never merged into fit tiers</p>
       </div>
       <p className="preference-deck">
-        Mean probability assigned to Policy B’s preferred side. Labels come from disclosed
-        feature-only policies—not people. Model A freezes at {evidence.model_a.snapshot_event_count}
-        {" "}events; Model B appends {evidence.event_counts.model_b_appended_train_decisive}
-        {" "}decisive judgments for {evidence.event_counts.total} total events.
+        <strong>24 image records · {featureCount} features each · {evidence.event_counts.total} pair events · 8 untouched probes.</strong>
+        {" "}The labels come from two disclosed simulated rules—not people. Snapshot A freezes at
+        {" "}{evidence.model_a.snapshot_event_count} events. Then {evidence.event_counts.model_b_appended_train_decisive}
+        {" "}new train judgments from a deliberately conflicting rule retrain and publish Snapshot B as a separate immutable model. No online update occurs.
       </p>
+      <div className="preference-mechanism" aria-label="Preference replay mechanism">
+        <article>
+          <span>01 · corpus</span>
+          <strong>24 image records</strong>
+          <small>byte-bound to the exact source report above</small>
+        </article>
+        <i aria-hidden="true">→</i>
+        <article>
+          <span>02 · representation</span>
+          <strong>{featureCount} measured features</strong>
+          <small>pair transform: left minus right</small>
+        </article>
+        <i aria-hidden="true">→</i>
+        <article>
+          <span>03 · replay</span>
+          <strong>112 + 96 events</strong>
+          <small>two immutable FANN snapshots</small>
+        </article>
+        <i aria-hidden="true">→</i>
+        <article>
+          <span>04 · evaluation</span>
+          <strong>8 untouched pairs</strong>
+          <small>never judged during the replay</small>
+        </article>
+      </div>
       <div className="preference-snapshots">
         {snapshots.map((snapshot, index) => (
           <article key={snapshot.model.preference_model_id}>
             <span>{snapshot.label}</span>
-            <strong title={String(snapshot.probability)}>{snapshot.probability.toFixed(6)}</strong>
-            <small>mean P(B-preferred) · {snapshot.model.snapshot_event_count} frozen events</small>
+            <strong title={String(snapshot.probability)}>{percentage(snapshot.probability)}</strong>
+            <small>mean probability for counter-style side · {snapshot.model.snapshot_event_count} frozen events</small>
             {index === 0 ? <i aria-hidden="true">→</i> : null}
           </article>
         ))}
       </div>
       <div className={`preference-delta preference-delta-${delta.outcome}`}>
-        <span>8-probe mean delta · +{evidence.event_counts.model_b_appended_train_decisive} judgments</span>
-        <strong title={String(delta.mean_delta)}>
-          {delta.mean_delta >= 0 ? "+" : ""}{delta.mean_delta.toFixed(6)}
-        </strong>
-        <small>{delta.adaptation_direction_observed ? "directional change observed" : "no improvement observed"}</small>
+        <span>Measured directional response · +{evidence.event_counts.model_b_appended_train_decisive} judgments</span>
+        <strong title={String(delta.mean_delta)}>{delta.adaptation_direction_observed ? "Signal moved" : "No movement"}</strong>
+        <small>
+          {delta.adaptation_direction_observed
+            ? "The model moved toward the counter-style side—from almost never to roughly neutral. This is not a quality improvement claim."
+            : "The model did not move toward the counter-style side; no improvement is claimed."}
+        </small>
       </div>
-      <div className="preference-probes" aria-label="Frozen preference probes">
+      {concrete ? (
+        <section className="preference-concrete-pair" aria-label="Concrete frozen preference pair">
+          <header>
+            <div>
+              <span>One untouched disagreement pair</span>
+              <h3>Here is what “A versus B” actually means.</h3>
+            </div>
+            <p>
+              Counter-style probability {percentage(concrete.probability_before)} → {percentage(concrete.probability_after)}
+            </p>
+          </header>
+          <div className="preference-pair-images">
+            {[concrete.left, concrete.right].map((asset) => {
+              const pickedA = asset.asset_id === concrete.policy_a_preferred.asset_id;
+              const pickedB = asset.asset_id === concrete.policy_b_preferred.asset_id;
+              return (
+                <article key={asset.asset_id}>
+                  <figure>
+                    <SafeImage
+                      source={preferenceAssetSource(model, asset.label)}
+                      alt={displayAssetLabel(asset.label)}
+                      fallback="The exact pair image is unavailable for this report fixture."
+                      loading="lazy"
+                    />
+                  </figure>
+                  <strong>{displayAssetLabel(asset.label)}</strong>
+                  <small>{preferenceFitTierLabel(model, asset.label)}</small>
+                  <div>
+                    {pickedA ? <mark>{humanizeToken(evidence.policies.model_a.label)} picked this</mark> : null}
+                    {pickedB ? <mark>{humanizeToken(evidence.policies.model_b.label)} picked this</mark> : null}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+          <p className="preference-pair-footnote">
+            The two policies deliberately disagree. Snapshot B does not “prefer better art”; it becomes less certain that the cohesive-style side should always win.
+          </p>
+        </section>
+      ) : null}
+      <details className="preference-probes" aria-label="Frozen preference probes">
+        <summary>All 8 untouched probe pairs <small>probability for counter-style side</small></summary>
         <div className="preference-probe-heading">
-          <span>Frozen-probe probability movers · all 8</span>
-          <span>Model A → Model B</span>
+          <span>Counter-style selection</span>
+          <span>Snapshot A → B</span>
           <span>Δ</span>
         </div>
         <ol>
           {probes.map((probe, index) => (
             <li key={probe.pair_id} data-testid="preference-probe-row">
               <span className="preference-probe-rank">{String(index + 1).padStart(2, "0")}</span>
-              <strong title={probe.policy_b_preferred.asset_id}>{probe.policy_b_preferred.label}</strong>
+              <strong title={probe.policy_b_preferred.asset_id}>{displayAssetLabel(probe.policy_b_preferred.label)}</strong>
               <span title={`${probe.probability_before} → ${probe.probability_after}`}>
-                {String(probe.probability_before)} → {String(probe.probability_after)}
+                {percentage(probe.probability_before)} → {percentage(probe.probability_after)}
               </span>
-              <b>{probe.delta >= 0 ? "+" : ""}{String(probe.delta)}</b>
+              <b>{probe.delta >= 0 ? "+" : ""}{percentage(probe.delta)}</b>
             </li>
           ))}
         </ol>
-      </div>
+      </details>
       <p className="preference-verification-line" title={evidence.support_refusal.message}>
         Verified · FANN A+B · A probe predictions value-exact after B · distinct snapshots · restart predictions exact · support refusal captured (0 &lt; 64 groups)
       </p>
@@ -1100,15 +1461,15 @@ function ScoreOverview({ model, activeId }: { readonly model: ReportModel; reado
     <section className="score-overview" aria-labelledby="overview-heading">
       <div className="section-heading">
         <div>
-          <p className="eyebrow">Ranked compatibility</p>
+          <p className="eyebrow">Conformal fit tiers</p>
           <h2 id="overview-heading">Intervals before point estimates.</h2>
         </div>
-        <p>Fixed 0–1 conformal scale. Rank is supplied by the engine.</p>
+        <p>Fixed 0–1 conformal scale. Shared p-values remain one tie tier; no reranker breaks them apart.</p>
       </div>
       <div className="overview-grid">
         {assets.map((asset) => (
           <article key={asset.asset_id} className={`overview-row ${activeId === asset.asset_id ? "overview-active" : ""}`}>
-            <div><span>#{asset.rank}</span><strong>{asset.asset_id}</strong></div>
+            <div><span>{conformalFitTierLabel(asset, model).split(" · ")[0]}</span><strong>{asset.asset_id}</strong></div>
             <IntervalMark score={asset.score} interval={asset.interval} compact />
           </article>
         ))}
@@ -1179,21 +1540,27 @@ function AssetCollection({ stateModel, activeId, filter, dispatch }: {
     return <section className="empty-report"><p className="eyebrow">No candidates</p><h2>This report contains board evidence and provenance, but no assets.</h2></section>;
   }
   return (
-    <section className="assets-section" aria-labelledby="assets-heading">
-      <div className="section-heading assets-title">
-        <div><p className="eyebrow">Selected candidate evidence</p><h2 id="assets-heading">One record, fully expanded.</h2></div>
-        <FilterBar filter={filter} dispatch={dispatch} scored={scored.length} abstained={abstained.length} />
-      </div>
-      {selected ? (
-        <div className="asset-group selected-asset-group">
-          <h3 className="group-title">
-            {selected.state === "scored" ? `Rank ${selected.rank}` : "Abstained"}
-            <span>{selected.state === "scored" ? "engine-provided order" : "unranked by design"}</span>
-          </h3>
-          <AssetCard asset={selected} model={stateModel} active dispatch={dispatch} />
+    <details className="asset-record-audit">
+      <summary>
+        <span>Expanded candidate evidence</span>
+        <small>{selected ? selected.asset_id : "No candidate matches the active filter"}</small>
+      </summary>
+      <section className="assets-section" aria-labelledby="assets-heading">
+        <div className="section-heading assets-title">
+          <div><p className="eyebrow">Selected candidate evidence</p><h2 id="assets-heading">One complete record, on request.</h2></div>
+          <FilterBar filter={filter} dispatch={dispatch} scored={scored.length} abstained={abstained.length} />
         </div>
-      ) : <p className="empty-inline">No candidates match this filter.</p>}
-    </section>
+        {selected ? (
+          <div className="asset-group selected-asset-group">
+            <h3 className="group-title">
+              {selected.state === "scored" ? conformalFitTierLabel(selected, stateModel).split(" · ")[0] : "Abstained"}
+              <span>{selected.state === "scored" ? conformalFitTierLabel(selected, stateModel) : "unranked by design"}</span>
+            </h3>
+            <AssetCard asset={selected} model={stateModel} active dispatch={dispatch} />
+          </div>
+        ) : <p className="empty-inline">No candidates match this filter.</p>}
+      </section>
+    </details>
   );
 }
 
@@ -1325,6 +1692,7 @@ function ReportView({
           </dl>
         </div>
       </header>
+      <MechanismGuide />
       <StoryStrip model={model} />
       <GovernedReferenceBoard model={model} />
       <CandidateHeroGrid model={model} activeId={activeId} dispatch={dispatch} />
@@ -1332,7 +1700,7 @@ function ReportView({
       <AssetCollection stateModel={model} activeId={activeId} filter={filter} dispatch={dispatch} />
       <PixelRagLab model={model} />
       <FireflyMeasuredLoop />
-      <PreferenceReplayPanel evidence={measuredPreferenceReplayEvidence} />
+      <PreferenceReplayPanel evidence={measuredPreferenceReplayEvidence} model={model} />
       <details className="report-measurement-audit">
         <summary>Compatibility audit &amp; comparisons</summary>
         <div>
@@ -1391,4 +1759,4 @@ export function ViewerApp(): ReactNode {
   return <ReportView model={state.model} activeId={activeId} filter={state.outcomeFilter} dispatch={dispatch} onFile={onFile} />;
 }
 
-export const __test = { FilterBar, ReportView };
+export const __test = { FilterBar, ReportView, groupDeterministicVariants, preferenceFitTierLabel };

@@ -210,6 +210,7 @@ export type SafeThumbnailSource = string & { readonly [safeThumbnailSource]: tru
 
 export interface ReportModel {
   readonly report: ReportProjection;
+  readonly documentSha256: string;
   readonly origin: ReportOrigin;
   readonly diagnostics: readonly ReportIssue[];
   readonly referencesById: ReadonlyMap<string, ReferenceEntry>;

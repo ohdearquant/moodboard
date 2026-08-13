@@ -18,13 +18,19 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from moodboard.preference import PreferenceFeatureArtifact, read_preference_feature_artifact
+from moodboard.preference import (
+    FEATURE_NAMES,
+    FEATURE_SCHEMA_ID,
+    PreferenceFeatureArtifact,
+    read_preference_feature_artifact,
+)
 
 BRIDGE_FORMAT = "moodboard.viewer-preference-replay-bridge.v1"
 GENERATOR_REVISION = "moodboard.preference-replay-viewer-bridge.v1"
 REPLAY_SCHEMA = "moodboard.preference-demo-replay.v1"
 _MAX_BYTES = 16 * 1024 * 1024
 _HEX = frozenset("0123456789abcdef")
+_PAIR_TRANSFORM = "left_minus_right"
 _BRIDGE_KEYS = frozenset({"evidence", "format_version", "generator_revision", "input", "state"})
 _INPUT_KEYS = frozenset({"features", "replay"})
 _REPLAY_INPUT_KEYS = frozenset({"byte_size", "replay_fingerprint", "schema_version", "sha256"})
@@ -54,6 +60,7 @@ _EVIDENCE_KEYS = frozenset(
         "model_a",
         "model_b",
         "non_claims",
+        "policies",
         "probes",
         "replay_fingerprint",
         "support_refusal",
@@ -65,14 +72,28 @@ _PROBE_KEYS = frozenset(
         "delta",
         "left",
         "pair_id",
+        "policy_a_preferred",
         "policy_b_preferred",
         "probability_after",
         "probability_before",
         "right",
     }
 )
-_PROBE_ASSET_KEYS = frozenset({"asset_id", "content_ref"})
-_PREFERRED_ASSET_KEYS = frozenset({"asset_id", "content_ref", "label"})
+_PROBE_ASSET_KEYS = frozenset({"asset_id", "content_ref", "label", "source_rank"})
+_POLICIES_KEYS = frozenset({"model_a", "model_b", "pair_transform"})
+_POLICY_KEYS = frozenset({"feature_names", "label", "revision", "weights"})
+_SOURCE_POLICIES_KEYS = frozenset({"calibration_ties", "model_a", "model_b"})
+_SOURCE_POLICY_KEYS = frozenset(
+    {
+        "evidence_class",
+        "feature_names",
+        "feature_schema_id",
+        "label",
+        "policy_id",
+        "revision",
+        "weights",
+    }
+)
 _SOURCE_PROBE_KEYS = frozenset(
     {
         "left",
@@ -358,6 +379,124 @@ def _finite(value: object, label: str) -> float:
     return measured
 
 
+def _source_policy_projection(value: object, label: str) -> dict[str, Any]:
+    policy = _mapping(value, label)
+    _closed(policy, _SOURCE_POLICY_KEYS, label)
+    if policy.get("evidence_class") != "policy_simulated":
+        raise PreferenceReplayViewerBridgeError(f"{label} must remain policy_simulated")
+    feature_names = policy.get("feature_names")
+    if not isinstance(feature_names, list) or feature_names != list(FEATURE_NAMES):
+        raise PreferenceReplayViewerBridgeError(
+            f"{label}.feature_names must bind the governed feature order"
+        )
+    if _digest(policy.get("feature_schema_id"), f"{label}.feature_schema_id") != FEATURE_SCHEMA_ID:
+        raise PreferenceReplayViewerBridgeError(f"{label}.feature_schema_id drifted")
+    policy_label = _nonempty_string(policy.get("label"), f"{label}.label")
+    revision = _nonempty_string(policy.get("revision"), f"{label}.revision")
+    weights = policy.get("weights")
+    if not isinstance(weights, list) or len(weights) != len(FEATURE_NAMES):
+        raise PreferenceReplayViewerBridgeError(
+            f"{label}.weights must bind the governed feature order"
+        )
+    measured_weights = [
+        _finite(weight, f"{label}.weights[{index}]") for index, weight in enumerate(weights)
+    ]
+    if not any(weight != 0.0 for weight in measured_weights):
+        raise PreferenceReplayViewerBridgeError(f"{label}.weights cannot all be zero")
+
+    policy_core = {
+        "evidence_class": "policy_simulated",
+        "feature_names": feature_names,
+        "feature_schema_id": FEATURE_SCHEMA_ID,
+        "label": policy_label,
+        "revision": revision,
+        "weights": weights,
+    }
+    expected_policy_id = hashlib.sha256(
+        b"moodboard-feature-policy-v1\0"
+        + json.dumps(
+            policy_core,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("ascii")
+    ).hexdigest()
+    if _digest(policy.get("policy_id"), f"{label}.policy_id") != expected_policy_id:
+        raise PreferenceReplayViewerBridgeError(f"{label}.policy_id does not bind its policy")
+    return {
+        "feature_names": list(feature_names),
+        "label": policy_label,
+        "revision": revision,
+        "weights": list(weights),
+    }
+
+
+def _project_policies(value: object) -> dict[str, Any]:
+    policies = _mapping(value, "preference replay policies")
+    _closed(policies, _SOURCE_POLICIES_KEYS, "preference replay policies")
+    _mapping(policies["calibration_ties"], "preference replay policies.calibration_ties")
+    model_a = _source_policy_projection(policies["model_a"], "preference replay policies.model_a")
+    model_b = _source_policy_projection(policies["model_b"], "preference replay policies.model_b")
+    if model_a["label"] == model_b["label"] or model_a["revision"] == model_b["revision"]:
+        raise PreferenceReplayViewerBridgeError(
+            "preference replay policies must have distinct labels and revisions"
+        )
+    if any(
+        not math.isclose(float(left), -float(right), rel_tol=0.0, abs_tol=1.0e-12)
+        for left, right in zip(model_a["weights"], model_b["weights"], strict=True)
+    ):
+        raise PreferenceReplayViewerBridgeError(
+            "preference replay model B weights must invert model A"
+        )
+    return {
+        "model_a": model_a,
+        "model_b": model_b,
+        "pair_transform": _PAIR_TRANSFORM,
+    }
+
+
+def _validate_projected_policies(value: object) -> None:
+    policies = _mapping(value, "evidence.policies")
+    _closed(policies, _POLICIES_KEYS, "evidence.policies")
+    if policies["pair_transform"] != _PAIR_TRANSFORM:
+        raise PreferenceReplayViewerBridgeError("evidence.policies.pair_transform drifted")
+    projected: list[tuple[object, ...]] = []
+    for name in ("model_a", "model_b"):
+        label = f"evidence.policies.{name}"
+        policy = _mapping(policies[name], label)
+        _closed(policy, _POLICY_KEYS, label)
+        feature_names = policy["feature_names"]
+        if not isinstance(feature_names, list) or feature_names != list(FEATURE_NAMES):
+            raise PreferenceReplayViewerBridgeError(
+                f"{label}.feature_names must bind the governed feature order"
+            )
+        policy_label = _nonempty_string(policy["label"], f"{label}.label")
+        revision = _nonempty_string(policy["revision"], f"{label}.revision")
+        weights = policy["weights"]
+        if not isinstance(weights, list) or len(weights) != len(FEATURE_NAMES):
+            raise PreferenceReplayViewerBridgeError(
+                f"{label}.weights must bind the governed feature order"
+            )
+        measured = tuple(
+            _finite(weight, f"{label}.weights[{index}]") for index, weight in enumerate(weights)
+        )
+        if not any(weight != 0.0 for weight in measured):
+            raise PreferenceReplayViewerBridgeError(f"{label}.weights cannot all be zero")
+        projected.append((tuple(feature_names), policy_label, revision, measured))
+    if projected[0][1] == projected[1][1] or projected[0][2] == projected[1][2]:
+        raise PreferenceReplayViewerBridgeError(
+            "evidence policies must have distinct labels and revisions"
+        )
+    if any(
+        not math.isclose(left, -right, rel_tol=0.0, abs_tol=1.0e-12)
+        for left, right in zip(projected[0][3], projected[1][3], strict=True)
+    ):
+        raise PreferenceReplayViewerBridgeError(
+            "evidence model B policy weights must invert model A"
+        )
+
+
 def _validate_source_prediction(
     value: object,
     *,
@@ -482,6 +621,15 @@ def _bind_feature_sidecar(
                 f"{label} does not have an exact feature sidecar identity"
             )
 
+    def project_candidate(asset_id: str) -> dict[str, Any]:
+        candidate = sidecar_candidates[asset_id]
+        return {
+            "asset_id": candidate.asset_id,
+            "content_ref": candidate.content_ref,
+            "label": candidate.label,
+            "source_rank": candidate.source_rank,
+        }
+
     events = document["events"]
     for event_index, event_value in enumerate(events):
         event = _mapping(event_value, f"preference replay event {event_index}")
@@ -523,18 +671,27 @@ def _bind_feature_sidecar(
             raise PreferenceReplayViewerBridgeError(
                 f"frozen probe {index} pair_id does not bind its exact content pair"
             )
-        preferred_asset_id = _uuid(
+        side_asset_ids = {sides["left"]["asset_id"], sides["right"]["asset_id"]}
+        policy_a_preferred_asset_id = _uuid(
+            probe.get("policy_a_preferred_asset_id"),
+            f"frozen probe {index}.policy_a_preferred_asset_id",
+        )
+        policy_b_preferred_asset_id = _uuid(
             probe.get("policy_b_preferred_asset_id"),
             f"frozen probe {index}.policy_b_preferred_asset_id",
         )
-        if preferred_asset_id not in {
-            sides["left"]["asset_id"],
-            sides["right"]["asset_id"],
-        }:
+        if policy_a_preferred_asset_id not in side_asset_ids:
+            raise PreferenceReplayViewerBridgeError(
+                f"frozen probe {index} policy A preferred candidate is not present"
+            )
+        if policy_b_preferred_asset_id not in side_asset_ids:
             raise PreferenceReplayViewerBridgeError(
                 f"frozen probe {index} policy B preferred candidate is not present"
             )
-        preferred = sidecar_candidates[preferred_asset_id]
+        if policy_a_preferred_asset_id == policy_b_preferred_asset_id:
+            raise PreferenceReplayViewerBridgeError(
+                f"frozen probe {index} is not a policy disagreement"
+            )
         before = _probability(
             probe["probability_for_policy_b_preferred_before"],
             f"frozen probe {index}.probability_before",
@@ -546,22 +703,13 @@ def _bind_feature_sidecar(
         projected.append(
             {
                 "delta": after - before,
-                "left": {
-                    "asset_id": sides["left"]["asset_id"],
-                    "content_ref": sides["left"]["content_ref"],
-                },
+                "left": project_candidate(str(sides["left"]["asset_id"])),
                 "pair_id": probe["pair_id"],
-                "policy_b_preferred": {
-                    "asset_id": preferred.asset_id,
-                    "content_ref": preferred.content_ref,
-                    "label": preferred.label,
-                },
+                "policy_a_preferred": project_candidate(policy_a_preferred_asset_id),
+                "policy_b_preferred": project_candidate(policy_b_preferred_asset_id),
                 "probability_after": after,
                 "probability_before": before,
-                "right": {
-                    "asset_id": sides["right"]["asset_id"],
-                    "content_ref": sides["right"]["content_ref"],
-                },
+                "right": project_candidate(str(sides["right"]["asset_id"])),
             }
         )
 
@@ -626,6 +774,7 @@ def _validate_replay(document: Mapping[str, Any]) -> None:
         or not model_key.removeprefix(f"moodboard_{descriptor}_").isdigit()
     ):
         raise PreferenceReplayViewerBridgeError("artifact.model_key is not descriptor-bound")
+    _project_policies(document.get("policies"))
 
     probes = document.get("frozen_conflict_probes")
     if not isinstance(probes, list) or len(probes) != 8:
@@ -643,13 +792,25 @@ def _validate_replay(document: Mapping[str, Any]) -> None:
         pair_ids.add(pair_id)
         left = _mapping(probe.get("left"), f"frozen probe {index}.left")
         right = _mapping(probe.get("right"), f"frozen probe {index}.right")
+        policy_a_preferred_asset_id = _uuid(
+            probe.get("policy_a_preferred_asset_id"),
+            f"frozen probe {index}.policy_a_preferred_asset_id",
+        )
         preferred_asset_id = _uuid(
             probe.get("policy_b_preferred_asset_id"),
             f"frozen probe {index}.policy_b_preferred_asset_id",
         )
+        if policy_a_preferred_asset_id not in {left.get("asset_id"), right.get("asset_id")}:
+            raise PreferenceReplayViewerBridgeError(
+                f"frozen probe {index} policy A preferred candidate is not present"
+            )
         if preferred_asset_id not in {left.get("asset_id"), right.get("asset_id")}:
             raise PreferenceReplayViewerBridgeError(
                 f"frozen probe {index} preferred candidate is not present"
+            )
+        if policy_a_preferred_asset_id == preferred_asset_id:
+            raise PreferenceReplayViewerBridgeError(
+                f"frozen probe {index} is not a policy disagreement"
             )
         before = _probability(
             probe.get("probability_for_policy_b_preferred_before"),
@@ -867,6 +1028,7 @@ def _project(document: Mapping[str, Any], feature_binding: Mapping[str, Any]) ->
         "model_a": _model_projection(model_a),
         "model_b": _model_projection(model_b),
         "non_claims": list(document["non_claims"]),
+        "policies": _project_policies(document["policies"]),
         "probes": list(feature_binding["probes"]),
         "replay_fingerprint": document["replay_fingerprint"],
         "support_refusal": dict(document["support_refusal"]),
@@ -965,6 +1127,8 @@ def validate_viewer_preference_replay_bridge(value: Mapping[str, Any]) -> None:
         "schema_version",
     }:
         _digest(feature_identity[field], f"input.features.{field}")
+    if feature_identity["feature_schema_id"] != FEATURE_SCHEMA_ID:
+        raise PreferenceReplayViewerBridgeError("input.features.feature_schema_id drifted")
     _nonempty_string(feature_identity["producer_revision"], "input.features.producer_revision")
     if not str(feature_identity["model_key"]).startswith(
         f"moodboard_{feature_identity['descriptor_fingerprint']}_"
@@ -974,6 +1138,7 @@ def validate_viewer_preference_replay_bridge(value: Mapping[str, Any]) -> None:
     _closed(evidence, _EVIDENCE_KEYS, "bridge evidence")
     if evidence["evidence_class"] != "policy_simulated":
         raise PreferenceReplayViewerBridgeError("bridge evidence must remain policy_simulated")
+    _validate_projected_policies(evidence["policies"])
     if _digest(evidence["replay_fingerprint"], "evidence.replay_fingerprint") != replay_fingerprint:
         raise PreferenceReplayViewerBridgeError("bridge replay fingerprint drifted")
     bindings = _mapping(evidence["bindings"], "evidence.bindings")
@@ -985,6 +1150,8 @@ def validate_viewer_preference_replay_bridge(value: Mapping[str, Any]) -> None:
         "schema_version",
     }:
         _digest(bindings[field], f"bindings.{field}")
+    if bindings["feature_schema_id"] != FEATURE_SCHEMA_ID:
+        raise PreferenceReplayViewerBridgeError("bindings.feature_schema_id drifted")
     _nonempty_string(bindings["feature_producer_revision"], "bindings.feature_producer_revision")
     if bindings["schema_version"] != _PREFERENCE_FEATURE_ARTIFACT_SCHEMA:
         raise PreferenceReplayViewerBridgeError("bindings.schema_version drifted")
@@ -1082,9 +1249,27 @@ def validate_viewer_preference_replay_bridge(value: Mapping[str, Any]) -> None:
     if not isinstance(probes, list) or len(probes) != 8:
         raise PreferenceReplayViewerBridgeError("bridge evidence must project exactly 8 probes")
     pair_ids: set[str] = set()
-    preferred_labels: dict[str, tuple[str, str]] = {}
+    candidate_identities: dict[str, tuple[str, str, int]] = {}
     probe_before: list[float] = []
     probe_after: list[float] = []
+
+    def validate_candidate(value: object, label: str) -> Mapping[str, Any]:
+        candidate = _mapping(value, label)
+        _closed(candidate, _PROBE_ASSET_KEYS, label)
+        asset_id = _uuid(candidate["asset_id"], f"{label}.asset_id")
+        content_ref = _digest(candidate["content_ref"], f"{label}.content_ref")
+        display_label = _nonempty_string(candidate["label"], f"{label}.label")
+        source_rank = _integer(candidate["source_rank"], f"{label}.source_rank")
+        if source_rank < 1:
+            raise PreferenceReplayViewerBridgeError(f"{label}.source_rank must be positive")
+        identity = (content_ref, display_label, source_rank)
+        prior = candidate_identities.setdefault(asset_id, identity)
+        if prior != identity:
+            raise PreferenceReplayViewerBridgeError(
+                "bridge probe sidecar candidate identity mapping is inconsistent"
+            )
+        return candidate
+
     for index, probe_value in enumerate(probes):
         probe = _mapping(probe_value, f"evidence.probes[{index}]")
         _closed(probe, _PROBE_KEYS, f"evidence.probes[{index}]")
@@ -1094,45 +1279,23 @@ def validate_viewer_preference_replay_bridge(value: Mapping[str, Any]) -> None:
         pair_ids.add(pair_id)
         sides: dict[str, Mapping[str, Any]] = {}
         for side in ("left", "right"):
-            candidate = _mapping(probe[side], f"evidence.probes[{index}].{side}")
-            _closed(candidate, _PROBE_ASSET_KEYS, f"evidence.probes[{index}].{side}")
-            _uuid(candidate["asset_id"], f"evidence.probes[{index}].{side}.asset_id")
-            _digest(candidate["content_ref"], f"evidence.probes[{index}].{side}.content_ref")
-            sides[side] = candidate
+            sides[side] = validate_candidate(probe[side], f"evidence.probes[{index}].{side}")
         if sides["left"]["asset_id"] == sides["right"]["asset_id"]:
             raise PreferenceReplayViewerBridgeError("bridge probe sides must be distinct")
-        preferred = _mapping(
-            probe["policy_b_preferred"], f"evidence.probes[{index}].policy_b_preferred"
-        )
-        _closed(
-            preferred,
-            _PREFERRED_ASSET_KEYS,
-            f"evidence.probes[{index}].policy_b_preferred",
-        )
-        _uuid(
-            preferred["asset_id"],
-            f"evidence.probes[{index}].policy_b_preferred.asset_id",
-        )
-        _digest(
-            preferred["content_ref"],
-            f"evidence.probes[{index}].policy_b_preferred.content_ref",
-        )
-        _nonempty_string(preferred["label"], f"evidence.probes[{index}].policy_b_preferred.label")
-        preferred_identity = (str(preferred["content_ref"]), str(preferred["label"]))
-        prior_preferred = preferred_labels.setdefault(
-            str(preferred["asset_id"]), preferred_identity
-        )
-        if prior_preferred != preferred_identity:
-            raise PreferenceReplayViewerBridgeError(
-                "bridge probe sidecar identity/label mapping is inconsistent"
-            )
-        if not any(
-            preferred["asset_id"] == candidate["asset_id"]
-            and preferred["content_ref"] == candidate["content_ref"]
-            for candidate in sides.values()
+        preferred: dict[str, Mapping[str, Any]] = {}
+        for policy in ("policy_a_preferred", "policy_b_preferred"):
+            candidate = validate_candidate(probe[policy], f"evidence.probes[{index}].{policy}")
+            if not any(dict(candidate) == dict(side) for side in sides.values()):
+                raise PreferenceReplayViewerBridgeError(
+                    f"bridge probe {policy} identity must exactly match one side"
+                )
+            preferred[policy] = candidate
+        if (
+            preferred["policy_a_preferred"]["asset_id"]
+            == preferred["policy_b_preferred"]["asset_id"]
         ):
             raise PreferenceReplayViewerBridgeError(
-                "bridge probe policy B preferred identity must be present on one side"
+                "bridge probe must retain a policy disagreement"
             )
         before_value = _probability(
             probe["probability_before"], f"evidence.probes[{index}].probability_before"

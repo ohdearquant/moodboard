@@ -13,18 +13,29 @@ function projectedBridge(adaptationDirectionObserved = true): any {
     left: {
       asset_id: `00000000-0000-4000-8000-${String(index * 2 + 1).padStart(12, "0")}`,
       content_ref: (index * 2 + 1).toString(16).padStart(64, "0"),
+      label: `candidate-left-${index + 1}.png`,
+      source_rank: index + 1,
     },
     pair_id: (index + 1).toString(16).padStart(64, "0"),
+    policy_a_preferred: {
+      asset_id: `00000000-0000-4000-8000-${String(index * 2 + 1).padStart(12, "0")}`,
+      content_ref: (index * 2 + 1).toString(16).padStart(64, "0"),
+      label: `candidate-left-${index + 1}.png`,
+      source_rank: index + 1,
+    },
     policy_b_preferred: {
       asset_id: `00000000-0000-4000-8000-${String(index * 2 + 2).padStart(12, "0")}`,
       content_ref: (index * 2 + 2).toString(16).padStart(64, "0"),
       label: `candidate-${index + 1}.png`,
+      source_rank: index + 2,
     },
     probability_after: after,
     probability_before: before,
     right: {
       asset_id: `00000000-0000-4000-8000-${String(index * 2 + 2).padStart(12, "0")}`,
       content_ref: (index * 2 + 2).toString(16).padStart(64, "0"),
+      label: `candidate-${index + 1}.png`,
+      source_rank: index + 2,
     },
   }));
   return {
@@ -76,6 +87,21 @@ function projectedBridge(adaptationDirectionObserved = true): any {
         network_content_ref: "c".repeat(64),
         preference_model_id: "00000000-0000-4000-8000-00000000000b",
         snapshot_event_count: 208,
+      },
+      policies: {
+        model_a: {
+          feature_names: Array.from({ length: 10 }, (_, index) => `feature-${index + 1}`),
+          label: "cohesive_style_policy",
+          revision: "policy-a.v1",
+          weights: Array.from({ length: 10 }, () => 0.1),
+        },
+        model_b: {
+          feature_names: Array.from({ length: 10 }, (_, index) => `feature-${index + 1}`),
+          label: "counter_style_exploration_policy",
+          revision: "policy-b.v1",
+          weights: Array.from({ length: 10 }, () => -0.1),
+        },
+        pair_transform: "left_minus_right",
       },
       non_claims: [
         "No human preference evidence: policy-simulated only.",
@@ -170,6 +196,10 @@ describe("preference replay viewer bridge", () => {
     expect(evidence.bindings.source_report_sha256).toBe("6".repeat(64));
     expect(evidence.probes).toHaveLength(8);
     expect(evidence.probes[0]!.policy_b_preferred.label).toBe("candidate-1.png");
+    expect(evidence.probes[0]!.left.label).toBe("candidate-left-1.png");
+    expect(evidence.probes[0]!.policy_a_preferred.label).toBe("candidate-left-1.png");
+    expect(evidence.policies.model_a.label).toBe("cohesive_style_policy");
+    expect(evidence.policies.model_b.label).toBe("counter_style_exploration_policy");
     expect(evidence.probes[0]!.delta).toBeCloseTo(0.56);
     expect(evidence.non_claims.join(" ")).toMatch(/No human preference evidence/i);
     expect(evidence.non_claims.join(" ")).toMatch(/No online learning/i);
@@ -259,5 +289,23 @@ describe("preference replay viewer bridge", () => {
     const sidecarBinding = projectedBridge();
     sidecarBinding.input.features.scope_sha256 = "9".repeat(64);
     expect(() => decodePreferenceReplayBridge(sidecarBinding)).toThrow(/feature.*identity/i);
+
+    const policyOrder = projectedBridge();
+    policyOrder.evidence.policies.model_b.feature_names[0] = "drifted-feature";
+    expect(() => decodePreferenceReplayBridge(policyOrder)).toThrow(/feature_names.*exact order/i);
+
+    const policyWeights = projectedBridge();
+    policyWeights.evidence.policies.model_b.weights[0] = 0.1;
+    expect(() => decodePreferenceReplayBridge(policyWeights)).toThrow(/inverse.*weights/i);
+
+    const legacyProbe = projectedBridge();
+    delete legacyProbe.evidence.probes[0].policy_a_preferred;
+    expect(() => decodePreferenceReplayBridge(legacyProbe)).toThrow(/policy_a_preferred/i);
+
+    const preferredAgreement = projectedBridge();
+    preferredAgreement.evidence.probes[0].policy_a_preferred = {
+      ...preferredAgreement.evidence.probes[0].policy_b_preferred,
+    };
+    expect(() => decodePreferenceReplayBridge(preferredAgreement)).toThrow(/must be distinct/i);
   });
 });

@@ -553,6 +553,11 @@ async function sha256Hex(value: string): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+async function sha256Bytes(value: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(value).buffer);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 interface ProbeTarget {
   readonly key: string;
   readonly path: string;
@@ -623,6 +628,7 @@ async function probeThumbnails(
 
 function makeModel(
   report: ReportProjection,
+  documentSha256: string,
   origin: ReportOrigin,
   diagnostics: readonly ReportIssue[],
   referenceSources: ReadonlyMap<string, SafeThumbnailSource>,
@@ -630,6 +636,7 @@ function makeModel(
 ): ReportModel {
   return {
     report,
+    documentSha256,
     origin,
     diagnostics,
     referencesById: new Map(report.references.map((reference) => [reference.reference_id, reference])),
@@ -675,7 +682,16 @@ export function createReportDecoder(probe: ThumbnailProbe = new BrowserThumbnail
       ...structural.diagnostics,
       ...integrity.filter((item) => item.severity === "diagnostic"),
     ]);
-    return { ok: true, model: makeModel(report, origin, diagnostics, probed.referenceSources, probed.candidateSources) };
+    let documentSha256: string;
+    try {
+      documentSha256 = await sha256Bytes(bytes);
+    } catch {
+      return {
+        ok: false,
+        issues: [issue("fatal", "integrity", "/", "The report byte identity could not be verified.")],
+      };
+    }
+    return { ok: true, model: makeModel(report, documentSha256, origin, diagnostics, probed.referenceSources, probed.candidateSources) };
   };
 
   return { validateStructure, decode };

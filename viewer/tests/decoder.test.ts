@@ -4,17 +4,35 @@ import { acceptingProbe, encodeReport, fixtureBytes, fixtureObject, toLegacy } f
 
 const origin = { kind: "embedded", label: "test fixture" } as const;
 
+async function sha256(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 describe("versioned report decoder", () => {
   it("accepts the real-engine v1.1 showcase with strict triptychs", async () => {
     const result = await createReportDecoder(acceptingProbe).decode(fixtureBytes(), origin);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.model.report.schema_version).toBe("1.1");
+    expect(result.model.documentSha256).toBe(await sha256(fixtureBytes()));
     expect(result.model.report.assets).toHaveLength(6);
     expect(result.model.report.assets.every((asset) => asset.exemplars.length === 3)).toBe(true);
     expect(result.model.referenceSources.size).toBeGreaterThanOrEqual(3);
     expect(result.model.candidateSources.size).toBe(6);
     expect(result.model.diagnostics).toEqual([]);
+  });
+
+  it("binds the model to exact source bytes, not merely the decoded projection", async () => {
+    const canonical = fixtureBytes();
+    const alternate = new TextEncoder().encode(`${new TextDecoder().decode(canonical)}\n`);
+    const first = await createReportDecoder(acceptingProbe).decode(canonical, origin);
+    const second = await createReportDecoder(acceptingProbe).decode(alternate, origin);
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+    expect(first.model.report).toEqual(second.model.report);
+    expect(first.model.documentSha256).not.toBe(second.model.documentSha256);
   });
 
   it("refuses an unsupported version before interpreting poisoned content", () => {

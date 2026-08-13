@@ -21,6 +21,7 @@ from moodboard.khive import (
     KhiveTrainedPreferenceModel,
 )
 from moodboard.preference import (
+    FEATURE_NAMES,
     PreferenceCandidate,
     PreferenceFeatureArtifact,
     write_preference_feature_artifact,
@@ -653,6 +654,21 @@ def test_viewer_bridge_projects_closed_measured_replay_summary(tmp_path: Path) -
         "model_b_appended_train_decisive": 96,
         "total": 208,
     }
+    assert evidence["policies"] == {
+        "model_a": {
+            "feature_names": list(FEATURE_NAMES),
+            "label": POLICY_A.label,
+            "revision": POLICY_A.revision,
+            "weights": list(POLICY_A.weights),
+        },
+        "model_b": {
+            "feature_names": list(FEATURE_NAMES),
+            "label": POLICY_B.label,
+            "revision": POLICY_B.revision,
+            "weights": list(POLICY_B.weights),
+        },
+        "pair_transform": "left_minus_right",
+    }
     assert evidence["model_a"]["preference_model_id"] != evidence["model_b"]["preference_model_id"]
     assert evidence["model_a"]["bundle_ref"] == replay.document["model_a"]["content_ref"]
     assert evidence["model_b"]["bundle_ref"] == replay.document["model_b"]["content_ref"]
@@ -674,6 +690,9 @@ def test_viewer_bridge_projects_closed_measured_replay_summary(tmp_path: Path) -
     for projected, source_probe in zip(
         evidence["probes"], replay.document["frozen_conflict_probes"], strict=True
     ):
+        left = expected_candidates[source_probe["left"]["asset_id"]]
+        right = expected_candidates[source_probe["right"]["asset_id"]]
+        policy_a_preferred = expected_candidates[source_probe["policy_a_preferred_asset_id"]]
         preferred = expected_candidates[source_probe["policy_b_preferred_asset_id"]]
         assert projected == {
             "delta": pytest.approx(
@@ -681,14 +700,23 @@ def test_viewer_bridge_projects_closed_measured_replay_summary(tmp_path: Path) -
                 - source_probe["probability_for_policy_b_preferred_before"]
             ),
             "left": {
-                "asset_id": source_probe["left"]["asset_id"],
-                "content_ref": source_probe["left"]["content_ref"],
+                "asset_id": left.asset_id,
+                "content_ref": left.content_ref,
+                "label": left.label,
+                "source_rank": left.source_rank,
             },
             "pair_id": source_probe["pair_id"],
+            "policy_a_preferred": {
+                "asset_id": policy_a_preferred.asset_id,
+                "content_ref": policy_a_preferred.content_ref,
+                "label": policy_a_preferred.label,
+                "source_rank": policy_a_preferred.source_rank,
+            },
             "policy_b_preferred": {
                 "asset_id": preferred.asset_id,
                 "content_ref": preferred.content_ref,
                 "label": preferred.label,
+                "source_rank": preferred.source_rank,
             },
             "probability_after": pytest.approx(
                 source_probe["probability_for_policy_b_preferred_after"]
@@ -697,8 +725,10 @@ def test_viewer_bridge_projects_closed_measured_replay_summary(tmp_path: Path) -
                 source_probe["probability_for_policy_b_preferred_before"]
             ),
             "right": {
-                "asset_id": source_probe["right"]["asset_id"],
-                "content_ref": source_probe["right"]["content_ref"],
+                "asset_id": right.asset_id,
+                "content_ref": right.content_ref,
+                "label": right.label,
+                "source_rank": right.source_rank,
             },
         }
     assert any("No human preference evidence" in claim for claim in evidence["non_claims"])

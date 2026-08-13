@@ -3,6 +3,8 @@ import { vi } from "vitest";
 
 import { __test } from "../src/App";
 import { createReportDecoder } from "../src/decoder";
+import type { Asset, ReferenceEntry } from "../src/model";
+import { measuredPreferenceReplayEvidence } from "../src/preference-replay";
 import { acceptingProbe, encodeReport, fixtureBytes, fixtureObject, toLegacy } from "./helpers";
 
 const origin = { kind: "embedded", label: "showcase fixture" } as const;
@@ -14,9 +16,17 @@ async function modelFor(bytes = fixtureBytes()) {
   return result.model;
 }
 
+function withPreferenceSource(model: Awaited<ReturnType<typeof modelFor>>) {
+  if (!measuredPreferenceReplayEvidence) throw new Error("expected projected preference evidence");
+  return {
+    ...model,
+    documentSha256: measuredPreferenceReplayEvidence.bindings.source_report_sha256,
+  };
+}
+
 describe("editorial report presentation", () => {
   it("renders the exact policy_simulated evidence label", async () => {
-    const model = await modelFor();
+    const model = withPreferenceSource(await modelFor());
     render(
       <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
     );
@@ -36,7 +46,7 @@ describe("editorial report presentation", () => {
   });
 
   it("routes the same source through two honest, intent-specific Pixel RAG views", async () => {
-    const model = await modelFor();
+    const model = withPreferenceSource(await modelFor());
     const { container } = render(
       <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
     );
@@ -93,7 +103,7 @@ describe("editorial report presentation", () => {
     expect(screen.getByText("Diversity / coverage", { exact: true })).toBeTruthy();
     expect(screen.getByText("Uncertainty", { exact: true })).toBeTruthy();
     expect(screen.getByText("No style score was issued.")).toBeTruthy();
-    expect(screen.getAllByText(/conformal p /i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/board-fit p /i).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText(/\d+% on.brand|approval probability:\s*\d|confidence score/i)).toBeNull();
     expect(screen.getByText(/does not carry a Khive BlobStore content_ref/i)).toBeTruthy();
     expect(screen.getByText(/FANN preference probability is not part of this report/i)).toBeTruthy();
@@ -129,7 +139,7 @@ describe("editorial report presentation", () => {
     expect(firstCard?.querySelector(".candidate-frame img")).not.toBeNull();
   });
 
-  it("leads with every governed reference and candidate while mounting one detail card", async () => {
+  it("explains the baseline and ranking without internal engine terminology", async () => {
     const model = await modelFor();
     const dispatch = vi.fn();
     const { container } = render(
@@ -137,11 +147,9 @@ describe("editorial report presentation", () => {
     );
 
     const references = screen.getByRole("region", { name: "Governed reference board" });
-    expect(
-      within(references).getByRole("heading", {
-        name: `Governed reference board · ${model.report.references.length} immutable references`,
-      }),
-    ).toBeTruthy();
+    expect(within(references).getByRole("heading", {
+      name: `Scoring baseline · ${model.report.references.length} original artworks`,
+    })).toBeTruthy();
     const referenceTiles = within(references).getAllByTestId("governed-reference-tile");
     expect(referenceTiles).toHaveLength(model.report.references.length);
     expect(referenceTiles.map((tile) => tile.querySelector("strong")?.textContent)).toEqual(
@@ -162,17 +170,156 @@ describe("editorial report presentation", () => {
     fireEvent.click(tiles[3]!);
     expect(dispatch).toHaveBeenCalledWith({ type: "inspect", assetId: tiles[3]!.getAttribute("data-asset-id") });
 
-    expect(
-      screen.getByText(
-        `Verified · ${model.report.references.length} governed references · ${model.report.assets.length} candidate outcomes · 5 scored · 1 abstained · engine rank preserved · no merged preference score`,
-      ),
-    ).toBeTruthy();
+    expect(screen.getAllByText(/k-nearest cosine nonconformity.*higher p.*stronger compatibility.*no reranker/i)).toHaveLength(2);
+    expect(container.textContent).not.toContain("engine-provided order");
     const audit = screen.getByText("Compatibility audit & comparisons").closest("details");
     expect(audit?.hasAttribute("open")).toBe(false);
   });
 
-  it("renders the real policy-simulated replay as a separate eight-probe mechanism", async () => {
+  it("opens with three independent mechanisms and never implies a hidden blended score", async () => {
     const model = await modelFor();
+    render(
+      <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
+    );
+
+    const guide = screen.getByRole("region", { name: "Three independent evidence mechanisms" });
+    expect(within(guide).getByText(/k-nearest cosine nonconformity.*higher p.*no reranker/i)).toBeTruthy();
+    expect(within(guide).getByText(/outputs do not change board fit/i)).toBeTruthy();
+    expect(within(guide).getByText(/does not rerank the 24 images/i)).toBeTruthy();
+  });
+
+  it("groups original, crop, and mirror by source and marks reference-byte reuse", async () => {
+    const model = await modelFor();
+    const assets = model.report.assets.slice(0, 6).map((asset, index): typeof asset => {
+      const source = index < 3 ? "source-alpha" : "source-beta";
+      const variants = ["original.jpg", "center-crop-90pct.png", "horizontal-mirror.png"];
+      const reference = index === 0
+        ? model.report.references[0]
+        : index === 3 ? model.report.references[1] : undefined;
+      if (reference && asset.image) {
+        return {
+          ...asset,
+          asset_id: `${source}--${variants[index % 3]}`,
+          image: { ...asset.image, content_sha256: reference.content_sha256 },
+        };
+      }
+      return { ...asset, asset_id: `${source}--${variants[index % 3]}` };
+    });
+    const candidateSources = new Map(
+      assets.map((asset, index) => [
+        asset.asset_id,
+        model.candidateSources.get(model.report.assets[index]!.asset_id)!,
+      ]),
+    );
+    const groupedModel: typeof model = {
+      ...model,
+      report: { ...model.report, assets },
+      assetsById: new Map(assets.map((asset) => [asset.asset_id, asset])),
+      candidateSources,
+    };
+    const grouped = __test.groupDeterministicVariants(groupedModel);
+
+    expect(grouped).toHaveLength(2);
+    expect(grouped[0]?.sourceId).toBe("source-alpha");
+    expect(grouped[0]?.original.asset_id).toBe("source-alpha--original.jpg");
+    expect(grouped[0]?.originalReusesReferenceBytes).toBe(true);
+    expect(grouped[0]?.transforms.map((asset) => asset.asset_id)).toEqual([
+      "source-alpha--center-crop-90pct.png",
+      "source-alpha--horizontal-mirror.png",
+    ]);
+
+    render(
+      <__test.ReportView
+        model={groupedModel}
+        activeId={null}
+        filter="all"
+        dispatch={noop}
+        onFile={noop}
+      />,
+    );
+    const stress = screen.getByRole("region", { name: "Deterministic variant stress test" });
+    expect(within(stress).getAllByTestId("variant-source-family")).toHaveLength(2);
+    expect(within(stress).getAllByText("Same bytes as reference")).toHaveLength(2);
+    expect(within(stress).getAllByText("90% center crop")).toHaveLength(2);
+    expect(within(stress).getAllByText("Horizontal mirror")).toHaveLength(2);
+    expect(within(stress).getByText(/equal p-values share a tier.*no reranker/i)).toBeTruthy();
+  });
+
+  it("renders the real 8-by-3 integration corpus as eight source families, not 24 outputs", async () => {
+    const fixture = fixtureObject() as any;
+    const references = fixture.references.slice(0, 8);
+    const template = (fixture.assets as Asset[]).find((asset) => asset.state === "scored");
+    if (!template || !template.image) throw new Error("expected one scored image template");
+    const rankSchedule = [
+      ...Array.from({ length: 9 }, () => ({ rank: 1, score: 1 })),
+      ...Array.from({ length: 8 }, () => ({ rank: 10, score: 8 / 9 })),
+      ...Array.from({ length: 4 }, () => ({ rank: 18, score: 7 / 9 })),
+      { rank: 22, score: 2 / 9 },
+      ...Array.from({ length: 2 }, () => ({ rank: 23, score: 1 / 9 })),
+    ] as const;
+    const assets = (references as ReferenceEntry[]).flatMap((reference, sourceIndex) => {
+      const source = `source-${String(sourceIndex + 1).padStart(2, "0")}`;
+      return ["original.jpg", "center-crop-90pct.png", "horizontal-mirror.png"].map(
+        (variant, variantIndex) => {
+          const scheduled = rankSchedule[sourceIndex * 3 + variantIndex];
+          if (!scheduled) throw new Error("expected a complete 24-candidate rank schedule");
+          return {
+            ...template,
+            asset_id: `${source}--${variant}`,
+            source: `fixture://${source}/${variant}`,
+            image: {
+              ...template.image,
+              content_sha256: variantIndex === 0
+                ? reference.content_sha256
+                : `${sourceIndex + 1}${variantIndex}`.padEnd(64, "0"),
+            },
+            axes: { ...template.axes, style: scheduled.score },
+            rank: scheduled.rank,
+            score: scheduled.score,
+          };
+        },
+      );
+    });
+    const bytes = encodeReport({
+      ...fixture,
+      board: {
+        ...fixture.board,
+        n_references: references.length,
+        n_eff: references.length,
+        categories: [{
+          ...fixture.board.categories[0],
+          n_local: references.length,
+          member_ids: (references as ReferenceEntry[]).map((reference) => reference.reference_id),
+        }],
+      },
+      references,
+      assets,
+      comparisons: { ...fixture.comparisons, ties: [] },
+    });
+    const model = await modelFor(bytes);
+
+    expect(__test.preferenceFitTierLabel(model, "source-06--horizontal-mirror.png")).toMatch(
+      /Fit tier 3 of 5.*board-fit p 0\.777/i,
+    );
+
+    render(
+      <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
+    );
+
+    const stress = screen.getByRole("region", { name: "Deterministic variant stress test" });
+    expect(within(stress).getAllByTestId("variant-source-family")).toHaveLength(8);
+    expect(within(stress).getAllByText("Same bytes as reference")).toHaveLength(8);
+    expect(within(stress).getAllByText("90% center crop")).toHaveLength(8);
+    expect(within(stress).getAllByText("Horizontal mirror")).toHaveLength(8);
+    expect(within(stress).getByText("Full 24-candidate record")).toBeTruthy();
+    expect(within(stress).getAllByText(/Fit tier 1 of 5 · 9-way tie/i).length).toBeGreaterThan(0);
+    const audit = within(stress).getByText("Full 24-candidate record").closest("details");
+    expect(audit?.textContent).toContain("reported competition rank 1");
+    expect(document.body.textContent).not.toContain("24 measured outputs");
+  });
+
+  it("renders the real policy-simulated replay as a separate eight-probe mechanism", async () => {
+    const model = withPreferenceSource(await modelFor());
     const { container } = render(
       <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
     );
@@ -188,20 +335,37 @@ describe("editorial report presentation", () => {
         "Independent preference mechanism replay · policy_simulated · not trained on these Firefly outputs",
       ),
     ).toBeTruthy();
-    expect(within(panel).getByText("0.000248")).toBeTruthy();
-    expect(within(panel).getByText("0.501136")).toBeTruthy();
-    expect(within(panel).getByText("+0.500888")).toBeTruthy();
+    expect(within(panel).getByText("0.025%")).toBeTruthy();
+    expect(within(panel).getByText("50.114%")).toBeTruthy();
+    expect(within(panel).getByText(/moved toward the counter-style side.*roughly neutral/i)).toBeTruthy();
+    expect(within(panel).getByText(/retrain and publish Snapshot B as a separate immutable model.*no online update/i)).toBeTruthy();
     expect(within(panel).getByText(/\+96 judgments/)).toBeTruthy();
+    expect(within(panel).getByText(/24 image records.*10 features each.*208 pair events.*8 untouched probes/i)).toBeTruthy();
+    const pair = within(panel).getByRole("region", { name: "Concrete frozen preference pair" });
+    expect(within(pair).getByText(/cohesive style policy/i)).toBeTruthy();
+    expect(within(pair).getByText(/counter style exploration policy/i)).toBeTruthy();
+    expect(within(pair).getByText(/Claude.*Ford/i)).toBeTruthy();
+    expect(within(pair).getByText(/Van Gogh.*Wheat field/i)).toBeTruthy();
+    expect(within(pair).queryByText(/source fit tier 18/i)).toBeNull();
     expect(within(panel).getAllByTestId("preference-probe-row")).toHaveLength(8);
-    expect(within(panel).getByText("style_vangogh_cypresses--center-crop-90pct.png")).toBeTruthy();
     expect(within(panel).getByText(/FANN A\+B.*A probe predictions value-exact.*restart predictions exact/)).toBeTruthy();
     const audit = within(panel).getByText("Audit & identity").closest("details");
     expect(audit?.hasAttribute("open")).toBe(false);
     expect(container.querySelectorAll(".preference-measured")).toHaveLength(1);
   });
 
-  it("shows the frozen Firefly loop between Pixel RAG and the independent preference replay", async () => {
+  it("refuses to attach the frozen preference replay to a different report", async () => {
     const model = await modelFor();
+    render(
+      <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
+    );
+
+    expect(screen.queryByRole("region", { name: "Governed preference replay" })).toBeNull();
+    expect(screen.getByRole("status").textContent).toMatch(/Preference replay not shown.*source report does not match/i);
+  });
+
+  it("shows the frozen Firefly loop between Pixel RAG and the independent preference replay", async () => {
+    const model = withPreferenceSource(await modelFor());
     const { container } = render(
       <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
     );

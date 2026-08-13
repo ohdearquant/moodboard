@@ -104,13 +104,29 @@ export interface PreferenceReplayModelSnapshot {
 export interface PreferenceReplayProbeAsset {
   readonly asset_id: string;
   readonly content_ref: string;
+  readonly label: string;
+  readonly source_rank: number;
+}
+
+export interface PreferenceReplayPolicy {
+  readonly feature_names: readonly string[];
+  readonly label: string;
+  readonly revision: string;
+  readonly weights: readonly number[];
+}
+
+export interface PreferenceReplayPolicies {
+  readonly model_a: PreferenceReplayPolicy;
+  readonly model_b: PreferenceReplayPolicy;
+  readonly pair_transform: "left_minus_right";
 }
 
 export interface PreferenceReplayProbe {
   readonly delta: number;
   readonly left: PreferenceReplayProbeAsset;
   readonly pair_id: string;
-  readonly policy_b_preferred: PreferenceReplayProbeAsset & { readonly label: string };
+  readonly policy_a_preferred: PreferenceReplayProbeAsset;
+  readonly policy_b_preferred: PreferenceReplayProbeAsset;
   readonly probability_after: number;
   readonly probability_before: number;
   readonly right: PreferenceReplayProbeAsset;
@@ -155,6 +171,7 @@ export interface PreferenceReplayEvidence {
   };
   readonly model_a: PreferenceReplayModelSnapshot;
   readonly model_b: PreferenceReplayModelSnapshot;
+  readonly policies: PreferenceReplayPolicies;
   readonly non_claims: readonly string[];
   readonly probes: readonly PreferenceReplayProbe[];
   readonly replay_fingerprint: string;
@@ -306,11 +323,82 @@ function featureInputAt(value: unknown, path: string): PreferenceFeatureInputIde
 
 function probeAssetAt(value: unknown, path: string): PreferenceReplayProbeAsset {
   const record = objectAt(value, path);
-  closed(record, ["asset_id", "content_ref"], path);
+  closed(record, ["asset_id", "content_ref", "label", "source_rank"], path);
+  const sourceRank = countAt(record.source_rank, `${path}.source_rank`);
+  if (sourceRank < 1) throw new Error(`${path}.source_rank must be positive`);
   return {
     asset_id: uuidAt(record.asset_id, `${path}.asset_id`),
     content_ref: digestAt(record.content_ref, `${path}.content_ref`),
+    label: stringAt(record.label, `${path}.label`),
+    source_rank: sourceRank,
   };
+}
+
+function policyAt(value: unknown, path: string): PreferenceReplayPolicy {
+  const record = objectAt(value, path);
+  closed(record, ["feature_names", "label", "revision", "weights"], path);
+  const featureNames = stringsAt(record.feature_names, `${path}.feature_names`);
+  if (featureNames.length !== 10) {
+    throw new Error(`${path}.feature_names must contain exactly 10 names`);
+  }
+  if (new Set(featureNames).size !== featureNames.length) {
+    throw new Error(`${path}.feature_names must be unique`);
+  }
+  if (!Array.isArray(record.weights) || record.weights.length !== featureNames.length) {
+    throw new Error(`${path}.weights must contain exactly 10 values`);
+  }
+  const weights = record.weights.map((weight, index) =>
+    finiteAt(weight, `${path}.weights[${index}]`)
+  );
+  return {
+    feature_names: featureNames,
+    label: stringAt(record.label, `${path}.label`),
+    revision: stringAt(record.revision, `${path}.revision`),
+    weights,
+  };
+}
+
+function policiesAt(value: unknown, path: string): PreferenceReplayPolicies {
+  const record = objectAt(value, path);
+  closed(record, ["model_a", "model_b", "pair_transform"], path);
+  const modelA = policyAt(record.model_a, `${path}.model_a`);
+  const modelB = policyAt(record.model_b, `${path}.model_b`);
+  const pairTransform = exact(
+    record.pair_transform,
+    ["left_minus_right"],
+    `${path}.pair_transform`,
+  );
+  if (
+    modelA.feature_names.some((name, index) => name !== modelB.feature_names[index])
+  ) {
+    throw new Error(`${path} model feature_names must match in exact order`);
+  }
+  if (
+    modelA.weights.every((weight) => weight === 0)
+    || modelB.weights.every((weight) => weight === 0)
+  ) {
+    throw new Error(`${path} model policy weights must not be all zero`);
+  }
+  if (
+    modelA.weights.some((weight, index) =>
+      Math.abs(weight + (modelB.weights[index] ?? Number.NaN)) > 1e-12
+    )
+  ) {
+    throw new Error(`${path} model B must retain inverse feature weights`);
+  }
+  if (
+    modelA.label === modelB.label || modelA.revision === modelB.revision
+  ) {
+    throw new Error(`${path} model policies must have distinct labels and revisions`);
+  }
+  return { model_a: modelA, model_b: modelB, pair_transform: pairTransform };
+}
+
+function sameProbeAsset(left: PreferenceReplayProbeAsset, right: PreferenceReplayProbeAsset): boolean {
+  return left.asset_id === right.asset_id
+    && left.content_ref === right.content_ref
+    && left.label === right.label
+    && left.source_rank === right.source_rank;
 }
 
 function modelAt(value: unknown, path: string): PreferenceReplayModelSnapshot {
@@ -350,7 +438,21 @@ function probesAt(
     throw new Error(`${path} must contain exactly 8 probes`);
   }
   const pairIds = new Set<string>();
-  const preferredLabels = new Map<string, string>();
+  const identitiesByAssetId = new Map<string, string>();
+  const identitiesByContentRef = new Map<string, string>();
+  const rememberIdentity = (asset: PreferenceReplayProbeAsset): void => {
+    const identity = [asset.asset_id, asset.content_ref, asset.label, asset.source_rank].join("\0");
+    for (const [key, index] of [
+      [asset.asset_id, identitiesByAssetId],
+      [asset.content_ref, identitiesByContentRef],
+    ] as const) {
+      const prior = index.get(key);
+      if (prior !== undefined && prior !== identity) {
+        throw new Error(`${path} sidecar identity/label mapping is inconsistent`);
+      }
+      index.set(key, identity);
+    }
+  };
   const probes = value.map((entry, index): PreferenceReplayProbe => {
     const probePath = `${path}[${index}]`;
     const record = objectAt(entry, probePath);
@@ -360,6 +462,7 @@ function probesAt(
         "delta",
         "left",
         "pair_id",
+        "policy_a_preferred",
         "policy_b_preferred",
         "probability_after",
         "probability_before",
@@ -372,34 +475,31 @@ function probesAt(
     pairIds.add(pairId);
     const left = probeAssetAt(record.left, `${probePath}.left`);
     const right = probeAssetAt(record.right, `${probePath}.right`);
-    if (left.asset_id === right.asset_id) throw new Error(`${probePath} sides must be distinct`);
-    const preferredRecord = objectAt(record.policy_b_preferred, `${probePath}.policy_b_preferred`);
-    closed(
-      preferredRecord,
-      ["asset_id", "content_ref", "label"],
+    if (
+      left.asset_id === right.asset_id
+      || left.content_ref === right.content_ref
+    ) {
+      throw new Error(`${probePath} sides must be distinct`);
+    }
+    rememberIdentity(left);
+    rememberIdentity(right);
+    const policyAPreferred = probeAssetAt(
+      record.policy_a_preferred,
+      `${probePath}.policy_a_preferred`,
+    );
+    const policyBPreferred = probeAssetAt(
+      record.policy_b_preferred,
       `${probePath}.policy_b_preferred`,
     );
-    const preferred = {
-      ...probeAssetAt(
-        { asset_id: preferredRecord.asset_id, content_ref: preferredRecord.content_ref },
-        `${probePath}.policy_b_preferred.identity`,
-      ),
-      label: stringAt(preferredRecord.label, `${probePath}.policy_b_preferred.label`),
-    };
-    if (
-      ![left, right].some(
-        (candidate) => candidate.asset_id === preferred.asset_id
-          && candidate.content_ref === preferred.content_ref,
-      )
-    ) {
+    if (![left, right].some((candidate) => sameProbeAsset(candidate, policyAPreferred))) {
+      throw new Error(`${probePath} policy A preferred identity must be present on one side`);
+    }
+    if (![left, right].some((candidate) => sameProbeAsset(candidate, policyBPreferred))) {
       throw new Error(`${probePath} policy B preferred identity must be present on one side`);
     }
-    const preferredIdentity = `${preferred.content_ref}\0${preferred.label}`;
-    const priorPreferred = preferredLabels.get(preferred.asset_id);
-    if (priorPreferred !== undefined && priorPreferred !== preferredIdentity) {
-      throw new Error(`${path} sidecar identity/label mapping is inconsistent`);
+    if (sameProbeAsset(policyAPreferred, policyBPreferred)) {
+      throw new Error(`${probePath} policy A and B preferred identities must be distinct`);
     }
-    preferredLabels.set(preferred.asset_id, preferredIdentity);
     const probabilityBefore = probabilityAt(
       record.probability_before,
       `${probePath}.probability_before`,
@@ -416,7 +516,8 @@ function probesAt(
       delta,
       left,
       pair_id: pairId,
-      policy_b_preferred: preferred,
+      policy_a_preferred: policyAPreferred,
+      policy_b_preferred: policyBPreferred,
       probability_after: probabilityAfter,
       probability_before: probabilityBefore,
       right,
@@ -444,6 +545,7 @@ function evidenceAt(value: unknown, path: string): Omit<PreferenceReplayEvidence
       "evidence_class",
       "model_a",
       "model_b",
+      "policies",
       "non_claims",
       "probes",
       "replay_fingerprint",
@@ -547,6 +649,7 @@ function evidenceAt(value: unknown, path: string): Omit<PreferenceReplayEvidence
 
   const modelA = modelAt(record.model_a, `${path}.model_a`);
   const modelB = modelAt(record.model_b, `${path}.model_b`);
+  const policies = policiesAt(record.policies, `${path}.policies`);
   if (
     modelA.preference_model_id === modelB.preference_model_id
     || modelA.model_fingerprint === modelB.model_fingerprint
@@ -622,6 +725,7 @@ function evidenceAt(value: unknown, path: string): Omit<PreferenceReplayEvidence
     evidence_class: "policy_simulated",
     model_a: modelA,
     model_b: modelB,
+    policies,
     non_claims: nonClaims,
     probes: probesAt(record.probes, `${path}.probes`, before, after),
     replay_fingerprint: digestAt(record.replay_fingerprint, `${path}.replay_fingerprint`),
