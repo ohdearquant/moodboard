@@ -103,8 +103,8 @@ for operation_index, operation in enumerate(ops, start=1):
             "serve_id": f"00000000-0000-4000-8000-{identity_base + 1:012d}",
             "scope": {
                 "namespace": args["namespace"],
-                "actor_kind": "lambda",
-                "actor_id": "adobe-demo",
+                "actor_kind": "actor",
+                "actor_id": value("--actor"),
                 "board_entity_id": args["board_entity_id"],
                 "board_id": args["board_id"],
                 "model_key": args["descriptor"]["model_key"],
@@ -170,8 +170,8 @@ for operation_index, operation in enumerate(ops, start=1):
             "created": True,
             "scope": {
                 "namespace": args["namespace"],
-                "actor_kind": "lambda",
-                "actor_id": "adobe-demo",
+                "actor_kind": "actor",
+                "actor_id": value("--actor"),
                 "board_entity_id": args["board_entity_id"],
                 "board_id": args["board_id"],
                 "model_key": args["descriptor"]["model_key"],
@@ -208,8 +208,8 @@ for operation_index, operation in enumerate(ops, start=1):
             "source_report_sha256": args["source_report_sha256"],
             "scope": {
                 "namespace": args["namespace"],
-                "actor_kind": "lambda",
-                "actor_id": "adobe-demo",
+                "actor_kind": "actor",
+                "actor_id": value("--actor"),
                 "board_entity_id": args["board_entity_id"],
                 "board_id": args["board_id"],
                 "model_key": args["descriptor"]["model_key"],
@@ -400,6 +400,41 @@ def test_preference_client_typed_full_loop(preference_client) -> None:
     assert prediction.probability_left_given_decisive == 0.75
     assert prediction.probability_right_given_decisive == 0.25
     assert prediction.conformal_state == "not_computed_by_this_verb"
+
+
+@pytest.mark.parametrize(
+    ("actor_kind", "actor_id"),
+    (
+        ("lambda", "adobe-demo"),
+        ("lambda", "lambda:adobe-demo"),
+        ("actor", "adobe-demo"),
+        ("actor", "actor:lambda:adobe-demo"),
+    ),
+)
+def test_preference_scope_rejects_noncanonical_actor_identity(
+    monkeypatch, preference_client, actor_kind: str, actor_id: str
+) -> None:
+    client, _ = preference_client
+    original = client._execute
+
+    def broken(operations):
+        result = original(operations)[0]
+        result["scope"]["actor_kind"] = actor_kind
+        result["scope"]["actor_id"] = actor_id
+        return (result,)
+
+    monkeypatch.setattr(client, "_execute", broken)
+    scope = _scope()
+    with pytest.raises(KhiveProtocolError, match="scope actor"):
+        client.serve(
+            board_entity_id=scope["board_entity_id"],
+            board_id=scope["board_id"],
+            model_key=scope["model_key"],
+            descriptor_fingerprint=scope["descriptor_fingerprint"],
+            source_report_sha256=scope["source_report_sha256"],
+            candidates=(_candidate(1), _candidate(2)),
+            candidate_pool_sha256="d" * 64,
+        )
 
 
 def test_preference_batch_methods_use_one_ordered_process_per_batch(

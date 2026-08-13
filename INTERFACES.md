@@ -665,7 +665,11 @@ class KhivePreferenceRequest:
 `batch_serve`, `batch_judge`, and `batch_preference` reject empty input, validate the complete
 ordered input before starting `kkernel`, submit only their one fixed Moodboard verb, and return one
 typed result per input row after the existing manifest checksum, tool-order, row-count, and success
-checks. The adapter always requests `kkernel exec --serial`: ops-file parsing may chunk the input,
+checks. Every returned preference scope must bind the resolved Khive actor exactly: an explicitly
+configured request actor is represented as `actor_kind="actor"` and `actor_id` equal to the complete
+requested actor string (for example `lambda:adobe-demo-policy-simulated`). The adapter neither
+splits the actor string on `:` nor accepts a prefixed or reconstructed compatibility spelling.
+The adapter always requests `kkernel exec --serial`: ops-file parsing may chunk the input,
 but physical pack execution is sequential and preserves occurrence-dependent ordering without
 reader contention. The outer `--presentation verbose` flag selects lossless response rendering;
 inside each `moodboard.serve` argument bag, the distinct `exposure` object records the experiment's

@@ -24,6 +24,10 @@ the replay. Use a fresh `policy-simulated` actor/board scope for every replay; a
 for the whole rank-and-replay run is the cleanest isolation. The actor must contain
 `policy-simulated`, for example `lambda:adobe-demo-policy-simulated`. This prevents these
 synthetic events from being attributed to a human. Existing events are not deleted or ignored.
+Khive preserves that complete configured string as `scope.actor_id` and reports the resolved
+identity kind separately as `scope.actor_kind="actor"`; `lambda` is an application-level label
+inside the ID, not the actor kind. Moodboard rejects split, prefixed, or otherwise reconstructed
+scope identities rather than accepting an identity compatibility fallback.
 Contamination is caught either by the exact initial zero-train support refusal or by exact
 post-training checks over decisive groups and judgments, tie groups and judgments, abstains,
 exposed-probability exclusions, split revision, and total snapshot event count.

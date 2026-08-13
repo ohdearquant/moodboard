@@ -561,7 +561,7 @@ def _parse_scope(
         "descriptor_fingerprint": descriptor_fingerprint,
         "feature_schema_id": _FEATURE_SCHEMA_ID,
     }
-    if f"{value.get('actor_kind')}:{value.get('actor_id')}" != actor:
+    if value.get("actor_kind") != "actor" or value.get("actor_id") != actor:
         raise KhiveProtocolError("moodboard preference result scope actor does not match request")
     if any(value.get(field) != expected_value for field, expected_value in required.items()):
         raise KhiveProtocolError("moodboard preference result scope does not match the request")
