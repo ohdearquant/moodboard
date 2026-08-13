@@ -690,6 +690,55 @@ code {
 .pixel-qwen-diagnostics p { grid-column: 1 / -1; padding: 0.55rem; color: #858780; background: #10110e; font-size: 0.49rem; line-height: 1.45; }
 
 
+.firefly-measured-loop {
+  --firefly-line: rgb(255 255 255 / 16%);
+  position: relative;
+  isolation: isolate;
+  margin-top: clamp(2rem, 5vw, 4.5rem);
+  padding: clamp(1rem, 3vw, 2.5rem);
+  overflow: hidden;
+  color: #fffaf3;
+  background: radial-gradient(circle at 90% 4%, rgb(255 102 143 / 30%), transparent 28rem), radial-gradient(circle at 4% 90%, rgb(117 87 255 / 25%), transparent 31rem), linear-gradient(145deg, #22151d 0%, #171322 52%, #111319 100%);
+  box-shadow: 0 38px 90px rgb(32 18 31 / 24%);
+}
+.firefly-measured-loop::before { position: absolute; inset: 0; z-index: -1; pointer-events: none; content: ""; background: linear-gradient(115deg, transparent 18%, rgb(255 255 255 / 5%) 50%, transparent 72%); }
+.firefly-heading { border-color: var(--firefly-line); }
+.firefly-heading .eyebrow { color: #ffb5c7; }
+.firefly-heading h2 { max-width: 900px; }
+.firefly-capture { display: grid; justify-items: end; max-width: 430px; padding: 0.9rem 1rem; border: 1px solid var(--firefly-line); background: rgb(255 255 255 / 6%); text-align: right; }
+.firefly-capture strong { font: 500 clamp(0.9rem, 1.5vw, 1.2rem)/1.2 Georgia, serif; }
+.firefly-capture span { margin-top: 0.45rem; color: #bff7ce; font-size: 0.55rem; font-weight: 800; text-transform: uppercase; }
+.firefly-capture small { margin-top: 0.3rem; color: #aaa6b0; font-size: 0.52rem; }
+.firefly-deck { max-width: 860px; margin-top: 1.35rem; color: #d0c9d2; font-size: clamp(0.85rem, 1.4vw, 1.05rem); line-height: 1.6; }
+.firefly-timeline { display: grid; grid-template-columns: minmax(150px, 0.58fr) repeat(2, minmax(0, 1fr)); gap: 1px; margin: clamp(1.7rem, 4vw, 3.5rem) 0 0; padding: 1px; background: var(--firefly-line); list-style: none; }
+.firefly-step { position: relative; display: grid; min-width: 0; align-content: start; background: rgb(14 14 19 / 90%); }
+.firefly-step > span { position: absolute; top: 0; left: 0; z-index: 2; display: grid; place-items: center; width: 2.35rem; height: 2.35rem; color: #171219; background: #f6dae3; font: 800 0.62rem ui-monospace, monospace; }
+.firefly-step figure { margin: 0; aspect-ratio: 4 / 3; overflow: hidden; background: #29222c; }
+.firefly-step figure img { width: 100%; height: 100%; object-fit: cover; }
+.firefly-step > div { display: grid; align-content: start; gap: 0.42rem; min-width: 0; padding: 1rem; }
+.firefly-step small { color: #9c97a2; font-size: 0.5rem; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; }
+.firefly-step strong { font: 500 clamp(1.05rem, 1.8vw, 1.5rem)/1.05 Georgia, serif; }
+.firefly-step p { color: #b5afb8; font-size: 0.58rem; line-height: 1.48; }
+.firefly-step-structural { align-content: end; min-height: 100%; background: repeating-linear-gradient(135deg, rgb(255 255 255 / 4%), rgb(255 255 255 / 4%) 8px, rgb(14 14 19 / 90%) 8px, rgb(14 14 19 / 90%) 16px); }
+.firefly-step-structural > div { padding-top: 5rem; }
+.firefly-step-fail { box-shadow: inset 0 -4px #d87578; }
+.firefly-step-fail strong { color: #ffb0b2; }
+.firefly-step-pass { box-shadow: inset 0 -4px #9ce8b1; }
+.firefly-step-pass strong { color: #bff7ce; }
+.firefly-evidence-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin-top: 1px; padding: 1px; background: var(--firefly-line); }
+.firefly-evidence-grid > article { min-width: 0; background: rgb(18 18 23 / 92%); }
+.firefly-restyle { display: grid; grid-template-columns: minmax(130px, 0.65fr) minmax(0, 1fr); }
+.firefly-restyle img { width: 100%; height: 100%; min-height: 220px; object-fit: cover; }
+.firefly-restyle > div, .firefly-khive-proof { align-content: center; padding: clamp(0.85rem, 2vw, 1.35rem); }
+.firefly-evidence-grid article > div > span, .firefly-khive-proof > span { color: #ffb5c7; font-size: 0.52rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.firefly-evidence-grid article strong { display: block; margin-top: 0.5rem; font: 500 clamp(1.15rem, 2.1vw, 1.8rem)/1.05 Georgia, serif; }
+.firefly-evidence-grid article p { margin-top: 0.65rem; color: #aaa5ad; font-size: 0.59rem; line-height: 1.5; }
+.firefly-khive-proof { display: block; background: linear-gradient(135deg, rgb(117 87 255 / 14%), transparent); }
+.firefly-audit { margin-top: 1px; border: 1px solid var(--firefly-line); background: rgb(0 0 0 / 14%); }
+.firefly-audit summary { padding: 0.75rem 0.9rem; color: #c6c0c9; cursor: pointer; font-size: 0.58rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.firefly-identity { display: grid; gap: 0.25rem; padding: 0.25rem 0.9rem 0.7rem; color: #a29ca6; font: 0.5rem/1.45 ui-monospace, monospace; overflow-wrap: anywhere; }
+.firefly-audit ul { display: grid; gap: 0.35rem; margin: 0; padding: 0.1rem 1rem 0.9rem 2rem; color: #98939c; font-size: 0.53rem; line-height: 1.5; }
+
 .diagnostics {
   display: grid;
   grid-template-columns: minmax(220px, 0.5fr) 1fr;
@@ -1016,6 +1065,9 @@ code {
   .pixel-pipeline li:nth-child(4)::after { display: none; }
   .pixel-results-grid { grid-template-columns: 1fr; }
   .pixel-verification { border-right: 0; border-bottom: 1px solid var(--lab-line); }
+  .firefly-timeline { grid-template-columns: 1fr 1fr; }
+  .firefly-step-structural { grid-column: 1 / -1; min-height: 170px; }
+  .firefly-evidence-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 640px) {
@@ -1095,6 +1147,13 @@ code {
   .preference-probe-heading { display: none; }
   .preference-probes li { grid-template-columns: minmax(0, 1fr) auto; gap: 0.35rem 0.75rem; }
   .preference-probes li > span:not(.preference-probe-rank) { grid-column: 1 / -1; text-align: left; }
+  .firefly-measured-loop { margin-inline: -0.5rem; padding: 12px; }
+  .firefly-heading { display: grid; }
+  .firefly-capture { justify-items: start; max-width: none; text-align: left; }
+  .firefly-timeline { grid-template-columns: 1fr; }
+  .firefly-step-structural { grid-column: auto; }
+  .firefly-restyle { grid-template-columns: 1fr; }
+  .firefly-restyle img { min-height: 0; aspect-ratio: 4 / 3; }
 }
 
 @media (max-width: 370px) {

@@ -41,6 +41,7 @@ import {
   measuredPreferenceReplayEvidence,
   type PreferenceReplayEvidence,
 } from "./preference-replay";
+import { fireflyBridge, verifiedFireflyEvidence } from "./firefly";
 import {
   abstainedAssets,
   activeAssetId,
@@ -737,6 +738,97 @@ function PreferenceReplayPanel({
   );
 }
 
+function FireflyMeasuredLoop(): ReactNode {
+  const evidence = verifiedFireflyEvidence;
+  const [structural, raw, selected] = evidence.replacement.timeline;
+  if (!structural || !raw || !selected || !raw.preview || !selected.preview) return null;
+
+  return (
+    <section className="firefly-measured-loop" aria-label="Measured Firefly iteration loop">
+      <div className="section-heading firefly-heading">
+        <div>
+          <p className="eyebrow">Frozen Firefly iteration · measured verification</p>
+          <h2>Generate in Firefly. Govern and verify in Moodboard.</h2>
+        </div>
+        <div className="firefly-capture">
+          <strong>Gemini 2.5 (Nano Banana) · Google partner model via Adobe Firefly</strong>
+          <span>{evidence.capture.cost_display} · captured display for this run, not a pricing promise</span>
+          <small>{evidence.capture.surface}</small>
+        </div>
+      </div>
+
+      <p className="firefly-deck">
+        Authenticated web session. No native Firefly API was used in this capture. The retrieved
+        references guided prompt wording and were not attached as direct generator image references.
+      </p>
+
+      <ol className="firefly-timeline" aria-label="Frozen Firefly iteration timeline">
+        <li className="firefly-step firefly-step-structural">
+          <span>01</span>
+          <div>
+            <small>{structural.label}</small>
+            <strong>FAIL · structural aspect ratio</strong>
+            <p>The square output was rejected before locality comparison against the governed 4:3 source.</p>
+          </div>
+        </li>
+        <li className="firefly-step firefly-step-fail">
+          <span>02</span>
+          <figure>
+            <img src={raw.preview.source} alt="Raw Firefly replacement output that failed locality" width={raw.preview.width} height={raw.preview.height} loading="lazy" decoding="async" />
+          </figure>
+          <div>
+            <small>{raw.label}</small>
+            <strong>Raw generator output</strong>
+            <p>{String(raw.outside_mask_ssim)} outside-mask SSIM · threshold {String(evidence.replacement.threshold)} · FAIL</p>
+          </div>
+        </li>
+        <li className="firefly-step firefly-step-pass">
+          <span>03</span>
+          <figure>
+            <img src={selected.preview.source} alt="Selected Firefly cutout composited into the governed source" width={selected.preview.width} height={selected.preview.height} loading="lazy" decoding="async" />
+          </figure>
+          <div>
+            <small>{selected.label}</small>
+            <strong>Deterministic preservation constraint</strong>
+            <p>1.0 outside-mask SSIM · PASS by construction, not intrinsic generator locality or an aesthetic claim.</p>
+            <p>Alpha came from Adobe Firefly web Remove background; it is not a ground-truth mask.</p>
+          </div>
+        </li>
+      </ol>
+
+      <div className="firefly-evidence-grid">
+        <article className="firefly-restyle">
+          <img src={evidence.restyle.preview.source} alt="Firefly classical pastoral restyle with acceptance not computed" width={evidence.restyle.preview.width} height={evidence.restyle.preview.height} loading="lazy" decoding="async" />
+          <div>
+            <span>Global restyle</span>
+            <strong>Restyle acceptance · not computed</strong>
+            <p>Pixel diagnostics remain descriptive; no style, semantic-preservation, or preference acceptance was computed.</p>
+          </div>
+        </article>
+        <article className="firefly-khive-proof">
+          <span>Immutable evidence loop</span>
+          <strong>Khive · lattice-embed 0.9.0</strong>
+          <p>Three registered outputs · 1024D · lattice-embed 0.9.0 (Qwen visual checkpoint) · namespace {evidence.khive.namespace}.</p>
+          <p>Canonical search-result bytes match across process restart.</p>
+        </article>
+      </div>
+
+      <details className="firefly-audit">
+        <summary>Audit &amp; identity</summary>
+        <div className="firefly-identity">
+          <span>Bridge · {fireflyBridge.bridge_id}</span>
+          <span>Projection · {evidence.projection.sha256}</span>
+          <span>Transport binary · {evidence.khive.transport.binary_sha256}</span>
+          <span>Descriptor · {evidence.khive.descriptor.fingerprint}</span>
+        </div>
+        <ul aria-label="Firefly evidence non-claims">
+          {evidence.nonclaims.map((claim) => <li key={claim}>{claim}</li>)}
+        </ul>
+      </details>
+    </section>
+  );
+}
+
 function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
   const artifact = verifiedPixelRagArtifact;
   const initialIntent = artifact.intents[0];
@@ -1239,6 +1331,7 @@ function ReportView({
       <CoreVerificationLine model={model} />
       <AssetCollection stateModel={model} activeId={activeId} filter={filter} dispatch={dispatch} />
       <PixelRagLab model={model} />
+      <FireflyMeasuredLoop />
       <PreferenceReplayPanel evidence={measuredPreferenceReplayEvidence} />
       <details className="report-measurement-audit">
         <summary>Compatibility audit &amp; comparisons</summary>

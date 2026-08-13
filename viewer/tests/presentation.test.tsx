@@ -51,7 +51,7 @@ describe("editorial report presentation", () => {
     expect(within(lab).getByText("Not run")).toBeTruthy();
     expect(within(lab).queryByRole("region", { name: "Governed preference replay" })).toBeNull();
     expect(screen.getByRole("region", { name: "Governed preference replay" })).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "Measured Firefly iteration loop" })).toBeNull();
+    expect(screen.getByRole("region", { name: "Measured Firefly iteration loop" })).toBeTruthy();
     expect(container.querySelectorAll(".pixel-evidence-card")).toHaveLength(3);
   });
 
@@ -160,7 +160,9 @@ describe("editorial report presentation", () => {
     const pixel = screen.getByRole("region", { name: "Pixel RAG intent lab" });
     expect(within(pixel).queryByRole("region", { name: "Governed preference replay" })).toBeNull();
     const panel = screen.getByRole("region", { name: "Governed preference replay" });
-    expect(panel.previousElementSibling).toBe(pixel);
+    const firefly = screen.getByRole("region", { name: "Measured Firefly iteration loop" });
+    expect(pixel.nextElementSibling).toBe(firefly);
+    expect(panel.previousElementSibling).toBe(firefly);
     expect(
       within(panel).getByText(
         "Independent preference mechanism replay · policy-simulated · not trained on these Firefly outputs",
@@ -176,6 +178,46 @@ describe("editorial report presentation", () => {
     const audit = within(panel).getByText("Audit & identity").closest("details");
     expect(audit?.hasAttribute("open")).toBe(false);
     expect(container.querySelectorAll(".preference-measured")).toHaveLength(1);
+  });
+
+  it("shows the frozen Firefly loop between Pixel RAG and the independent preference replay", async () => {
+    const model = await modelFor();
+    const { container } = render(
+      <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
+    );
+
+    const pixel = screen.getByRole("region", { name: "Pixel RAG intent lab" });
+    const firefly = screen.getByRole("region", { name: "Measured Firefly iteration loop" });
+    const preference = screen.getByRole("region", { name: "Governed preference replay" });
+    expect(pixel.nextElementSibling).toBe(firefly);
+    expect(firefly.nextElementSibling).toBe(preference);
+    expect(within(firefly).getByText("Frozen Firefly iteration · measured verification")).toBeTruthy();
+    expect(within(firefly).getByText("Adobe Firefly web Edit > Prompt")).toBeTruthy();
+    expect(
+      within(firefly).getByText("Gemini 2.5 (Nano Banana) · Google partner model via Adobe Firefly"),
+    ).toBeTruthy();
+    expect(within(firefly).getByText(/Uses 0 credits.*captured display for this run/i)).toBeTruthy();
+    expect(within(firefly).getByText(/No native Firefly API was used in this capture/i)).toBeTruthy();
+    expect(within(firefly).getByText("Canonical search-result bytes match across process restart.")).toBeTruthy();
+    expect(within(firefly).getByText(/lattice-embed 0\.9\.0 \(Qwen visual checkpoint\)/)).toBeTruthy();
+    expect(within(firefly).getByText(/0\.174819482254.*0\.95.*FAIL/i)).toBeTruthy();
+    expect(within(firefly).getByText(/1\.0.*PASS by construction/i)).toBeTruthy();
+    expect(within(firefly).getByText(/Restyle acceptance.*not computed/i)).toBeTruthy();
+    expect(within(firefly).getAllByText(/not attached as direct generator image references/i).length).toBeGreaterThanOrEqual(1);
+    expect(within(firefly).getByText(/premium Gemini 3\.1 model was not used/i)).toBeTruthy();
+
+    const previews = within(firefly).getAllByRole("img");
+    expect(previews).toHaveLength(3);
+    for (const preview of previews) {
+      expect(preview.getAttribute("width")).toMatch(/^\d+$/u);
+      expect(preview.getAttribute("height")).toMatch(/^\d+$/u);
+      expect(preview.getAttribute("loading")).toBe("lazy");
+      expect(preview.getAttribute("decoding")).toBe("async");
+    }
+    const audit = within(firefly).getByText("Audit & identity").closest("details");
+    expect(audit?.hasAttribute("open")).toBe(false);
+    expect(within(audit as HTMLElement).getByText(/Transport binary/)).toBeTruthy();
+    expect(container.querySelectorAll(".firefly-measured-loop")).toHaveLength(1);
   });
 
   it("disables outcome filters that would leave the selected detail empty", () => {
