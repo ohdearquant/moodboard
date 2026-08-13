@@ -32,6 +32,12 @@ def value(flag):
 
 if "--serial" not in sys.argv:
     raise SystemExit(92)
+if "--strict" not in sys.argv:
+    raise SystemExit(93)
+if value("--presentation") != "verbose":
+    raise SystemExit(95)
+if value("--output-format") != "json":
+    raise SystemExit(97)
 
 
 ops = [json.loads(line) for line in pathlib.Path(value("--ops-file")).read_text().splitlines()]
@@ -43,6 +49,8 @@ for operation_index, operation in enumerate(ops, start=1):
     identity_base = 100 + (operation_index - 1) * 10
     if args.get("namespace") != value("--namespace"):
         raise SystemExit(91)
+    if "presentation" in args or "presentation_per_op" in args:
+        raise SystemExit(96)
     if tool == "create":
         expected_properties = {
             "schema_version": "moodboard.preference-board.v1",
@@ -85,6 +93,11 @@ for operation_index, operation in enumerate(ops, start=1):
             "content_ref": None,
         }
     elif tool == "moodboard.serve":
+        if args.get("exposure") != {
+            "preference_probability_shown": False,
+            "source_rank_shown": True,
+        }:
+            raise SystemExit(94)
         result = {
             "schema_version": "moodboard.preference-serve.v1",
             "serve_id": f"00000000-0000-4000-8000-{identity_base + 1:012d}",

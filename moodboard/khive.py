@@ -1104,7 +1104,7 @@ class KhiveClient:
                         "source_report_sha256": source_report_sha256,
                         "candidates": validated,
                         "selection": selection,
-                        "presentation": {
+                        "exposure": {
                             "preference_probability_shown": False,
                             "source_rank_shown": True,
                         },

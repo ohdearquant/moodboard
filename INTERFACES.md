@@ -667,9 +667,21 @@ ordered input before starting `kkernel`, submit only their one fixed Moodboard v
 typed result per input row after the existing manifest checksum, tool-order, row-count, and success
 checks. The adapter always requests `kkernel exec --serial`: ops-file parsing may chunk the input,
 but physical pack execution is sequential and preserves occurrence-dependent ordering without
-reader contention. Their singleton counterparts delegate to a one-item batch. Serve and judgment
-remain separate batches because displayed-side labels depend on Khive's returned randomized
-occurrence identities.
+reader contention. The outer `--presentation verbose` flag selects lossless response rendering;
+inside each `moodboard.serve` argument bag, the distinct `exposure` object records the experiment's
+`preference_probability_shown`, `source_rank_shown`, and optional served-model provenance. Neither
+`presentation` nor `presentation_per_op` is a verb argument: Khive reserves both names for the
+request envelope and rejects them during typed parsing.
+
+Serial execution is ordered, not atomic or fail-fast. Khive validates the complete typed ops-file
+snapshot before its first dispatch, so a structural error such as an envelope-reserved argument
+makes zero handler writes. After that preflight, an individual handler failure may still leave a
+successful prefix durable, later rows may execute, and `--strict` reports the failed batch with a
+nonzero process status after row execution. A failed judgment batch can therefore leave judgments
+whose exact retry returns `created=false`; the governed fresh replay recovers only in fresh
+isolated state rather than pretending to roll back or accepting reused rows. Their singleton
+counterparts delegate to a one-item batch. Serve and judgment remain separate batches because
+displayed-side labels depend on Khive's returned randomized occurrence identities.
 
 For each ingest, it also recomputes the Khive BlobStore v1 BLAKE3-256 `content_ref` over the
 submitted bytes and requires the same row to return that value. This detects swapped successful

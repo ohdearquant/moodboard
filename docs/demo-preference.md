@@ -111,6 +111,12 @@ refusal, two serve batches, two judgment batches, two model publications, and fo
 batches. Serve and judgment remain separate because the displayed-side choice cannot be known
 before Khive returns its randomized occurrences.
 
+Serial execution is ordered, not atomic or fail-fast. Typed whole-file preflight rejects structural
+errors before any handler write, but a later handler failure may leave a successful prefix durable
+while subsequent rows still execute; `--strict` then exits nonzero after the batch. Abandon that
+state and replay only in a fresh isolated namespace and run root rather than treating a retry as a
+rollback.
+
 The output is canonical UTF-8 JSON with no wall-clock field. Its `replay_fingerprint` binds
 the complete realized trace, including Khive's occurrence provenance and immutable model
 identities. Pair selection is deterministic for one governed artifact. A genuinely fresh
