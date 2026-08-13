@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import Ajv2020 from "ajv/dist/2020.js";
+import { verifyPreferencePackageProjection } from "./preference-package-gate.mjs";
 
 const viewerRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(viewerRoot, "..");
@@ -65,6 +66,11 @@ assertSafePath(cssHref);
 const scriptBytes = await readFile(path.join(distributionRoot, scriptHref));
 const cssBytes = await readFile(path.join(distributionRoot, cssHref));
 const scriptText = scriptBytes.toString("utf8");
+verifyPreferencePackageProjection({
+  bridgePath: path.join(viewerRoot, "src", "generated", "preference-replay-bridge.json"),
+  scriptText,
+  repositoryRoot,
+});
 if (scriptBytes.includes(Buffer.from("import("))) throw new Error("Application bundle contains a dynamic import.");
 if (scriptBytes.includes(Buffer.from("sourceMappingURL"))) throw new Error("Application bundle contains a source-map reference.");
 if (/\bfetch\s*\(/.test(scriptText)) throw new Error("Application bundle contains a runtime fetch call.");

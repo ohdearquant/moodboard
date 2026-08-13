@@ -38,6 +38,10 @@ import {
   verifiedPixelRagArtifact,
 } from "./pixel-rag";
 import {
+  measuredPreferenceReplayEvidence,
+  type PreferenceReplayEvidence,
+} from "./preference-replay";
+import {
   abstainedAssets,
   activeAssetId,
   initialViewerState,
@@ -639,6 +643,100 @@ function CoreVerificationLine({ model }: { readonly model: ReportModel }): React
   );
 }
 
+function PreferenceReplayPanel({
+  evidence,
+}: {
+  readonly evidence: PreferenceReplayEvidence | null;
+}): ReactNode {
+  if (evidence === null) return null;
+  const delta = evidence.delta;
+  const probes = evidence.probes.toSorted((left, right) => right.delta - left.delta);
+  const snapshots = [
+    {
+      label: "Model A · baseline snapshot",
+      model: evidence.model_a,
+      probability: delta.mean_probability_for_policy_b_preferred_before,
+    },
+    {
+      label: "Model B · appended-policy snapshot",
+      model: evidence.model_b,
+      probability: delta.mean_probability_for_policy_b_preferred_after,
+    },
+  ] as const;
+
+  return (
+    <section className="preference-measured" aria-label="Governed preference replay">
+      <div className="section-heading preference-heading">
+        <div>
+          <p className="eyebrow">
+            Independent preference mechanism replay · policy-simulated · not trained on these Firefly outputs
+          </p>
+          <h2>A frozen policy replay, before and after.</h2>
+        </div>
+        <p>Real Khive replay · immutable FANN snapshots · eight sidecar-bound probes</p>
+      </div>
+      <p className="preference-deck">
+        Mean probability assigned to Policy B’s preferred side. Labels come from disclosed
+        feature-only policies—not people. Model A freezes at {evidence.model_a.snapshot_event_count}
+        {" "}events; Model B appends {evidence.event_counts.model_b_appended_train_decisive}
+        {" "}decisive judgments for {evidence.event_counts.total} total events.
+      </p>
+      <div className="preference-snapshots">
+        {snapshots.map((snapshot, index) => (
+          <article key={snapshot.model.preference_model_id}>
+            <span>{snapshot.label}</span>
+            <strong title={String(snapshot.probability)}>{snapshot.probability.toFixed(6)}</strong>
+            <small>mean P(B-preferred) · {snapshot.model.snapshot_event_count} frozen events</small>
+            {index === 0 ? <i aria-hidden="true">→</i> : null}
+          </article>
+        ))}
+      </div>
+      <div className={`preference-delta preference-delta-${delta.outcome}`}>
+        <span>8-probe mean delta · +{evidence.event_counts.model_b_appended_train_decisive} judgments</span>
+        <strong title={String(delta.mean_delta)}>
+          {delta.mean_delta >= 0 ? "+" : ""}{delta.mean_delta.toFixed(6)}
+        </strong>
+        <small>{delta.adaptation_direction_observed ? "directional change observed" : "no improvement observed"}</small>
+      </div>
+      <div className="preference-probes" aria-label="Frozen preference probes">
+        <div className="preference-probe-heading">
+          <span>Frozen-probe probability movers · all 8</span>
+          <span>Model A → Model B</span>
+          <span>Δ</span>
+        </div>
+        <ol>
+          {probes.map((probe, index) => (
+            <li key={probe.pair_id} data-testid="preference-probe-row">
+              <span className="preference-probe-rank">{String(index + 1).padStart(2, "0")}</span>
+              <strong title={probe.policy_b_preferred.asset_id}>{probe.policy_b_preferred.label}</strong>
+              <span title={`${probe.probability_before} → ${probe.probability_after}`}>
+                {String(probe.probability_before)} → {String(probe.probability_after)}
+              </span>
+              <b>{probe.delta >= 0 ? "+" : ""}{String(probe.delta)}</b>
+            </li>
+          ))}
+        </ol>
+      </div>
+      <p className="preference-verification-line" title={evidence.support_refusal.message}>
+        Verified · FANN A+B · A probe predictions value-exact after B · distinct snapshots · restart predictions exact · support refusal captured (0 &lt; 64 groups)
+      </p>
+      <details className="preference-audit">
+        <summary>Audit &amp; identity</summary>
+        <div className="preference-provenance">
+          <span>Feature schema · {evidence.bindings.feature_schema_id}</span>
+          <span>Source report · {evidence.bindings.source_report_sha256}</span>
+          <span>Replay · {evidence.replay_fingerprint}</span>
+          <span>Model A · {evidence.model_a.preference_model_id} · fingerprint {evidence.model_a.model_fingerprint} · bundle {evidence.model_a.bundle_ref}</span>
+          <span>Model B · {evidence.model_b.preference_model_id} · fingerprint {evidence.model_b.model_fingerprint} · bundle {evidence.model_b.bundle_ref}</span>
+        </div>
+        <ul className="preference-nonclaims" aria-label="Preference replay non-claims">
+          {evidence.non_claims.map((claim) => <li key={claim}>{claim}</li>)}
+        </ul>
+      </details>
+    </section>
+  );
+}
+
 function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
   const artifact = verifiedPixelRagArtifact;
   const initialIntent = artifact.intents[0];
@@ -1141,6 +1239,7 @@ function ReportView({
       <CoreVerificationLine model={model} />
       <AssetCollection stateModel={model} activeId={activeId} filter={filter} dispatch={dispatch} />
       <PixelRagLab model={model} />
+      <PreferenceReplayPanel evidence={measuredPreferenceReplayEvidence} />
       <details className="report-measurement-audit">
         <summary>Compatibility audit &amp; comparisons</summary>
         <div>

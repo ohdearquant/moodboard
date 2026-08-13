@@ -50,9 +50,8 @@ describe("editorial report presentation", () => {
     expect(within(lab).getByText(/layout constraint declared; verifier not run/i)).toBeTruthy();
     expect(within(lab).getByText("Not run")).toBeTruthy();
     expect(within(lab).queryByRole("region", { name: "Governed preference replay" })).toBeNull();
-    expect(screen.queryByRole("region", { name: "Governed preference replay" })).toBeNull();
+    expect(screen.getByRole("region", { name: "Governed preference replay" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Measured Firefly iteration loop" })).toBeNull();
-    expect(screen.queryByText(/Model B ·/i)).toBeNull();
     expect(container.querySelectorAll(".pixel-evidence-card")).toHaveLength(3);
   });
 
@@ -150,6 +149,33 @@ describe("editorial report presentation", () => {
     ).toBeTruthy();
     const audit = screen.getByText("Compatibility audit & comparisons").closest("details");
     expect(audit?.hasAttribute("open")).toBe(false);
+  });
+
+  it("renders the real policy-simulated replay as a separate eight-probe mechanism", async () => {
+    const model = await modelFor();
+    const { container } = render(
+      <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
+    );
+
+    const pixel = screen.getByRole("region", { name: "Pixel RAG intent lab" });
+    expect(within(pixel).queryByRole("region", { name: "Governed preference replay" })).toBeNull();
+    const panel = screen.getByRole("region", { name: "Governed preference replay" });
+    expect(panel.previousElementSibling).toBe(pixel);
+    expect(
+      within(panel).getByText(
+        "Independent preference mechanism replay · policy-simulated · not trained on these Firefly outputs",
+      ),
+    ).toBeTruthy();
+    expect(within(panel).getByText("0.000248")).toBeTruthy();
+    expect(within(panel).getByText("0.501136")).toBeTruthy();
+    expect(within(panel).getByText("+0.500888")).toBeTruthy();
+    expect(within(panel).getByText(/\+96 judgments/)).toBeTruthy();
+    expect(within(panel).getAllByTestId("preference-probe-row")).toHaveLength(8);
+    expect(within(panel).getByText("style_vangogh_cypresses--center-crop-90pct.png")).toBeTruthy();
+    expect(within(panel).getByText(/FANN A\+B.*A probe predictions value-exact.*restart predictions exact/)).toBeTruthy();
+    const audit = within(panel).getByText("Audit & identity").closest("details");
+    expect(audit?.hasAttribute("open")).toBe(false);
+    expect(container.querySelectorAll(".preference-measured")).toHaveLength(1);
   });
 
   it("disables outcome filters that would leave the selected detail empty", () => {

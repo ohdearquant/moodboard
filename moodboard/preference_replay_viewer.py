@@ -18,13 +18,33 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from moodboard.preference import PreferenceFeatureArtifact, read_preference_feature_artifact
+
 BRIDGE_FORMAT = "moodboard.viewer-preference-replay-bridge.v1"
 GENERATOR_REVISION = "moodboard.preference-replay-viewer-bridge.v1"
 REPLAY_SCHEMA = "moodboard.preference-demo-replay.v1"
 _MAX_BYTES = 16 * 1024 * 1024
 _HEX = frozenset("0123456789abcdef")
 _BRIDGE_KEYS = frozenset({"evidence", "format_version", "generator_revision", "input", "state"})
-_INPUT_KEYS = frozenset({"byte_size", "replay_fingerprint", "schema_version", "sha256"})
+_INPUT_KEYS = frozenset({"features", "replay"})
+_REPLAY_INPUT_KEYS = frozenset({"byte_size", "replay_fingerprint", "schema_version", "sha256"})
+_FEATURE_INPUT_KEYS = frozenset(
+    {
+        "board_entity_id",
+        "board_id",
+        "byte_size",
+        "candidate_pool_sha256",
+        "descriptor_fingerprint",
+        "feature_schema_id",
+        "model_key",
+        "producer_id",
+        "producer_revision",
+        "schema_version",
+        "scope_sha256",
+        "sha256",
+        "source_report_sha256",
+    }
+)
 _EVIDENCE_KEYS = frozenset(
     {
         "bindings",
@@ -34,9 +54,50 @@ _EVIDENCE_KEYS = frozenset(
         "model_a",
         "model_b",
         "non_claims",
+        "probes",
         "replay_fingerprint",
         "support_refusal",
         "verification",
+    }
+)
+_PROBE_KEYS = frozenset(
+    {
+        "delta",
+        "left",
+        "pair_id",
+        "policy_b_preferred",
+        "probability_after",
+        "probability_before",
+        "right",
+    }
+)
+_PROBE_ASSET_KEYS = frozenset({"asset_id", "content_ref"})
+_PREFERRED_ASSET_KEYS = frozenset({"asset_id", "content_ref", "label"})
+_SOURCE_PROBE_KEYS = frozenset(
+    {
+        "left",
+        "model_a_prediction",
+        "model_b_prediction",
+        "pair_id",
+        "policy_a_preferred_asset_id",
+        "policy_b_preferred_asset_id",
+        "probability_for_policy_b_preferred_after",
+        "probability_for_policy_b_preferred_before",
+        "right",
+        "split",
+    }
+)
+_SOURCE_PROBE_ASSET_KEYS = frozenset({"asset_id", "content_ref", "source_rank"})
+_SOURCE_PREDICTION_KEYS = frozenset(
+    {
+        "calibrated_temperature",
+        "conformal_state",
+        "indifference_state",
+        "model_fingerprint",
+        "preference_model_id",
+        "probability_left_given_decisive",
+        "probability_right_given_decisive",
+        "raw_fann_logit",
     }
 )
 _BINDING_KEYS = frozenset(
@@ -288,9 +349,230 @@ def _nonempty_string(value: object, label: str) -> str:
     return value
 
 
+def _finite(value: object, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise PreferenceReplayViewerBridgeError(f"{label} must be finite")
+    measured = float(value)
+    if not math.isfinite(measured):
+        raise PreferenceReplayViewerBridgeError(f"{label} must be finite")
+    return measured
+
+
+def _validate_source_prediction(
+    value: object,
+    *,
+    label: str,
+    model: Mapping[str, Any],
+    preferred_left: bool,
+    declared_preferred_probability: float,
+) -> None:
+    prediction = _mapping(value, label)
+    _closed(prediction, _SOURCE_PREDICTION_KEYS, label)
+    if (
+        _uuid(prediction.get("preference_model_id"), f"{label}.preference_model_id")
+        != model["preference_model_id"]
+        or _digest(prediction.get("model_fingerprint"), f"{label}.model_fingerprint")
+        != model["model_fingerprint"]
+    ):
+        raise PreferenceReplayViewerBridgeError(f"{label} model identity drifted")
+    left = _probability(
+        prediction.get("probability_left_given_decisive"),
+        f"{label}.probability_left_given_decisive",
+    )
+    right = _probability(
+        prediction.get("probability_right_given_decisive"),
+        f"{label}.probability_right_given_decisive",
+    )
+    if not math.isclose(left + right, 1.0, rel_tol=0.0, abs_tol=1.0e-12):
+        raise PreferenceReplayViewerBridgeError(f"{label} prediction probabilities do not sum to 1")
+    measured_preferred = left if preferred_left else right
+    if not math.isclose(
+        measured_preferred,
+        declared_preferred_probability,
+        rel_tol=0.0,
+        abs_tol=1.0e-12,
+    ):
+        raise PreferenceReplayViewerBridgeError(f"{label} preferred-side probability drifted")
+    _finite(prediction.get("calibrated_temperature"), f"{label}.calibrated_temperature")
+    _finite(prediction.get("raw_fann_logit"), f"{label}.raw_fann_logit")
+    if prediction.get("conformal_state") != "not_computed_by_this_verb":
+        raise PreferenceReplayViewerBridgeError(f"{label}.conformal_state drifted")
+    if prediction.get("indifference_state") not in {
+        "inside_calibrated_band",
+        "outside_calibrated_band",
+    }:
+        raise PreferenceReplayViewerBridgeError(f"{label}.indifference_state drifted")
+
+
 def _snapshot_event_count(model: Mapping[str, Any], label: str) -> int:
     training = _mapping(model.get("training"), f"{label}.training")
     return _integer(training.get("snapshot_event_count"), f"{label}.training.snapshot_event_count")
+
+
+def _feature_input_identity(artifact: PreferenceFeatureArtifact, raw: bytes) -> dict[str, Any]:
+    return {
+        "board_entity_id": artifact.board_entity_id,
+        "board_id": artifact.board_id,
+        "byte_size": len(raw),
+        "candidate_pool_sha256": artifact.candidate_pool_sha256,
+        "descriptor_fingerprint": artifact.descriptor_fingerprint,
+        "feature_schema_id": artifact.feature_schema_id,
+        "model_key": artifact.model_key,
+        "producer_id": artifact.producer_id,
+        "producer_revision": artifact.producer_revision,
+        "schema_version": artifact.schema_version,
+        "scope_sha256": artifact.scope_sha256,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "source_report_sha256": artifact.source_report_sha256,
+    }
+
+
+def _read_feature_sidecar(path: Path) -> tuple[PreferenceFeatureArtifact, bytes]:
+    raw = _read_bounded_regular_file(path, "preference feature sidecar")
+    try:
+        artifact = read_preference_feature_artifact(path)
+    except (OSError, TypeError, ValueError) as error:
+        raise PreferenceReplayViewerBridgeError(
+            f"preference feature sidecar is invalid: {error}"
+        ) from error
+    return artifact, raw
+
+
+def _bind_feature_sidecar(
+    document: Mapping[str, Any], artifact: PreferenceFeatureArtifact
+) -> dict[str, Any]:
+    replay_artifact = _mapping(document["artifact"], "preference replay artifact")
+    bindings = {
+        "board_entity_id": artifact.board_entity_id,
+        "board_id": artifact.board_id,
+        "candidate_pool_sha256": artifact.candidate_pool_sha256,
+        "descriptor_fingerprint": artifact.descriptor_fingerprint,
+        "feature_producer_id": artifact.producer_id,
+        "feature_producer_revision": artifact.producer_revision,
+        "feature_schema_id": artifact.feature_schema_id,
+        "model_key": artifact.model_key,
+        "schema_version": artifact.schema_version,
+        "scope_sha256": artifact.scope_sha256,
+        "source_report_sha256": artifact.source_report_sha256,
+    }
+    if any(replay_artifact[key] != value for key, value in bindings.items()):
+        raise PreferenceReplayViewerBridgeError(
+            "preference feature sidecar identity does not match replay artifact"
+        )
+
+    sidecar_candidates = {candidate.asset_id: candidate for candidate in artifact.candidates}
+    replay_candidates: dict[str, tuple[str, int]] = {}
+
+    def bind_candidate(value: object, label: str) -> None:
+        candidate = _mapping(value, label)
+        asset_id = _uuid(candidate.get("asset_id"), f"{label}.asset_id")
+        content_ref = _digest(candidate.get("content_ref"), f"{label}.content_ref")
+        source_rank = _integer(candidate.get("source_rank"), f"{label}.source_rank")
+        if source_rank < 1:
+            raise PreferenceReplayViewerBridgeError(f"{label}.source_rank must be positive")
+        identity = (content_ref, source_rank)
+        previous = replay_candidates.setdefault(asset_id, identity)
+        if previous != identity:
+            raise PreferenceReplayViewerBridgeError(
+                f"{label} contradicts an earlier replay candidate identity"
+            )
+        sidecar = sidecar_candidates.get(asset_id)
+        if sidecar is None or (sidecar.content_ref, sidecar.source_rank) != identity:
+            raise PreferenceReplayViewerBridgeError(
+                f"{label} does not have an exact feature sidecar identity"
+            )
+
+    events = document["events"]
+    for event_index, event_value in enumerate(events):
+        event = _mapping(event_value, f"preference replay event {event_index}")
+        submitted = event.get("submitted_candidates")
+        if not isinstance(submitted, list) or len(submitted) != 2:
+            raise PreferenceReplayViewerBridgeError(
+                f"preference replay event {event_index} must submit exactly two candidates"
+            )
+        for candidate_index, candidate in enumerate(submitted):
+            bind_candidate(
+                candidate,
+                f"preference replay event {event_index} candidate {candidate_index}",
+            )
+
+    probes = document["frozen_conflict_probes"]
+    projected: list[dict[str, Any]] = []
+    for index, probe_value in enumerate(probes):
+        probe = _mapping(probe_value, f"frozen probe {index}")
+        _closed(probe, _SOURCE_PROBE_KEYS, f"frozen probe {index}")
+        sides: dict[str, Mapping[str, Any]] = {}
+        for side in ("left", "right"):
+            candidate = _mapping(probe[side], f"frozen probe {index}.{side}")
+            _closed(candidate, _SOURCE_PROBE_ASSET_KEYS, f"frozen probe {index}.{side}")
+            bind_candidate(candidate, f"frozen probe {index}.{side}")
+            sides[side] = candidate
+        if sides["left"]["asset_id"] == sides["right"]["asset_id"]:
+            raise PreferenceReplayViewerBridgeError(
+                f"frozen probe {index} must contain two distinct candidates"
+            )
+        lower_ref, upper_ref = sorted(
+            (str(sides["left"]["content_ref"]), str(sides["right"]["content_ref"]))
+        )
+        measured_pair_id = hashlib.sha256(
+            b"moodboard-preference-demo-pair-v1\0"
+            + bytes.fromhex(lower_ref)
+            + bytes.fromhex(upper_ref)
+        ).hexdigest()
+        if probe["pair_id"] != measured_pair_id:
+            raise PreferenceReplayViewerBridgeError(
+                f"frozen probe {index} pair_id does not bind its exact content pair"
+            )
+        preferred_asset_id = _uuid(
+            probe.get("policy_b_preferred_asset_id"),
+            f"frozen probe {index}.policy_b_preferred_asset_id",
+        )
+        if preferred_asset_id not in {
+            sides["left"]["asset_id"],
+            sides["right"]["asset_id"],
+        }:
+            raise PreferenceReplayViewerBridgeError(
+                f"frozen probe {index} policy B preferred candidate is not present"
+            )
+        preferred = sidecar_candidates[preferred_asset_id]
+        before = _probability(
+            probe["probability_for_policy_b_preferred_before"],
+            f"frozen probe {index}.probability_before",
+        )
+        after = _probability(
+            probe["probability_for_policy_b_preferred_after"],
+            f"frozen probe {index}.probability_after",
+        )
+        projected.append(
+            {
+                "delta": after - before,
+                "left": {
+                    "asset_id": sides["left"]["asset_id"],
+                    "content_ref": sides["left"]["content_ref"],
+                },
+                "pair_id": probe["pair_id"],
+                "policy_b_preferred": {
+                    "asset_id": preferred.asset_id,
+                    "content_ref": preferred.content_ref,
+                    "label": preferred.label,
+                },
+                "probability_after": after,
+                "probability_before": before,
+                "right": {
+                    "asset_id": sides["right"]["asset_id"],
+                    "content_ref": sides["right"]["content_ref"],
+                },
+            }
+        )
+
+    if set(replay_candidates) != set(sidecar_candidates):
+        missing = sorted(set(sidecar_candidates) - set(replay_candidates))
+        extra = sorted(set(replay_candidates) - set(sidecar_candidates))
+        raise PreferenceReplayViewerBridgeError(
+            "preference replay and feature sidecar candidate sets differ: "
+            f"missing {missing}, extra {extra}"
+        )
+    return {"bindings": bindings, "probes": projected}
 
 
 def fallback_viewer_preference_replay_bridge() -> dict[str, Any]:
@@ -351,23 +633,48 @@ def _validate_replay(document: Mapping[str, Any]) -> None:
     before_values: list[float] = []
     after_values: list[float] = []
     pair_ids: set[str] = set()
+    model_a = _mapping(document.get("model_a"), "model_a")
+    model_b = _mapping(document.get("model_b"), "model_b")
     for index, probe_value in enumerate(probes):
         probe = _mapping(probe_value, f"frozen probe {index}")
         pair_id = _digest(probe.get("pair_id"), f"frozen probe {index}.pair_id")
         if pair_id in pair_ids:
             raise PreferenceReplayViewerBridgeError("frozen probe pair IDs must be unique")
         pair_ids.add(pair_id)
-        before_values.append(
-            _probability(
-                probe.get("probability_for_policy_b_preferred_before"),
-                f"frozen probe {index} before probability",
-            )
+        left = _mapping(probe.get("left"), f"frozen probe {index}.left")
+        right = _mapping(probe.get("right"), f"frozen probe {index}.right")
+        preferred_asset_id = _uuid(
+            probe.get("policy_b_preferred_asset_id"),
+            f"frozen probe {index}.policy_b_preferred_asset_id",
         )
-        after_values.append(
-            _probability(
-                probe.get("probability_for_policy_b_preferred_after"),
-                f"frozen probe {index} after probability",
+        if preferred_asset_id not in {left.get("asset_id"), right.get("asset_id")}:
+            raise PreferenceReplayViewerBridgeError(
+                f"frozen probe {index} preferred candidate is not present"
             )
+        before = _probability(
+            probe.get("probability_for_policy_b_preferred_before"),
+            f"frozen probe {index} before probability",
+        )
+        after = _probability(
+            probe.get("probability_for_policy_b_preferred_after"),
+            f"frozen probe {index} after probability",
+        )
+        before_values.append(before)
+        after_values.append(after)
+        preferred_left = preferred_asset_id == left.get("asset_id")
+        _validate_source_prediction(
+            probe.get("model_a_prediction"),
+            label=f"frozen probe {index}.model_a_prediction",
+            model=model_a,
+            preferred_left=preferred_left,
+            declared_preferred_probability=before,
+        )
+        _validate_source_prediction(
+            probe.get("model_b_prediction"),
+            label=f"frozen probe {index}.model_b_prediction",
+            model=model_b,
+            preferred_left=preferred_left,
+            declared_preferred_probability=after,
         )
 
     delta = _mapping(document.get("delta"), "preference replay delta")
@@ -447,8 +754,6 @@ def _validate_replay(document: Mapping[str, Any]) -> None:
     if source_event_counts != measured_event_counts:
         raise PreferenceReplayViewerBridgeError("preference replay event count drifted")
 
-    model_a = _mapping(document.get("model_a"), "model_a")
-    model_b = _mapping(document.get("model_b"), "model_b")
     identities: list[tuple[str, ...]] = []
     snapshot_counts: list[int] = []
     for label, model in (("model_a", model_a), ("model_b", model_b)):
@@ -523,8 +828,7 @@ def _model_projection(model: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _project(document: Mapping[str, Any]) -> dict[str, Any]:
-    artifact = _mapping(document["artifact"], "artifact")
+def _project(document: Mapping[str, Any], feature_binding: Mapping[str, Any]) -> dict[str, Any]:
     delta = _mapping(document["delta"], "delta")
     phase_counts = _mapping(document["phase_counts"], "phase_counts")
     a_counts = _mapping(phase_counts["model_a"], "phase_counts.model_a")
@@ -534,7 +838,7 @@ def _project(document: Mapping[str, Any]) -> dict[str, Any]:
     immutability = _mapping(document["immutability"], "immutability")
     probes = document["frozen_conflict_probes"]
     return {
-        "bindings": {key: artifact[key] for key in sorted(_BINDING_KEYS)},
+        "bindings": dict(feature_binding["bindings"]),
         "delta": {
             "adaptation_direction_observed": delta["adaptation_direction_observed"],
             "mean_delta": delta["mean_delta"],
@@ -563,6 +867,7 @@ def _project(document: Mapping[str, Any]) -> dict[str, Any]:
         "model_a": _model_projection(model_a),
         "model_b": _model_projection(model_b),
         "non_claims": list(document["non_claims"]),
+        "probes": list(feature_binding["probes"]),
         "replay_fingerprint": document["replay_fingerprint"],
         "support_refusal": dict(document["support_refusal"]),
         "verification": {
@@ -579,8 +884,8 @@ def _project(document: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def compile_viewer_preference_replay_bridge(source: Path) -> dict[str, Any]:
-    """Validate one canonical replay and return its closed aggregate viewer projection."""
+def compile_viewer_preference_replay_bridge(source: Path, *, features: Path) -> dict[str, Any]:
+    """Validate one replay plus feature sidecar and return their closed projection."""
 
     path = Path(source)
     raw = _read_bounded_regular_file(path, "preference replay")
@@ -594,16 +899,21 @@ def compile_viewer_preference_replay_bridge(source: Path) -> dict[str, Any]:
     if raw != _canonical_bytes(document):
         raise PreferenceReplayViewerBridgeError("preference replay is not canonical JSON")
     _validate_replay(document)
+    feature_artifact, feature_raw = _read_feature_sidecar(Path(features))
+    feature_binding = _bind_feature_sidecar(document, feature_artifact)
     fingerprint = document["replay_fingerprint"]
     bridge = {
-        "evidence": _project(document),
+        "evidence": _project(document, feature_binding),
         "format_version": BRIDGE_FORMAT,
         "generator_revision": GENERATOR_REVISION,
         "input": {
-            "byte_size": len(raw),
-            "replay_fingerprint": fingerprint,
-            "schema_version": REPLAY_SCHEMA,
-            "sha256": hashlib.sha256(raw).hexdigest(),
+            "features": _feature_input_identity(feature_artifact, feature_raw),
+            "replay": {
+                "byte_size": len(raw),
+                "replay_fingerprint": fingerprint,
+                "schema_version": REPLAY_SCHEMA,
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            },
         },
         "state": "projected",
     }
@@ -630,11 +940,36 @@ def validate_viewer_preference_replay_bridge(value: Mapping[str, Any]) -> None:
         raise PreferenceReplayViewerBridgeError("preference replay bridge state is unsupported")
     identity = _mapping(bridge["input"], "bridge input")
     _closed(identity, _INPUT_KEYS, "bridge input")
-    _integer(identity["byte_size"], "input.byte_size")
-    if identity["byte_size"] < 1 or identity["schema_version"] != REPLAY_SCHEMA:
+    replay_identity = _mapping(identity["replay"], "bridge input.replay")
+    _closed(replay_identity, _REPLAY_INPUT_KEYS, "bridge input.replay")
+    _integer(replay_identity["byte_size"], "input.replay.byte_size")
+    if replay_identity["byte_size"] < 1 or replay_identity["schema_version"] != REPLAY_SCHEMA:
         raise PreferenceReplayViewerBridgeError("preference replay input identity drifted")
-    replay_fingerprint = _digest(identity["replay_fingerprint"], "input.replay_fingerprint")
-    _digest(identity["sha256"], "input.sha256")
+    replay_fingerprint = _digest(
+        replay_identity["replay_fingerprint"], "input.replay.replay_fingerprint"
+    )
+    _digest(replay_identity["sha256"], "input.replay.sha256")
+    feature_identity = _mapping(identity["features"], "bridge input.features")
+    _closed(feature_identity, _FEATURE_INPUT_KEYS, "bridge input.features")
+    if (
+        _integer(feature_identity["byte_size"], "input.features.byte_size") < 1
+        or feature_identity["schema_version"] != _PREFERENCE_FEATURE_ARTIFACT_SCHEMA
+    ):
+        raise PreferenceReplayViewerBridgeError("preference feature input identity drifted")
+    _uuid(feature_identity["board_entity_id"], "input.features.board_entity_id")
+    for field in _FEATURE_INPUT_KEYS - {
+        "board_entity_id",
+        "byte_size",
+        "model_key",
+        "producer_revision",
+        "schema_version",
+    }:
+        _digest(feature_identity[field], f"input.features.{field}")
+    _nonempty_string(feature_identity["producer_revision"], "input.features.producer_revision")
+    if not str(feature_identity["model_key"]).startswith(
+        f"moodboard_{feature_identity['descriptor_fingerprint']}_"
+    ):
+        raise PreferenceReplayViewerBridgeError("input.features.model_key is not descriptor-bound")
     evidence = _mapping(bridge["evidence"], "bridge evidence")
     _closed(evidence, _EVIDENCE_KEYS, "bridge evidence")
     if evidence["evidence_class"] != "policy_simulated":
@@ -658,6 +993,26 @@ def validate_viewer_preference_replay_bridge(value: Mapping[str, Any]) -> None:
         f"moodboard_{bindings['descriptor_fingerprint']}_"
     ):
         raise PreferenceReplayViewerBridgeError("bindings.model_key is not descriptor-bound")
+    feature_to_binding = {
+        "board_entity_id": "board_entity_id",
+        "board_id": "board_id",
+        "candidate_pool_sha256": "candidate_pool_sha256",
+        "descriptor_fingerprint": "descriptor_fingerprint",
+        "feature_schema_id": "feature_schema_id",
+        "model_key": "model_key",
+        "producer_id": "feature_producer_id",
+        "producer_revision": "feature_producer_revision",
+        "schema_version": "schema_version",
+        "scope_sha256": "scope_sha256",
+        "source_report_sha256": "source_report_sha256",
+    }
+    if any(
+        feature_identity[source] != bindings[target]
+        for source, target in feature_to_binding.items()
+    ):
+        raise PreferenceReplayViewerBridgeError(
+            "bridge feature input identity contradicts evidence bindings"
+        )
     delta = _mapping(evidence["delta"], "evidence.delta")
     _closed(delta, _DELTA_KEYS, "evidence.delta")
     before = _probability(delta["mean_probability_for_policy_b_preferred_before"], "delta.before")
@@ -723,6 +1078,91 @@ def validate_viewer_preference_replay_bridge(value: Mapping[str, Any]) -> None:
         raise PreferenceReplayViewerBridgeError("replay verification gate is not exact")
     if verification["frozen_probe_count"] != 8:
         raise PreferenceReplayViewerBridgeError("verification frozen probe count drifted")
+    probes = evidence["probes"]
+    if not isinstance(probes, list) or len(probes) != 8:
+        raise PreferenceReplayViewerBridgeError("bridge evidence must project exactly 8 probes")
+    pair_ids: set[str] = set()
+    preferred_labels: dict[str, tuple[str, str]] = {}
+    probe_before: list[float] = []
+    probe_after: list[float] = []
+    for index, probe_value in enumerate(probes):
+        probe = _mapping(probe_value, f"evidence.probes[{index}]")
+        _closed(probe, _PROBE_KEYS, f"evidence.probes[{index}]")
+        pair_id = _digest(probe["pair_id"], f"evidence.probes[{index}].pair_id")
+        if pair_id in pair_ids:
+            raise PreferenceReplayViewerBridgeError("bridge probe pair IDs must be unique")
+        pair_ids.add(pair_id)
+        sides: dict[str, Mapping[str, Any]] = {}
+        for side in ("left", "right"):
+            candidate = _mapping(probe[side], f"evidence.probes[{index}].{side}")
+            _closed(candidate, _PROBE_ASSET_KEYS, f"evidence.probes[{index}].{side}")
+            _uuid(candidate["asset_id"], f"evidence.probes[{index}].{side}.asset_id")
+            _digest(candidate["content_ref"], f"evidence.probes[{index}].{side}.content_ref")
+            sides[side] = candidate
+        if sides["left"]["asset_id"] == sides["right"]["asset_id"]:
+            raise PreferenceReplayViewerBridgeError("bridge probe sides must be distinct")
+        preferred = _mapping(
+            probe["policy_b_preferred"], f"evidence.probes[{index}].policy_b_preferred"
+        )
+        _closed(
+            preferred,
+            _PREFERRED_ASSET_KEYS,
+            f"evidence.probes[{index}].policy_b_preferred",
+        )
+        _uuid(
+            preferred["asset_id"],
+            f"evidence.probes[{index}].policy_b_preferred.asset_id",
+        )
+        _digest(
+            preferred["content_ref"],
+            f"evidence.probes[{index}].policy_b_preferred.content_ref",
+        )
+        _nonempty_string(preferred["label"], f"evidence.probes[{index}].policy_b_preferred.label")
+        preferred_identity = (str(preferred["content_ref"]), str(preferred["label"]))
+        prior_preferred = preferred_labels.setdefault(
+            str(preferred["asset_id"]), preferred_identity
+        )
+        if prior_preferred != preferred_identity:
+            raise PreferenceReplayViewerBridgeError(
+                "bridge probe sidecar identity/label mapping is inconsistent"
+            )
+        if not any(
+            preferred["asset_id"] == candidate["asset_id"]
+            and preferred["content_ref"] == candidate["content_ref"]
+            for candidate in sides.values()
+        ):
+            raise PreferenceReplayViewerBridgeError(
+                "bridge probe policy B preferred identity must be present on one side"
+            )
+        before_value = _probability(
+            probe["probability_before"], f"evidence.probes[{index}].probability_before"
+        )
+        after_value = _probability(
+            probe["probability_after"], f"evidence.probes[{index}].probability_after"
+        )
+        declared_probe_delta = probe["delta"]
+        if (
+            isinstance(declared_probe_delta, bool)
+            or not isinstance(declared_probe_delta, int | float)
+            or not math.isfinite(float(declared_probe_delta))
+            or not math.isclose(
+                float(declared_probe_delta),
+                after_value - before_value,
+                rel_tol=0.0,
+                abs_tol=1.0e-12,
+            )
+        ):
+            raise PreferenceReplayViewerBridgeError("bridge probe delta arithmetic drifted")
+        probe_before.append(before_value)
+        probe_after.append(after_value)
+    if not all(
+        math.isclose(left, right, rel_tol=0.0, abs_tol=1.0e-12)
+        for left, right in (
+            (math.fsum(probe_before) / 8, before),
+            (math.fsum(probe_after) / 8, after),
+        )
+    ):
+        raise PreferenceReplayViewerBridgeError("bridge probe aggregate arithmetic drifted")
     non_claims = evidence["non_claims"]
     if not isinstance(non_claims, list) or not all(
         isinstance(claim, str) and claim for claim in non_claims
@@ -780,6 +1220,8 @@ def _parser() -> argparse.ArgumentParser:
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--input", type=Path)
     action.add_argument("--check", type=Path)
+    parser.add_argument("--features", type=Path)
+    parser.add_argument("--require-projected", action="store_true")
     parser.add_argument("--write", type=Path)
     return parser
 
@@ -788,14 +1230,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
         if arguments.check is not None:
-            if arguments.write is not None:
-                raise PreferenceReplayViewerBridgeError("--write cannot be combined with --check")
+            if arguments.write is not None or arguments.features is not None:
+                raise PreferenceReplayViewerBridgeError(
+                    "--write/--features cannot be combined with --check"
+                )
             bridge = read_viewer_preference_replay_bridge(arguments.check)
+            if arguments.require_projected and bridge["state"] != "projected":
+                raise PreferenceReplayViewerBridgeError(
+                    "checked preference replay bridge must be projected"
+                )
             path = arguments.check
         else:
             if arguments.write is None:
                 raise PreferenceReplayViewerBridgeError("--input requires --write")
-            bridge = compile_viewer_preference_replay_bridge(arguments.input)
+            if arguments.features is None:
+                raise PreferenceReplayViewerBridgeError("--input requires --features")
+            bridge = compile_viewer_preference_replay_bridge(
+                arguments.input, features=arguments.features
+            )
             write_viewer_preference_replay_bridge(bridge, arguments.write)
             path = arguments.write
     except (OSError, PreferenceReplayViewerBridgeError, ValueError) as error:
@@ -805,7 +1257,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             {
                 "bridge": str(path.resolve()),
                 "replay_fingerprint": (
-                    bridge["input"]["replay_fingerprint"] if bridge["input"] else None
+                    bridge["input"]["replay"]["replay_fingerprint"] if bridge["input"] else None
                 ),
                 "state": bridge["state"],
             },

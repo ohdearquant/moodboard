@@ -101,6 +101,37 @@ export interface PreferenceReplayModelSnapshot {
   readonly snapshot_event_count: number;
 }
 
+export interface PreferenceReplayProbeAsset {
+  readonly asset_id: string;
+  readonly content_ref: string;
+}
+
+export interface PreferenceReplayProbe {
+  readonly delta: number;
+  readonly left: PreferenceReplayProbeAsset;
+  readonly pair_id: string;
+  readonly policy_b_preferred: PreferenceReplayProbeAsset & { readonly label: string };
+  readonly probability_after: number;
+  readonly probability_before: number;
+  readonly right: PreferenceReplayProbeAsset;
+}
+
+export interface PreferenceFeatureInputIdentity {
+  readonly board_entity_id: string;
+  readonly board_id: string;
+  readonly byte_size: number;
+  readonly candidate_pool_sha256: string;
+  readonly descriptor_fingerprint: string;
+  readonly feature_schema_id: string;
+  readonly model_key: string;
+  readonly producer_id: string;
+  readonly producer_revision: string;
+  readonly schema_version: "moodboard.preference-feature-artifact.v2";
+  readonly scope_sha256: string;
+  readonly sha256: string;
+  readonly source_report_sha256: string;
+}
+
 export interface PreferenceReplayEvidence {
   readonly state: "measured_replay";
   readonly status_label: string;
@@ -125,6 +156,7 @@ export interface PreferenceReplayEvidence {
   readonly model_a: PreferenceReplayModelSnapshot;
   readonly model_b: PreferenceReplayModelSnapshot;
   readonly non_claims: readonly string[];
+  readonly probes: readonly PreferenceReplayProbe[];
   readonly replay_fingerprint: string;
   readonly support_refusal: {
     readonly captured: true;
@@ -153,10 +185,13 @@ export type PreferenceReplayBridge =
       readonly format_version: "moodboard.viewer-preference-replay-bridge.v1";
       readonly generator_revision: "moodboard.preference-replay-viewer-bridge.v1";
       readonly input: {
-        readonly byte_size: number;
-        readonly replay_fingerprint: string;
-        readonly schema_version: "moodboard.preference-demo-replay.v1";
-        readonly sha256: string;
+        readonly features: PreferenceFeatureInputIdentity;
+        readonly replay: {
+          readonly byte_size: number;
+          readonly replay_fingerprint: string;
+          readonly schema_version: "moodboard.preference-demo-replay.v1";
+          readonly sha256: string;
+        };
       };
       readonly state: "projected";
     };
@@ -214,6 +249,70 @@ function bindingsAt(value: unknown, path: string): PreferenceReplayBindings {
   };
 }
 
+function featureInputAt(value: unknown, path: string): PreferenceFeatureInputIdentity {
+  const record = objectAt(value, path);
+  closed(
+    record,
+    [
+      "board_entity_id",
+      "board_id",
+      "byte_size",
+      "candidate_pool_sha256",
+      "descriptor_fingerprint",
+      "feature_schema_id",
+      "model_key",
+      "producer_id",
+      "producer_revision",
+      "schema_version",
+      "scope_sha256",
+      "sha256",
+      "source_report_sha256",
+    ],
+    path,
+  );
+  const descriptor = digestAt(record.descriptor_fingerprint, `${path}.descriptor_fingerprint`);
+  const modelKey = stringAt(record.model_key, `${path}.model_key`);
+  if (!modelKey.startsWith(`moodboard_${descriptor}_`)) {
+    throw new Error(`${path}.model_key must bind descriptor_fingerprint`);
+  }
+  const byteSize = countAt(record.byte_size, `${path}.byte_size`);
+  if (byteSize < 1) throw new Error(`${path}.byte_size must be positive`);
+  return {
+    board_entity_id: uuidAt(record.board_entity_id, `${path}.board_entity_id`),
+    board_id: digestAt(record.board_id, `${path}.board_id`),
+    byte_size: byteSize,
+    candidate_pool_sha256: digestAt(
+      record.candidate_pool_sha256,
+      `${path}.candidate_pool_sha256`,
+    ),
+    descriptor_fingerprint: descriptor,
+    feature_schema_id: digestAt(record.feature_schema_id, `${path}.feature_schema_id`),
+    model_key: modelKey,
+    producer_id: digestAt(record.producer_id, `${path}.producer_id`),
+    producer_revision: stringAt(record.producer_revision, `${path}.producer_revision`),
+    schema_version: exact(
+      record.schema_version,
+      ["moodboard.preference-feature-artifact.v2"],
+      `${path}.schema_version`,
+    ),
+    scope_sha256: digestAt(record.scope_sha256, `${path}.scope_sha256`),
+    sha256: digestAt(record.sha256, `${path}.sha256`),
+    source_report_sha256: digestAt(
+      record.source_report_sha256,
+      `${path}.source_report_sha256`,
+    ),
+  };
+}
+
+function probeAssetAt(value: unknown, path: string): PreferenceReplayProbeAsset {
+  const record = objectAt(value, path);
+  closed(record, ["asset_id", "content_ref"], path);
+  return {
+    asset_id: uuidAt(record.asset_id, `${path}.asset_id`),
+    content_ref: digestAt(record.content_ref, `${path}.content_ref`),
+  };
+}
+
 function modelAt(value: unknown, path: string): PreferenceReplayModelSnapshot {
   const record = objectAt(value, path);
   closed(
@@ -241,6 +340,99 @@ function modelAt(value: unknown, path: string): PreferenceReplayModelSnapshot {
   };
 }
 
+function probesAt(
+  value: unknown,
+  path: string,
+  aggregateBefore: number,
+  aggregateAfter: number,
+): readonly PreferenceReplayProbe[] {
+  if (!Array.isArray(value) || value.length !== 8) {
+    throw new Error(`${path} must contain exactly 8 probes`);
+  }
+  const pairIds = new Set<string>();
+  const preferredLabels = new Map<string, string>();
+  const probes = value.map((entry, index): PreferenceReplayProbe => {
+    const probePath = `${path}[${index}]`;
+    const record = objectAt(entry, probePath);
+    closed(
+      record,
+      [
+        "delta",
+        "left",
+        "pair_id",
+        "policy_b_preferred",
+        "probability_after",
+        "probability_before",
+        "right",
+      ],
+      probePath,
+    );
+    const pairId = digestAt(record.pair_id, `${probePath}.pair_id`);
+    if (pairIds.has(pairId)) throw new Error(`${path} pair IDs must be unique`);
+    pairIds.add(pairId);
+    const left = probeAssetAt(record.left, `${probePath}.left`);
+    const right = probeAssetAt(record.right, `${probePath}.right`);
+    if (left.asset_id === right.asset_id) throw new Error(`${probePath} sides must be distinct`);
+    const preferredRecord = objectAt(record.policy_b_preferred, `${probePath}.policy_b_preferred`);
+    closed(
+      preferredRecord,
+      ["asset_id", "content_ref", "label"],
+      `${probePath}.policy_b_preferred`,
+    );
+    const preferred = {
+      ...probeAssetAt(
+        { asset_id: preferredRecord.asset_id, content_ref: preferredRecord.content_ref },
+        `${probePath}.policy_b_preferred.identity`,
+      ),
+      label: stringAt(preferredRecord.label, `${probePath}.policy_b_preferred.label`),
+    };
+    if (
+      ![left, right].some(
+        (candidate) => candidate.asset_id === preferred.asset_id
+          && candidate.content_ref === preferred.content_ref,
+      )
+    ) {
+      throw new Error(`${probePath} policy B preferred identity must be present on one side`);
+    }
+    const preferredIdentity = `${preferred.content_ref}\0${preferred.label}`;
+    const priorPreferred = preferredLabels.get(preferred.asset_id);
+    if (priorPreferred !== undefined && priorPreferred !== preferredIdentity) {
+      throw new Error(`${path} sidecar identity/label mapping is inconsistent`);
+    }
+    preferredLabels.set(preferred.asset_id, preferredIdentity);
+    const probabilityBefore = probabilityAt(
+      record.probability_before,
+      `${probePath}.probability_before`,
+    );
+    const probabilityAfter = probabilityAt(
+      record.probability_after,
+      `${probePath}.probability_after`,
+    );
+    const delta = finiteAt(record.delta, `${probePath}.delta`);
+    if (Math.abs(delta - (probabilityAfter - probabilityBefore)) > 1e-12) {
+      throw new Error(`${probePath} probe delta contradicts before and after`);
+    }
+    return {
+      delta,
+      left,
+      pair_id: pairId,
+      policy_b_preferred: preferred,
+      probability_after: probabilityAfter,
+      probability_before: probabilityBefore,
+      right,
+    };
+  });
+  const meanBefore = probes.reduce((sum, probe) => sum + probe.probability_before, 0) / 8;
+  const meanAfter = probes.reduce((sum, probe) => sum + probe.probability_after, 0) / 8;
+  if (
+    Math.abs(meanBefore - aggregateBefore) > 1e-12
+    || Math.abs(meanAfter - aggregateAfter) > 1e-12
+  ) {
+    throw new Error(`${path} aggregate arithmetic drifted`);
+  }
+  return probes;
+}
+
 function evidenceAt(value: unknown, path: string): Omit<PreferenceReplayEvidence, "state" | "status_label"> {
   const record = objectAt(value, path);
   closed(
@@ -253,6 +445,7 @@ function evidenceAt(value: unknown, path: string): Omit<PreferenceReplayEvidence
       "model_a",
       "model_b",
       "non_claims",
+      "probes",
       "replay_fingerprint",
       "support_refusal",
       "verification",
@@ -430,6 +623,7 @@ function evidenceAt(value: unknown, path: string): Omit<PreferenceReplayEvidence
     model_a: modelA,
     model_b: modelB,
     non_claims: nonClaims,
+    probes: probesAt(record.probes, `${path}.probes`, before, after),
     replay_fingerprint: digestAt(record.replay_fingerprint, `${path}.replay_fingerprint`),
     support_refusal: {
       captured: true,
@@ -477,34 +671,71 @@ export function decodePreferenceReplayBridge(value: unknown): PreferenceReplayBr
     };
   }
   const input = objectAt(record.input, "$preference_replay_bridge.input");
-  closed(
-    input,
-    ["byte_size", "replay_fingerprint", "schema_version", "sha256"],
-    "$preference_replay_bridge.input",
+  closed(input, ["features", "replay"], "$preference_replay_bridge.input");
+  const features = featureInputAt(
+    input.features,
+    "$preference_replay_bridge.input.features",
   );
-  const byteSize = countAt(input.byte_size, "$preference_replay_bridge.input.byte_size");
-  if (byteSize < 1) throw new Error("$preference_replay_bridge.input.byte_size must be positive");
+  const replay = objectAt(input.replay, "$preference_replay_bridge.input.replay");
+  closed(
+    replay,
+    ["byte_size", "replay_fingerprint", "schema_version", "sha256"],
+    "$preference_replay_bridge.input.replay",
+  );
+  const byteSize = countAt(
+    replay.byte_size,
+    "$preference_replay_bridge.input.replay.byte_size",
+  );
+  if (byteSize < 1) {
+    throw new Error("$preference_replay_bridge.input.replay.byte_size must be positive");
+  }
   const replayFingerprint = digestAt(
-    input.replay_fingerprint,
-    "$preference_replay_bridge.input.replay_fingerprint",
+    replay.replay_fingerprint,
+    "$preference_replay_bridge.input.replay.replay_fingerprint",
   );
   const evidence = evidenceAt(record.evidence, "$preference_replay_bridge.evidence");
   if (evidence.replay_fingerprint !== replayFingerprint) {
     throw new Error("$preference_replay_bridge replay fingerprint drifted");
+  }
+  const featureBindings = {
+    board_entity_id: features.board_entity_id,
+    board_id: features.board_id,
+    candidate_pool_sha256: features.candidate_pool_sha256,
+    descriptor_fingerprint: features.descriptor_fingerprint,
+    feature_producer_id: features.producer_id,
+    feature_producer_revision: features.producer_revision,
+    feature_schema_id: features.feature_schema_id,
+    model_key: features.model_key,
+    schema_version: features.schema_version,
+    scope_sha256: features.scope_sha256,
+    source_report_sha256: features.source_report_sha256,
+  };
+  if (
+    (Object.keys(featureBindings) as (keyof PreferenceReplayBindings)[]).some(
+      (key) => featureBindings[key] !== evidence.bindings[key],
+    )
+  ) {
+    throw new Error("$preference_replay_bridge feature input identity contradicts bindings");
   }
   return {
     evidence,
     format_version: "moodboard.viewer-preference-replay-bridge.v1",
     generator_revision: "moodboard.preference-replay-viewer-bridge.v1",
     input: {
-      byte_size: byteSize,
-      replay_fingerprint: replayFingerprint,
-      schema_version: exact(
-        input.schema_version,
-        ["moodboard.preference-demo-replay.v1"],
-        "$preference_replay_bridge.input.schema_version",
-      ),
-      sha256: digestAt(input.sha256, "$preference_replay_bridge.input.sha256"),
+      features,
+      replay: {
+        byte_size: byteSize,
+        replay_fingerprint: replayFingerprint,
+        schema_version: exact(
+          replay.schema_version,
+          ["moodboard.preference-demo-replay.v1"],
+          "$preference_replay_bridge.input.replay.schema_version",
+        ),
+        sha256: digestAt(
+          replay.sha256,
+          "$preference_replay_bridge.input.replay.sha256",
+        ),
+      },
     },
     state,
   };

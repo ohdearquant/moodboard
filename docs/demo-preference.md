@@ -170,11 +170,14 @@ After the real replay is retained, freeze it and rebuild:
 ```bash
 npm --prefix viewer run preference-replay:write -- \
   --input /absolute/path/to/preference-replay.json \
+  --features /absolute/path/to/preference-features-v2.json \
   --write src/generated/preference-replay-bridge.json
 npm --prefix viewer run build
 ```
 
-The compiler accepts only the producer's canonical JSON and rederives the replay fingerprint,
+The compiler accepts only the producer's canonical replay plus its exact preference-feature
+sidecar. It SHA-binds both inputs and closes the candidate identities and human-readable labels
+used by the eight-probe presentation. It rederives the replay fingerprint,
 eight-probe means, delta direction, event total, descriptor-bound model key, support refusal,
 distinct model identities, FANN gates, model-A immutability, and exact restart verification. The
 bridge retains the report, feature-schema, candidate-pool, scope, model-bundle, and replay

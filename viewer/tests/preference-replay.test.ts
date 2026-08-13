@@ -8,6 +8,25 @@ import {
 function projectedBridge(adaptationDirectionObserved = true): any {
   const before = 0.22;
   const after = adaptationDirectionObserved ? 0.78 : 0.1;
+  const probes = Array.from({ length: 8 }, (_, index) => ({
+    delta: after - before,
+    left: {
+      asset_id: `00000000-0000-4000-8000-${String(index * 2 + 1).padStart(12, "0")}`,
+      content_ref: (index * 2 + 1).toString(16).padStart(64, "0"),
+    },
+    pair_id: (index + 1).toString(16).padStart(64, "0"),
+    policy_b_preferred: {
+      asset_id: `00000000-0000-4000-8000-${String(index * 2 + 2).padStart(12, "0")}`,
+      content_ref: (index * 2 + 2).toString(16).padStart(64, "0"),
+      label: `candidate-${index + 1}.png`,
+    },
+    probability_after: after,
+    probability_before: before,
+    right: {
+      asset_id: `00000000-0000-4000-8000-${String(index * 2 + 2).padStart(12, "0")}`,
+      content_ref: (index * 2 + 2).toString(16).padStart(64, "0"),
+    },
+  }));
   return {
     evidence: {
       bindings: {
@@ -63,6 +82,7 @@ function projectedBridge(adaptationDirectionObserved = true): any {
         "No online learning: immutable snapshots are retrained.",
         "No coherence or conformal claim: preference stays separate.",
       ],
+      probes,
       replay_fingerprint: "d".repeat(64),
       support_refusal: {
         captured: true,
@@ -80,17 +100,34 @@ function projectedBridge(adaptationDirectionObserved = true): any {
     format_version: "moodboard.viewer-preference-replay-bridge.v1",
     generator_revision: "moodboard.preference-replay-viewer-bridge.v1",
     input: {
-      byte_size: 1024,
-      replay_fingerprint: "d".repeat(64),
-      schema_version: "moodboard.preference-demo-replay.v1",
-      sha256: "e".repeat(64),
+      features: {
+        board_entity_id: "01915124-7abc-7def-8abc-0123456789ab",
+        board_id: "1".repeat(64),
+        byte_size: 512,
+        candidate_pool_sha256: "2".repeat(64),
+        descriptor_fingerprint: "3".repeat(64),
+        feature_schema_id: "4".repeat(64),
+        model_key: `moodboard_${"3".repeat(64)}_1024`,
+        producer_id: "f".repeat(64),
+        producer_revision: "moodboard.preference-producer.v1",
+        schema_version: "moodboard.preference-feature-artifact.v2",
+        scope_sha256: "5".repeat(64),
+        sha256: "0".repeat(64),
+        source_report_sha256: "6".repeat(64),
+      },
+      replay: {
+        byte_size: 1024,
+        replay_fingerprint: "d".repeat(64),
+        schema_version: "moodboard.preference-demo-replay.v1",
+        sha256: "e".repeat(64),
+      },
     },
     state: "projected",
   };
 }
 
 describe("preference replay viewer bridge", () => {
-  it("accepts only the closed evidence-free fallback sentinel", () => {
+  it("keeps fallback decode compatibility while shipping the real projected bridge", () => {
     const fallback = {
       evidence: null,
       format_version: "moodboard.viewer-preference-replay-bridge.v1",
@@ -99,8 +136,11 @@ describe("preference replay viewer bridge", () => {
       state: "fallback",
     };
     expect(decodePreferenceReplayBridge(fallback)).toEqual(fallback);
-    expect(preferenceReplayBridge).toEqual(fallback);
-    expect(measuredPreferenceReplayEvidence).toBeNull();
+    expect(preferenceReplayBridge.state).toBe("projected");
+    expect(measuredPreferenceReplayEvidence?.probes).toHaveLength(8);
+    expect(measuredPreferenceReplayEvidence?.probes[0]?.policy_b_preferred.label).toBe(
+      "style_claude_ford--original.jpg",
+    );
     expect(() => decodePreferenceReplayBridge({ ...fallback, future: true })).toThrow(
       /unknown key/i,
     );
@@ -128,6 +168,9 @@ describe("preference replay viewer bridge", () => {
     expect(evidence.verification.model_a_predictions_unchanged_after_model_b).toBe(true);
     expect(evidence.model_a.preference_model_id).not.toBe(evidence.model_b.preference_model_id);
     expect(evidence.bindings.source_report_sha256).toBe("6".repeat(64));
+    expect(evidence.probes).toHaveLength(8);
+    expect(evidence.probes[0]!.policy_b_preferred.label).toBe("candidate-1.png");
+    expect(evidence.probes[0]!.delta).toBeCloseTo(0.56);
     expect(evidence.non_claims.join(" ")).toMatch(/No human preference evidence/i);
     expect(evidence.non_claims.join(" ")).toMatch(/No online learning/i);
     expect(evidence.non_claims.join(" ")).toMatch(/No coherence or conformal claim/i);
@@ -195,5 +238,26 @@ describe("preference replay viewer bridge", () => {
     const support = projectedBridge();
     support.evidence.support_refusal.message = "observed zero";
     expect(() => decodePreferenceReplayBridge(support)).toThrow(/support refusal message/i);
+
+    const duplicateProbe = projectedBridge();
+    duplicateProbe.evidence.probes[1].pair_id = duplicateProbe.evidence.probes[0].pair_id;
+    expect(() => decodePreferenceReplayBridge(duplicateProbe)).toThrow(/pair IDs.*unique/i);
+
+    const absentPreferred = projectedBridge();
+    absentPreferred.evidence.probes[0].policy_b_preferred.asset_id =
+      "00000000-0000-4000-8000-999999999999";
+    expect(() => decodePreferenceReplayBridge(absentPreferred)).toThrow(/preferred.*present/i);
+
+    const probeArithmetic = projectedBridge();
+    probeArithmetic.evidence.probes[0].delta = 0.1;
+    expect(() => decodePreferenceReplayBridge(probeArithmetic)).toThrow(/probe.*delta/i);
+
+    const label = projectedBridge();
+    label.evidence.probes[0].policy_b_preferred.label = "";
+    expect(() => decodePreferenceReplayBridge(label)).toThrow(/label/i);
+
+    const sidecarBinding = projectedBridge();
+    sidecarBinding.input.features.scope_sha256 = "9".repeat(64);
+    expect(() => decodePreferenceReplayBridge(sidecarBinding)).toThrow(/feature.*identity/i);
   });
 });

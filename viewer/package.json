@@ -12,7 +12,7 @@
     "pixel-rag:check": "uv run --frozen --project .. --python 3.14.3 python -m moodboard.pixel_rag_viewer --check src/generated/pixel-rag-bridge.json",
     "pixel-rag:write": "uv run --frozen --project .. --python 3.14.3 python -m moodboard.pixel_rag_viewer",
     "firefly:check": "uv run --frozen --project .. --python 3.14.3 python -m moodboard.firefly_viewer --check src/generated/firefly-bridge.json",
-    "preference-replay:check": "uv run --frozen --project .. --python 3.14.3 python -m moodboard.preference_replay_viewer --check src/generated/preference-replay-bridge.json",
+    "preference-replay:check": "uv run --frozen --project .. --python 3.14.3 python -m moodboard.preference_replay_viewer --check src/generated/preference-replay-bridge.json --require-projected",
     "preference-replay:write": "uv run --frozen --project .. --python 3.14.3 python -m moodboard.preference_replay_viewer",
     "fixture:check": "uv run --frozen --python 3.14.3 python scripts/generate_showcase_fixture.py --check tests/fixtures/showcase",
     "fixture:write": "uv run --frozen --python 3.14.3 python scripts/generate_showcase_fixture.py --write tests/fixtures/showcase",
