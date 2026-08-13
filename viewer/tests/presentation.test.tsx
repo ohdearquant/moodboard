@@ -15,6 +15,26 @@ async function modelFor(bytes = fixtureBytes()) {
 }
 
 describe("editorial report presentation", () => {
+  it("renders the exact policy_simulated evidence label", async () => {
+    const model = await modelFor();
+    render(
+      <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
+    );
+
+    const panel = screen.getByRole("region", { name: "Governed preference replay" });
+    expect(panel.textContent).toContain("policy_simulated");
+  });
+
+  it("renders the exact Pixel RAG routing-control honesty label", async () => {
+    const model = await modelFor();
+    render(
+      <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
+    );
+
+    const lab = screen.getByRole("region", { name: "Pixel RAG intent lab" });
+    expect(lab.textContent).toContain("routing control, not learned retrieval quality");
+  });
+
   it("routes the same source through two honest, intent-specific Pixel RAG views", async () => {
     const model = await modelFor();
     const { container } = render(
@@ -165,7 +185,7 @@ describe("editorial report presentation", () => {
     expect(panel.previousElementSibling).toBe(firefly);
     expect(
       within(panel).getByText(
-        "Independent preference mechanism replay · policy-simulated · not trained on these Firefly outputs",
+        "Independent preference mechanism replay · policy_simulated · not trained on these Firefly outputs",
       ),
     ).toBeTruthy();
     expect(within(panel).getByText("0.000248")).toBeTruthy();

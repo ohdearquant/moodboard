@@ -670,7 +670,7 @@ function PreferenceReplayPanel({
       <div className="section-heading preference-heading">
         <div>
           <p className="eyebrow">
-            Independent preference mechanism replay · policy-simulated · not trained on these Firefly outputs
+            Independent preference mechanism replay · policy_simulated · not trained on these Firefly outputs
           </p>
           <h2>A frozen policy replay, before and after.</h2>
         </div>
@@ -1017,7 +1017,7 @@ function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
                 <strong>{intent.metrics.find((metric) => metric.id === "precision_at_3")?.display}</strong>
                 <small>P@3 after the explicit collection gate</small>
               </div>
-              <p>Routing metrics test deterministic filter integrity. They are not learned quality or probabilities.</p>
+              <p>routing control, not learned retrieval quality · metrics test deterministic filter integrity; values are not probabilities.</p>
             </div>
           ) : null}
           {intent.raw_score_order?.length ? (
