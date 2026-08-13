@@ -38,10 +38,6 @@ import {
   verifiedPixelRagArtifact,
 } from "./pixel-rag";
 import {
-  measuredPreferenceReplayEvidence,
-  type PreferenceReplayEvidence,
-} from "./preference-replay";
-import {
   abstainedAssets,
   activeAssetId,
   initialViewerState,
@@ -231,14 +227,30 @@ function SafeImage({
   source,
   alt,
   fallback,
+  width,
+  height,
+  loading = "lazy",
 }: {
   readonly source: SafeThumbnailSource | undefined;
   readonly alt: string;
   readonly fallback: string;
+  readonly width?: number | undefined;
+  readonly height?: number | undefined;
+  readonly loading?: "eager" | "lazy";
 }): ReactNode {
   const [failed, setFailed] = useState(false);
   if (!source || failed) return <div className="image-fallback" role="img" aria-label={fallback}>{fallback}</div>;
-  return <img src={source} alt={alt} onError={() => setFailed(true)} />;
+  return (
+    <img
+      src={source}
+      alt={alt}
+      width={width}
+      height={height}
+      loading={loading}
+      decoding="async"
+      onError={() => setFailed(true)}
+    />
+  );
 }
 
 function CandidatePreview({ asset, model }: { readonly asset: Asset; readonly model: ReportModel }): ReactNode {
@@ -523,122 +535,107 @@ function StoryStrip({ model }: { readonly model: ReportModel }): ReactNode {
   );
 }
 
-function PreferenceReplayPanel({
-  evidence,
-}: {
-  readonly evidence: PreferenceReplayEvidence | null;
-}): ReactNode {
-  if (evidence === null) {
-    return (
-      <section className="pixel-preference preference-fallback" aria-label="Governed preference replay">
-        <div className="pixel-section-heading">
-          <div>
-            <p className="eyebrow">Preference replay · governed boundary</p>
-            <h3>Real Khive replay not frozen</h3>
-          </div>
-          <span>fallback sentinel</span>
-        </div>
-        <p>
-          This build will not substitute fixture probabilities or claim that a model adapted.
-          A measured panel appears only after the closed Khive A→B replay passes its identity,
-          support, immutability, FANN, and restart checks.
-        </p>
-        <div className="preference-fallback-grid">
-          <article>
-            <span>Support gate</span>
-            <strong>Refuse before train</strong>
-            <small>64 / 16 / 16 decisive groups plus 16 calibration ties</small>
-          </article>
-          <article>
-            <span>Evidence class</span>
-            <strong>Policy-simulated only</strong>
-            <small>No human feedback, online learning, or coherence claim</small>
-          </article>
-        </div>
-      </section>
-    );
-  }
-
-  const delta = evidence.delta;
-  const snapshots = [
-    {
-      label: "Model A · baseline snapshot",
-      model: evidence.model_a,
-      probability: delta.mean_probability_for_policy_b_preferred_before,
-      eventLabel: `${evidence.model_a.snapshot_event_count} frozen events`,
-    },
-    {
-      label: "Model B · appended-policy snapshot",
-      model: evidence.model_b,
-      probability: delta.mean_probability_for_policy_b_preferred_after,
-      eventLabel: `${evidence.model_b.snapshot_event_count} frozen events`,
-    },
-  ] as const;
-  const formattedDelta = `${delta.mean_delta >= 0 ? "+" : ""}${delta.mean_delta.toFixed(3)}`;
-
+function GovernedReferenceBoard({ model }: { readonly model: ReportModel }): ReactNode {
   return (
-    <section className="pixel-preference preference-measured" aria-label="Governed preference replay">
-      <div className="pixel-section-heading">
+    <section className="reference-board" aria-label="Governed reference board">
+      <div className="section-heading reference-board-heading">
         <div>
-          <p className="eyebrow">Preference replay · immutable snapshots</p>
-          <h3>{delta.adaptation_direction_observed ? "Measured direction changed" : "No improvement observed"}</h3>
+          <p className="eyebrow">Governed source set</p>
+          <h2>Governed reference board · {model.report.references.length} immutable references</h2>
         </div>
-        <span>policy-simulated · real Khive replay</span>
+        <p>No similarity score is inferred at board level. Identity stays attached to every tile.</p>
       </div>
-      <p>
-        Mean probability assigned to Policy B’s preferred side across {delta.probe_count} frozen
-        probes. Labels come from disclosed feature policies—not people—and preference remains
-        separate from compatibility and coherence evidence. The replay retains {evidence.event_counts.total}
-        {" "}events; Model B adds {evidence.event_counts.model_b_appended_train_decisive} new train
-        judgments without mutating Model A.
-      </p>
-      <div className="preference-snapshots">
-        {snapshots.map((snapshot, index) => (
-          <article key={snapshot.model.preference_model_id}>
-            <span>{snapshot.label}</span>
-            <div className="preference-probability">
-              <strong>{snapshot.probability.toFixed(3)}</strong>
-              <small>mean P(B-preferred)</small>
+      <div className="reference-board-strip">
+        {model.report.references.map((reference, index) => (
+          <article key={reference.reference_id} data-testid="governed-reference-tile">
+            <div className="reference-board-frame">
+              <SafeImage
+                source={model.referenceSources.get(reference.reference_id)}
+                alt={`Governed reference ${reference.reference_id}`}
+                fallback="Governed reference preview could not be rendered."
+                width={reference.thumbnail.width}
+                height={reference.thumbnail.height}
+                loading={index < 6 ? "eager" : "lazy"}
+              />
+              <span aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
             </div>
-            <p>{snapshot.eventLabel}</p>
-            <dl>
-              <div>
-                <dt>Model ID</dt>
-                <dd title={snapshot.model.preference_model_id}>{shortDigest(snapshot.model.preference_model_id)}</dd>
-              </div>
-              <div>
-                <dt>Fingerprint</dt>
-                <dd title={snapshot.model.model_fingerprint}>{shortDigest(snapshot.model.model_fingerprint)}</dd>
-              </div>
-              <div>
-                <dt>Bundle</dt>
-                <dd title={snapshot.model.bundle_ref}>{shortDigest(snapshot.model.bundle_ref)}</dd>
-              </div>
-            </dl>
-            {index === 0 ? <span className="preference-arrow" aria-hidden="true">→</span> : null}
+            <strong title={reference.reference_id}>{reference.reference_id}</strong>
+            <small title={reference.content_sha256}>SHA-256 · {shortDigest(reference.content_sha256)}</small>
           </article>
         ))}
       </div>
-      <div className={`preference-delta preference-delta-${delta.outcome}`}>
-        <span>Frozen-probe delta</span>
-        <strong>{formattedDelta}</strong>
-        <small>{delta.adaptation_direction_observed ? "improvement observed" : "no improvement observed"}</small>
-      </div>
-      <ul className="preference-verification" aria-label="Preference replay verification">
-        <li>FANN verified</li>
-        <li>A unchanged</li>
-        <li>restart exact</li>
-        <li title={evidence.support_refusal.message}>below-support refusal captured</li>
-      </ul>
-      <div className="preference-provenance">
-        <span>Feature schema · {shortDigest(evidence.bindings.feature_schema_id)}</span>
-        <span>Report · {shortDigest(evidence.bindings.source_report_sha256)}</span>
-        <span>Replay · {shortDigest(evidence.replay_fingerprint)}</span>
-      </div>
-      <ul className="preference-nonclaims" aria-label="Preference replay non-claims">
-        {evidence.non_claims.slice(0, 3).map((claim) => <li key={claim}>{claim}</li>)}
-      </ul>
     </section>
+  );
+}
+
+function CandidateHeroGrid({
+  model,
+  activeId,
+  dispatch,
+}: {
+  readonly model: ReportModel;
+  readonly activeId: string | null;
+  readonly dispatch: Dispatch<ViewerAction>;
+}): ReactNode {
+  const ordered = [...rankedAssets(model), ...abstainedAssets(model)];
+  const selectedId = activeId ?? ordered[0]?.asset_id ?? null;
+  if (ordered.length === 0) return null;
+
+  return (
+    <section className="candidate-hero" aria-label={`${ordered.length} candidate overview`}>
+      <div className="section-heading candidate-hero-heading">
+        <div>
+          <p className="eyebrow">Complete candidate field</p>
+          <h2>{ordered.length} measured outputs, one scan.</h2>
+        </div>
+        <p>Engine rank first; equal ranks and abstentions retain report order. Select a tile for its full evidence card.</p>
+      </div>
+      <div className="candidate-hero-grid">
+        {ordered.map((asset, index) => {
+          const image = asset.image;
+          const active = asset.asset_id === selectedId;
+          return (
+            <button
+              key={asset.asset_id}
+              type="button"
+              className={`candidate-hero-tile candidate-hero-${asset.state} ${active ? "candidate-hero-active" : ""}`}
+              data-asset-id={asset.asset_id}
+              aria-label={`Inspect candidate ${asset.asset_id}`}
+              aria-pressed={active}
+              onClick={() => dispatch({ type: "inspect", assetId: asset.asset_id })}
+            >
+              <span className="candidate-hero-image">
+                <SafeImage
+                  source={model.candidateSources.get(asset.asset_id)}
+                  alt={`Candidate ${asset.asset_id}`}
+                  fallback={image ? "Candidate preview could not be rendered." : "Candidate preview unavailable in report 1.0."}
+                  width={image?.thumbnail.width}
+                  height={image?.thumbnail.height}
+                  loading={index < 12 ? "eager" : "lazy"}
+                />
+                <i>{asset.state === "scored" ? `#${asset.rank}` : "REFUSED"}</i>
+              </span>
+              <strong title={asset.asset_id}>{asset.asset_id}</strong>
+              <small>
+                {asset.state === "scored"
+                  ? `conformal p ${String(asset.score)}`
+                  : humanizeToken(asset.reason)}
+              </small>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function CoreVerificationLine({ model }: { readonly model: ReportModel }): ReactNode {
+  const scored = model.report.assets.filter((asset) => asset.state === "scored").length;
+  const abstained = model.report.assets.length - scored;
+  return (
+    <p className="core-verification-line" aria-label="Core report verification">
+      Verified · {model.report.references.length} governed references · {model.report.assets.length} candidate outcomes · {scored} scored · {abstained} abstained · engine rank preserved · no merged preference score
+    </p>
   );
 }
 
@@ -901,7 +898,6 @@ function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
           ) : null}
         </section>
 
-        <PreferenceReplayPanel evidence={measuredPreferenceReplayEvidence} />
       </div>
     </section>
   );
@@ -967,6 +963,7 @@ function FilterBar({ filter, dispatch, scored, abstained }: {
           key={option.value}
           type="button"
           aria-pressed={filter === option.value}
+          disabled={option.count === 0}
           onClick={() => dispatch({ type: "filter", filter: option.value })}
         >
           {option.label} <span>{option.count}</span>
@@ -984,27 +981,28 @@ function AssetCollection({ stateModel, activeId, filter, dispatch }: {
 }): ReactNode {
   const scored = rankedAssets(stateModel);
   const abstained = abstainedAssets(stateModel) as readonly AbstainedAsset[];
+  const visible: readonly Asset[] = filter === "scored"
+    ? scored
+    : filter === "abstained" ? abstained : [...scored, ...abstained];
+  const selected = visible.find((asset) => asset.asset_id === activeId) ?? visible[0];
   if (scored.length + abstained.length === 0) {
     return <section className="empty-report"><p className="eyebrow">No candidates</p><h2>This report contains board evidence and provenance, but no assets.</h2></section>;
   }
   return (
     <section className="assets-section" aria-labelledby="assets-heading">
       <div className="section-heading assets-title">
-        <div><p className="eyebrow">Candidate evidence</p><h2 id="assets-heading">Inspect what moved the review.</h2></div>
+        <div><p className="eyebrow">Selected candidate evidence</p><h2 id="assets-heading">One record, fully expanded.</h2></div>
         <FilterBar filter={filter} dispatch={dispatch} scored={scored.length} abstained={abstained.length} />
       </div>
-      {filter !== "abstained" && scored.length > 0 ? (
-        <div className="asset-group">
-          <h3 className="group-title">Ranked candidates <span>engine-provided order</span></h3>
-          {scored.map((asset) => <AssetCard key={asset.asset_id} asset={asset} model={stateModel} active={activeId === asset.asset_id} dispatch={dispatch} />)}
+      {selected ? (
+        <div className="asset-group selected-asset-group">
+          <h3 className="group-title">
+            {selected.state === "scored" ? `Rank ${selected.rank}` : "Abstained"}
+            <span>{selected.state === "scored" ? "engine-provided order" : "unranked by design"}</span>
+          </h3>
+          <AssetCard asset={selected} model={stateModel} active dispatch={dispatch} />
         </div>
-      ) : null}
-      {filter !== "scored" && abstained.length > 0 ? (
-        <div className="asset-group abstained-group">
-          <h3 className="group-title">Abstained candidates <span>unranked by design</span></h3>
-          {abstained.map((asset) => <AssetCard key={asset.asset_id} asset={asset} model={stateModel} active={activeId === asset.asset_id} dispatch={dispatch} />)}
-        </div>
-      ) : null}
+      ) : <p className="empty-inline">No candidates match this filter.</p>}
     </section>
   );
 }
@@ -1138,11 +1136,19 @@ function ReportView({
         </div>
       </header>
       <StoryStrip model={model} />
-      <PixelRagLab model={model} />
-      <ReportDiagnostics model={model} />
-      <ScoreOverview model={model} activeId={activeId} />
-      <TieList model={model} />
+      <GovernedReferenceBoard model={model} />
+      <CandidateHeroGrid model={model} activeId={activeId} dispatch={dispatch} />
+      <CoreVerificationLine model={model} />
       <AssetCollection stateModel={model} activeId={activeId} filter={filter} dispatch={dispatch} />
+      <PixelRagLab model={model} />
+      <details className="report-measurement-audit">
+        <summary>Compatibility audit &amp; comparisons</summary>
+        <div>
+          <ReportDiagnostics model={model} />
+          <ScoreOverview model={model} activeId={activeId} />
+          <TieList model={model} />
+        </div>
+      </details>
       <DetailsAndProvenance model={model} />
       <footer className="report-footer">
         <Wordmark />
@@ -1193,4 +1199,4 @@ export function ViewerApp(): ReactNode {
   return <ReportView model={state.model} activeId={activeId} filter={state.outcomeFilter} dispatch={dispatch} onFile={onFile} />;
 }
 
-export const __test = { PreferenceReplayPanel, ReportView };
+export const __test = { FilterBar, ReportView };
