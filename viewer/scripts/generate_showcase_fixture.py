@@ -1,4 +1,4 @@
-"""Generate Adobe-facing procedural imagery through the real Moodboard engine.
+"""Generate showcase procedural imagery through the real Moodboard engine.
 
 The source recipe is deterministic and owns pixels only. The JSON report is never assembled or
 patched here: ``moodboard build`` and ``moodboard rank`` are the only report producers.

@@ -1,6 +1,6 @@
-# Public-domain corpus for the Adobe demo
+# Governed public-domain visual corpus
 
-The interview demo uses a reviewed 15-image corpus, not PACS, WikiArt, search-result
+The visual-evidence workflow uses a reviewed 15-image corpus, not PACS, WikiArt, search-result
 thumbnails, or unverified web images. The source catalogue is
 [`moodboard/demo_sources_v1.json`](../moodboard/demo_sources_v1.json): three apple photographs,
 four lemon photographs, four Claude Lorrain paintings, and four Vincent van Gogh paintings.

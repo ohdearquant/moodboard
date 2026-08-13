@@ -1,4 +1,4 @@
-"""Deterministic, governed preference-learning replay for the Adobe demo.
+"""Deterministic, governed preference-learning replay.
 
 This module deliberately produces evidence about a *simulated feature policy*, not
 human taste.  It drives Khive's real randomized serve/judge event path, immutable FANN

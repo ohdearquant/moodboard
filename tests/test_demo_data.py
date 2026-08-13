@@ -1,4 +1,4 @@
-"""Contract tests for the public-domain Adobe demo corpus acquisition."""
+"""Contract tests for governed public-domain corpus acquisition."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-# Governed preference replay for the Adobe demo
+# Governed preference replay
 
 The preference replay demonstrates a narrow, auditable claim: Khive can collect randomized
 pairwise events over Moodboard's governed 10-dimensional feature artifact, refuse training below

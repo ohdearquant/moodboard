@@ -1,8 +1,8 @@
 """Freeze the measured Adobe Firefly web iteration into a closed offline-viewer bridge.
 
 This contract is deliberately independent of the Pixel RAG engine artifact.  It binds three
-already-frozen evidence documents plus the exact image bytes and Khive transport records used by
-the interview demo.  It never relabels a deterministic compositor pass as intrinsic generator
+already-frozen evidence documents plus the exact image bytes and Khive transport records. It
+never relabels a deterministic compositor pass as intrinsic generator
 locality, and it keeps the restyle acceptance decision as ``not_computed``.
 """
 
@@ -967,7 +967,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.check is None:
-        raise SystemExit("--check is required; use the tracked Adobe demo projector to write")
+        raise SystemExit("--check is required; use the tracked evidence projector to write")
     try:
         value = read_viewer_firefly_bridge(args.check)
     except (FireflyViewerBridgeError, OSError) as error:

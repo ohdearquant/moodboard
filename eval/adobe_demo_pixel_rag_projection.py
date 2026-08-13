@@ -1,4 +1,4 @@
-"""Project the frozen Adobe-demo evidence into the closed Pixel RAG contract.
+"""Project frozen governed evidence into the closed Pixel RAG contract.
 
 This is a deterministic attestation boundary, not a second evaluation. It performs no
 inference and refuses to overwrite a published run. Large source/evidence/output bytes remain

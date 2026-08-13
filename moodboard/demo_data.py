@@ -1,4 +1,4 @@
-"""Acquire the small, public-domain corpus used by the Adobe interview demo.
+"""Acquire the small public-domain corpus used by the governed visual workflow.
 
 This is deliberately a governed downloader, not a general image scraper.  A reviewed catalogue
 names every allowed object and the exact licence facts expected from the provider's official API.
