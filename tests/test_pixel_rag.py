@@ -305,6 +305,44 @@ def _legacy_run_fingerprint(artifact: dict) -> str:
     ).hexdigest()
 
 
+def _current_run_fingerprint(artifact: dict) -> str:
+    outputs = {
+        intent["id"]: {
+            "negative": [
+                {
+                    "content_ref": evidence["output"]["output_content_ref"],
+                    "evidence_id": evidence["evidence_id"],
+                    "sha256": evidence["output"]["output_sha256"],
+                }
+                for evidence in intent.get("negative_output_evidence", [])
+            ],
+            "selected": (
+                {
+                    "content_ref": intent["output"]["output_content_ref"],
+                    "sha256": intent["output"]["output_sha256"],
+                }
+                if intent["output"] is not None
+                else None
+            ),
+        }
+        for intent in artifact["intents"]
+    }
+    return hashlib.sha256(
+        (
+            _canonical(
+                {
+                    "compiler_revision": artifact["provenance"]["compiler_revision"],
+                    "contracts": artifact["contracts"],
+                    "manifest_sha256": artifact["source_manifest"]["manifest_sha256"],
+                    "measurements_sha256": artifact["provenance"]["measurements_sha256"],
+                    "outputs": outputs,
+                }
+            )
+            + "\n"
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def test_compile_routes_one_source_through_two_grounded_intent_plans(tmp_path: Path) -> None:
     manifest_path, by_id = _manifest(tmp_path)
     measurements_path = _measurements(tmp_path / "measurements.json", by_id)
@@ -774,6 +812,27 @@ def test_reader_keeps_accepting_a_canonical_pre_extension_v1_artifact(
     validate_pixel_rag_artifact(legacy)
 
 
+def test_reader_requires_current_structural_routing_interpretations(tmp_path: Path) -> None:
+    manifest_path, by_id = _manifest(tmp_path)
+    measurements_path = _measurements(tmp_path / "measurements.json", by_id)
+    artifact = compile_pixel_rag_artifact(
+        manifest_path=manifest_path,
+        measurements_path=measurements_path,
+    )
+
+    missing_retrieval_interpretation = json.loads(json.dumps(artifact))
+    missing_retrieval_interpretation["intents"][0]["retrieval"].pop("metrics_interpretation")
+    _reidentify(missing_retrieval_interpretation)
+    with pytest.raises(PixelRagError, match="metrics_interpretation|required property"):
+        validate_pixel_rag_artifact(missing_retrieval_interpretation)
+
+    missing_cross_interpretation = json.loads(json.dumps(artifact))
+    missing_cross_interpretation["cross_intent_metrics"][0].pop("interpretation")
+    _reidentify(missing_cross_interpretation)
+    with pytest.raises(PixelRagError, match="interpretation|required property"):
+        validate_pixel_rag_artifact(missing_cross_interpretation)
+
+
 def test_reader_binds_compiler_run_fingerprint_and_whole_frame_source_query(
     tmp_path: Path,
 ) -> None:
@@ -1087,6 +1146,65 @@ def test_selected_mask_composite_retains_rejected_predecessor_evidence(
     assert result["negative_output_evidence"][0]["output"]["external_location"] == {
         "kind": "identity_only"
     }
+
+    with pytest.raises(PixelRagError, match="byte/identity-distinct"):
+        compile_pixel_rag_artifact(
+            manifest_path=manifest_path,
+            measurements_path=measurements_path,
+            external_outputs={
+                "local_replace": ExternalOutput(
+                    path=selected_path,
+                    khive_record_id=_record_id("selected-v3"),
+                    expected_content_ref=blake3(selected_bytes).hexdigest(),
+                )
+            },
+            historical_external_outputs={
+                "local_replace": [
+                    ExternalOutput(
+                        path=selected_path,
+                        khive_record_id=_record_id("rejected-same-bytes"),
+                        expected_content_ref=blake3(selected_bytes).hexdigest(),
+                    )
+                ]
+            },
+        )
+
+    selected_location_drift = json.loads(json.dumps(artifact))
+    selected_location_drift["intents"][0]["output"]["external_location"] = {
+        "kind": "local_file",
+        "path": "/tmp/private-selected.png",
+    }
+    _reidentify(selected_location_drift)
+    with pytest.raises(PixelRagError, match=r"intents\.0\.output|identity_only"):
+        validate_pixel_rag_artifact(selected_location_drift)
+
+    negative_location_drift = json.loads(json.dumps(artifact))
+    negative_location_drift["intents"][0]["negative_output_evidence"][0]["output"][
+        "external_location"
+    ] = {
+        "kind": "local_file",
+        "path": "/tmp/private-rejected.png",
+    }
+    _reidentify(negative_location_drift)
+    with pytest.raises(
+        PixelRagError,
+        match=r"negative_output_evidence|identity_only",
+    ):
+        validate_pixel_rag_artifact(negative_location_drift)
+
+    for identity_field in ("output_sha256", "output_content_ref"):
+        reused_identity = json.loads(json.dumps(artifact))
+        selected_output = reused_identity["intents"][0]["output"]
+        rejected_output = reused_identity["intents"][0]["negative_output_evidence"][0]["output"]
+        rejected_output[identity_field] = selected_output[identity_field]
+        if identity_field == "output_content_ref":
+            rejected_output["blob_store_registration"]["content_ref"] = selected_output[
+                identity_field
+            ]
+        reused_identity["provenance"]["run_fingerprint"] = _current_run_fingerprint(reused_identity)
+        _reidentify(reused_identity)
+        with pytest.raises(PixelRagError, match="byte/identity-distinct"):
+            validate_pixel_rag_artifact(reused_identity)
 
     registration_drift = json.loads(json.dumps(artifact))
     registration_drift["intents"][0]["output"]["blob_store_registration"]["content_ref"] = "f" * 64

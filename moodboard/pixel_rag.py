@@ -55,6 +55,7 @@ _EVIDENCE_BINDING_KINDS = (
     "verification_summary",
 )
 _RETRIEVAL_METRIC_IDS = ("precision_at_3", "ndcg_at_5", "mrr", "recall_at_5")
+_STRUCTURAL_ROUTING_INTERPRETATION = "structural_routing_control_not_learned_retrieval_quality"
 _LEGACY_CONTRACTS = {
     "artifact_schema_sha256": "a317962da489b7471866286dc5bfab9429fe5f9caed1a9e3c2e92259a3a7fbd5",
     "measurements_schema_sha256": (
@@ -571,6 +572,25 @@ def _external_output(
     }
 
 
+def _require_distinct_rejected_outputs(
+    intent_id: str,
+    selected_output: Mapping[str, Any] | None,
+    negative_output_evidence: Sequence[Mapping[str, Any]],
+) -> None:
+    if selected_output is None:
+        return
+    for index, negative in enumerate(negative_output_evidence):
+        rejected_output = negative["output"]
+        if (
+            rejected_output["output_sha256"] == selected_output["output_sha256"]
+            or rejected_output["output_content_ref"] == selected_output["output_content_ref"]
+        ):
+            raise PixelRagError(
+                f"{intent_id} rejected output {index} must be byte/identity-distinct "
+                "from the selected output"
+            )
+
+
 def _stages(intent_id: str) -> list[dict[str, str]]:
     region_detail = (
         "Use only the operator-confirmed normalized tree rectangle."
@@ -796,16 +816,22 @@ def _intent_artifact(
                 "verification": negative_verification,
             }
         )
+    selected_output = _external_output(
+        output,
+        generator=measurement["generator"],
+        rollback_record_id=source_record["record_id"],
+        rollback_content_ref=source_record["content_ref"],
+    )
+    _require_distinct_rejected_outputs(
+        intent_id,
+        selected_output,
+        negative_output_evidence,
+    )
     return {
         "designer_prompt": measurement["designer_prompt"],
         "id": intent_id,
         "negative_output_evidence": negative_output_evidence,
-        "output": _external_output(
-            output,
-            generator=measurement["generator"],
-            rollback_record_id=source_record["record_id"],
-            rollback_content_ref=source_record["content_ref"],
-        ),
+        "output": selected_output,
         "plan": {
             "conditioning": {
                 "evidence_content_refs": [
@@ -825,7 +851,7 @@ def _intent_artifact(
                 filtered=filtered,
                 relevance=routed_relevance,
             ),
-            "metrics_interpretation": ("structural_routing_control_not_learned_retrieval_quality"),
+            "metrics_interpretation": _STRUCTURAL_ROUTING_INTERPRETATION,
             "ranked_evidence": ranked_evidence,
             "raw_diagnostics": _raw_diagnostics(
                 evidence_status=evidence_status,
@@ -996,7 +1022,7 @@ def compile_pixel_rag_artifact(
         {
             "id": "intent_top3_jaccard",
             "intersection_count": len(left_refs & right_refs),
-            "interpretation": ("structural_routing_control_not_learned_retrieval_quality"),
+            "interpretation": _STRUCTURAL_ROUTING_INTERPRETATION,
             "source": evidence_status,
             "union_count": len(union),
             "value": len(left_refs & right_refs) / len(union) if union else 0.0,
@@ -1172,7 +1198,7 @@ def _validate_artifact(value: Mapping[str, Any]) -> None:
         if not legacy_contract_fixture and (
             raw_diagnostics is None
             or intent["retrieval"].get("metrics_interpretation")
-            != "structural_routing_control_not_learned_retrieval_quality"
+            != _STRUCTURAL_ROUTING_INTERPRETATION
         ):
             raise PixelRagError("current Pixel RAG artifact requires extended retrieval evidence")
         expected_metric_ids = (
@@ -1218,12 +1244,17 @@ def _validate_artifact(value: Mapping[str, Any]) -> None:
             for negative in negative_outputs
         ):
             raise PixelRagError("negative output evidence must retain Khive registration")
+        _require_distinct_rejected_outputs(intent_id, intent["output"], negative_outputs)
         for label, output in [
             ("selected output", intent["output"]),
             *(("negative output", negative["output"]) for negative in negative_outputs),
         ]:
             if output is None:
                 continue
+            if current_contract_artifact and output["external_location"] != {
+                "kind": "identity_only"
+            }:
+                raise PixelRagError(f"current {label} must use identity_only external location")
             registration = output["blob_store_registration"]
             if (
                 registration["state"] == "registered"
@@ -1291,6 +1322,10 @@ def _validate_artifact(value: Mapping[str, Any]) -> None:
         or cross["union_count"] != len(union)
         or cross["value"] != expected_jaccard
         or cross["source"] != value["evidence_status"]
+        or (
+            current_contract_artifact
+            and cross.get("interpretation") != _STRUCTURAL_ROUTING_INTERPRETATION
+        )
     ):
         raise PixelRagError("intent_top3_jaccard does not match the ranked evidence")
 

@@ -117,6 +117,13 @@ export interface PixelRagMetric {
   readonly source: PixelRagEvidenceStatus;
 }
 
+export interface PixelRagRawScoreRow {
+  readonly asset_id: string;
+  readonly content_ref: string;
+  readonly score: number;
+  readonly source_search_rank: number;
+}
+
 export interface PixelRagIntent {
   readonly id: PixelRagIntentId;
   readonly eyebrow: string;
@@ -140,6 +147,7 @@ export interface PixelRagIntent {
   readonly pipeline: readonly PixelRagPipelineStage[];
   readonly metrics: readonly PixelRagMetric[];
   readonly raw_metrics?: readonly PixelRagMetric[];
+  readonly raw_score_order?: readonly PixelRagRawScoreRow[];
   readonly verification_status: "not_run" | "passed" | "failed";
   readonly output: {
     readonly state: "external_precomputed_fixture" | "recorded_external_output" | "not_available";
@@ -537,9 +545,34 @@ function metricAt(value: unknown, path: string): PixelRagMetric {
   };
 }
 
+function rawScoreRowAt(value: unknown, path: string): PixelRagRawScoreRow {
+  const record = objectAt(value, path);
+  closed(record, ["asset_id", "content_ref", "score", "source_search_rank"], path);
+  const score = finiteAt(record.score, `${path}.score`);
+  const sourceSearchRank = finiteAt(record.source_search_rank, `${path}.source_search_rank`);
+  if (score < -1 || score > 1) throw new Error(`${path}.score must be within cosine range`);
+  if (!Number.isSafeInteger(sourceSearchRank) || sourceSearchRank < 1) {
+    throw new Error(`${path}.source_search_rank must be a positive safe integer`);
+  }
+  return {
+    asset_id: stringAt(record.asset_id, `${path}.asset_id`),
+    content_ref: contentRefAt(record.content_ref, `${path}.content_ref`),
+    score,
+    source_search_rank: sourceSearchRank,
+  };
+}
+
+function rawScoreOrderAt(value: unknown, path: string): readonly PixelRagRawScoreRow[] {
+  const rows = arrayAt(value, path).map((row, index) => rawScoreRowAt(row, `${path}[${index}]`));
+  if (rows.length === 0 || rows.some((row, index) => index > 0 && row.score > rows[index - 1]!.score)) {
+    throw new Error(`${path} must preserve a non-empty descending exact score order`);
+  }
+  return rows;
+}
+
 function intentAt(value: unknown, path: string): PixelRagIntent {
   const record = objectAt(value, path);
-  closed(record, ["id", "eyebrow", "title", "prompt", "query", "evidence", "pipeline", "metrics", "raw_metrics", "verification_status", "output"], path);
+  closed(record, ["id", "eyebrow", "title", "prompt", "query", "evidence", "pipeline", "metrics", "raw_metrics", "raw_score_order", "verification_status", "output"], path);
   const query = objectAt(record.query, `${path}.query`);
   closed(query, ["granularity", "label", "namespace", "corpus_label", "rationale", "region_query_ref", "rectangle"], `${path}.query`);
   const evidence = arrayAt(record.evidence, `${path}.evidence`).map((hit, index) => hitAt(hit, `${path}.evidence[${index}]`));
@@ -554,6 +587,9 @@ function intentAt(value: unknown, path: string): PixelRagIntent {
   const rawMetrics = record.raw_metrics === undefined
     ? undefined
     : arrayAt(record.raw_metrics, `${path}.raw_metrics`).map((metric, index) => metricAt(metric, `${path}.raw_metrics[${index}]`));
+  const rawScoreOrder = record.raw_score_order === undefined
+    ? undefined
+    : rawScoreOrderAt(record.raw_score_order, `${path}.raw_score_order`);
   const output = objectAt(record.output, `${path}.output`);
   closed(output, ["state", "label", "content_ref", "rollback_ref", "caveat", "history", "postprocess"], `${path}.output`);
   const history = output.history === undefined
@@ -631,6 +667,7 @@ function intentAt(value: unknown, path: string): PixelRagIntent {
     pipeline,
     metrics,
     ...(rawMetrics === undefined ? {} : { raw_metrics: rawMetrics }),
+    ...(rawScoreOrder === undefined ? {} : { raw_score_order: rawScoreOrder }),
     verification_status: exact(
       record.verification_status,
       ["not_run", "passed", "failed"],
@@ -699,6 +736,7 @@ export function decodePixelRagArtifact(value: unknown): PixelRagArtifact {
       khiveAt(source.khive, "$pixel_rag.source.khive").content_ref,
       ...intents.flatMap((intent) => [
         ...intent.evidence.map((hit) => hit.khive.content_ref),
+        ...(intent.raw_score_order ?? []).map((row) => row.content_ref),
         ...(intent.output.history ?? []).map((entry) => entry.content_ref),
         intent.output.content_ref,
         intent.output.rollback_ref,
@@ -758,7 +796,7 @@ export function decodePixelRagArtifact(value: unknown): PixelRagArtifact {
   };
 }
 
-export type PixelRagBridge =
+type PixelRagBridgeEnvelope =
   | {
       readonly artifact: null;
       readonly format_version: "moodboard.viewer-pixel-rag-bridge.v1";
@@ -780,7 +818,23 @@ export type PixelRagBridge =
       readonly state: "projected";
     };
 
-export function decodePixelRagBridge(value: unknown): PixelRagBridge {
+declare const pythonPrevalidatedPixelRagBridgeBrand: unique symbol;
+
+/**
+ * Nominal evidence boundary produced only from the checked-in bridge after the mandatory Python
+ * schema, semantic, and identity validation in `npm run pixel-rag:check`. TypeScript closes the
+ * viewer-owned shell and projection; it is not an independent validator for arbitrary engine JSON.
+ */
+export type PythonPrevalidatedPixelRagBridge = PixelRagBridgeEnvelope & {
+  readonly [pythonPrevalidatedPixelRagBridgeBrand]: true;
+};
+
+export type PythonPrevalidatedProjectedPixelRagBridge = Extract<
+  PythonPrevalidatedPixelRagBridge,
+  { readonly state: "projected" }
+>;
+
+function decodePythonPrevalidatedPixelRagBridgeShell(value: unknown): PixelRagBridgeEnvelope {
   const record = objectAt(value, "$pixel_rag_bridge");
   closed(
     record,
@@ -842,8 +896,6 @@ export function decodePixelRagBridge(value: unknown): PixelRagBridge {
     state,
   };
 }
-
-type ProjectedPixelRagBridge = Extract<PixelRagBridge, { readonly state: "projected" }>;
 
 const engineStageLabels: Readonly<Record<PixelRagStageId, string>> = {
   retrieval: "Retrieval",
@@ -1149,6 +1201,12 @@ function engineIntent(
         `${path}.retrieval.raw_diagnostics.metrics[${index}]`,
         evidenceStatus,
       ));
+  const rawScoreOrder = rawDiagnostics === null
+    ? undefined
+    : rawScoreOrderAt(
+        rawDiagnostics.exact_score_order,
+        `${path}.retrieval.raw_diagnostics.exact_score_order`,
+      );
   const verification = objectAt(record.verification, `${path}.verification`);
   const verificationStatus = exact(
     verification.status,
@@ -1203,6 +1261,7 @@ function engineIntent(
     pipeline: enginePipeline(plan.stages, `${path}.plan.stages`),
     metrics: [...retrievalMetrics, ...verificationMetrics, crossMetric],
     ...(rawMetrics === undefined ? {} : { raw_metrics: rawMetrics }),
+    ...(rawScoreOrder === undefined ? {} : { raw_score_order: rawScoreOrder }),
     verification_status: verificationStatus,
     output: engineOutput(record.output, `${path}.output`, rollbackRef, history),
   };
@@ -1249,8 +1308,8 @@ function engineQwenDiagnostics(
   };
 }
 
-export function projectEnginePixelRagArtifact(
-  bridge: ProjectedPixelRagBridge,
+export function projectPythonPrevalidatedPixelRagArtifact(
+  bridge: PythonPrevalidatedProjectedPixelRagBridge,
 ): PixelRagArtifact {
   const engine = bridge.artifact;
   exact(
@@ -1348,8 +1407,10 @@ export function projectEnginePixelRagArtifact(
   return decodePixelRagArtifact(artifact);
 }
 
-export const pixelRagBridge = decodePixelRagBridge(pixelRagBridgeDocument);
+export const pixelRagBridge = decodePythonPrevalidatedPixelRagBridgeShell(
+  pixelRagBridgeDocument,
+) as PythonPrevalidatedPixelRagBridge;
 
 export const verifiedPixelRagArtifact = pixelRagBridge.state === "fallback"
   ? decodePixelRagArtifact(pixelRagArtifact)
-  : projectEnginePixelRagArtifact(pixelRagBridge);
+  : projectPythonPrevalidatedPixelRagArtifact(pixelRagBridge);

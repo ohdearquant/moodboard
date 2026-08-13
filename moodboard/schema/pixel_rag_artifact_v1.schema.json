@@ -30,6 +30,11 @@
       },
       "then": {
         "properties": {
+          "cross_intent_metrics": {
+            "prefixItems": [
+              { "$ref": "#/$defs/extendedCrossMetric" }
+            ]
+          },
           "intents": {
             "prefixItems": [
               { "$ref": "#/$defs/extendedIntent" },
@@ -845,6 +850,22 @@
         "state": { "const": "precomputed_external_output" }
       }
     },
+    "identityOnlyExternalLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": { "kind": { "const": "identity_only" } }
+    },
+    "identityOnlyOutput": {
+      "allOf": [
+        { "$ref": "#/$defs/output" },
+        {
+          "properties": {
+            "external_location": { "$ref": "#/$defs/identityOnlyExternalLocation" }
+          }
+        }
+      ]
+    },
     "negativeOutputEvidence": {
       "type": "object",
       "additionalProperties": false,
@@ -866,6 +887,16 @@
         },
         "verification": { "$ref": "#/$defs/verification" }
       }
+    },
+    "extendedNegativeOutputEvidence": {
+      "allOf": [
+        { "$ref": "#/$defs/negativeOutputEvidence" },
+        {
+          "properties": {
+            "output": { "$ref": "#/$defs/identityOnlyOutput" }
+          }
+        }
+      ]
     },
     "intent": {
       "type": "object",
@@ -904,6 +935,15 @@
         { "$ref": "#/$defs/intent" },
         {
           "properties": {
+            "negative_output_evidence": {
+              "items": { "$ref": "#/$defs/extendedNegativeOutputEvidence" }
+            },
+            "output": {
+              "oneOf": [
+                { "type": "null" },
+                { "$ref": "#/$defs/identityOnlyOutput" }
+              ]
+            },
             "retrieval": {
               "required": ["metrics_interpretation", "raw_diagnostics"],
               "properties": {
@@ -912,6 +952,12 @@
             }
           }
         }
+      ]
+    },
+    "extendedCrossMetric": {
+      "allOf": [
+        { "$ref": "#/$defs/crossMetric" },
+        { "required": ["interpretation"] }
       ]
     },
     "crossMetric": {

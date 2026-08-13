@@ -833,6 +833,21 @@ function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
               <p>Routing metrics test deterministic filter integrity. They are not learned quality or probabilities.</p>
             </div>
           ) : null}
+          {intent.raw_score_order?.length ? (
+            <details className="pixel-raw-score-order" open>
+              <summary>Complete ungated Qwen score order</summary>
+              <ol>
+                {intent.raw_score_order.map((row) => (
+                  <li key={`${row.source_search_rank}:${row.content_ref}`}>
+                    <span>{row.asset_id}</span>
+                    <small>source search rank {row.source_search_rank}</small>
+                    <strong>{String(row.score)}</strong>
+                  </li>
+                ))}
+              </ol>
+              <p>Exact recorded cosine order before the intent collection gate; geometry, not probability.</p>
+            </details>
+          ) : null}
           <div className="pixel-output">
             <span>{intent.output.label}</span>
             <strong>{intent.output.state === "not_available" ? "No external output" : "Recorded external output"}</strong>

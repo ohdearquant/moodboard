@@ -70,6 +70,11 @@ If relevance judgments are absent, P@3, nDCG@5, MRR, and recall@5 are emitted as
 - `metrics_interpretation` states that the routed values test deterministic routing integrity,
   not learned retrieval quality.
 
+Current compiler-v2 artifacts require that fixed structural-routing interpretation both on each
+intent retrieval and on the cross-intent separation metric. The exact legacy compiler-v1
+contract fixture remains readable without those extension fields; no other artifact may shed
+them and present itself as current evidence.
+
 Both views are measured, but neither turns a cosine into a probability. If edit-verification
 measurements are absent, verification is `not_run`. Merely supplying a generated image never
 invents either kind of metric.
@@ -84,7 +89,7 @@ Project the frozen measured demo into a fresh immutable cache directory:
 
 ```bash
 python eval/adobe_demo_pixel_rag_projection.py \
-  --output-dir .cache/adobe-demo-pixel-rag-measured-v2
+  --output-dir .cache/adobe-demo-pixel-rag-measured-v3-p2
 ```
 
 The generic `python -m moodboard.pixel_rag` CLI supports measurements without historical output
@@ -96,8 +101,9 @@ historical outputs, because the generic CLI deliberately has no historical-outpu
 Failed historical attempts can be retained beside the selected output with
 `negative_output_evidence` plus the compiler's `historical_external_outputs` API. Every retained
 attempt must resolve to actual bytes, carry its own generator and immutable registration
-identity, and fail at least one recorded verifier. For the local demo this is what preserves the
-v1 outside-mask SSIM failure beside the selected v3 pass instead of hiding the iteration.
+identity, fail at least one recorded verifier, and differ from the selected output in both
+SHA-256 and ContentRef. For the local demo this is what preserves the v1 outside-mask SSIM
+failure beside the selected v3 pass instead of hiding the iteration.
 
 The selected v3 locality result uses the recorded `source_backed_region_overlay` compositor and
 passes the preregistered outside-mask SSIM threshold. This means a source-backed deterministic
@@ -108,6 +114,9 @@ an overclaim.
 The output validates against `moodboard/schema/pixel_rag_artifact_v1.schema.json`. Its
 `artifact_id` hashes the canonical document excluding only that field; the document also binds
 the SHA-256 identities of the artifact, measurements, and source-manifest schemas.
+Current compiler-v2 artifacts expose selected and historical output locations as
+`identity_only`, so a portable bridge cannot leak a workstation path. `local_file` remains
+accepted only for the exact legacy compiler-v1 contract-fixture identity tuple.
 
 ## Frozen evidence projection
 
@@ -145,7 +154,7 @@ follows and must not supply defaults for missing evidence:
 | `intents[].route` | granularity, exact normalized region rectangle, region-crop query identity, namespace, and active corpus |
 | `intents[].retrieval.ranked_evidence` | evidence cards, exact scores, licence, source page, Khive record and ContentRef |
 | `intents[].plan.stages` | control-pipeline strip |
-| `intents[].retrieval.raw_diagnostics` | ungated Qwen order and four descriptive metrics; label as geometry, never probability |
+| `intents[].retrieval.raw_diagnostics` | complete ungated Qwen exact-score order plus four descriptive metrics; display the order without sorting or rounding and label it as geometry, never probability |
 | `intents[].retrieval.metrics` | four intent-routed structural-control metrics; preserve `not_computed` visibly |
 | `intents[].verification` | edit checks; preserve `not_run` visibly |
 | `intents[].negative_output_evidence` | rejected real outputs and their failed verifier evidence |
@@ -178,3 +187,10 @@ clearly labelled presentation fixture active until a measured bridge is generate
 measured bridge instead remains bound to its immutable input artifact identities and is
 revalidated at build time. Pixel RAG evidence status never upgrades the independently governed
 preference panel.
+
+The exported TypeScript projector accepts only a nominally branded
+`PythonPrevalidatedPixelRagBridge`. The mandatory Python `pixel-rag:check` step is the full JSON
+Schema, semantic, and identity authority; TypeScript closes the bridge envelope and every field
+consumed by the viewer, but is deliberately not a second general-purpose decoder for arbitrary
+engine JSON. Synthetic TypeScript tests may cross that nominal boundary only with an explicit
+cast that documents the test-only trust assumption.

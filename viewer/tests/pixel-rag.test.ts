@@ -1,12 +1,12 @@
 import {
-  decodePixelRagBridge,
   decodePixelRagArtifact,
   pixelRagBridge,
   pixelRagArtifact,
-  projectEnginePixelRagArtifact,
+  projectPythonPrevalidatedPixelRagArtifact,
   resolvePixelRagMediaSource,
   verifiedPixelRagArtifact,
 } from "../src/pixel-rag";
+import type { PythonPrevalidatedProjectedPixelRagBridge } from "../src/pixel-rag";
 import type { ReportModel, SafeThumbnailSource } from "../src/model";
 
 const digest = (value: string): string => value.replace(/^sha256:/, "");
@@ -184,6 +184,20 @@ function engineIntent(id: "local_replace" | "global_restyle"): any {
       ],
       metrics_interpretation: "structural_routing_control_not_learned_retrieval_quality",
       raw_diagnostics: {
+        exact_score_order: [
+          {
+            asset_id: "raw-apple",
+            content_ref: "8".repeat(64),
+            score: 0.9627652950584888,
+            source_search_rank: 1,
+          },
+          {
+            asset_id: "raw-lemon",
+            content_ref: "7".repeat(64),
+            score: 0.910125,
+            source_search_rank: 2,
+          },
+        ],
         gate: "ungated",
         interpretation: "experimental_qwen_visual_embedding_geometry_not_probability",
         metrics: [
@@ -311,30 +325,29 @@ describe("Pixel RAG demo artifact", () => {
   it("consumes the Python-validated, byte-bound measured bridge shell", () => {
     expect(pixelRagBridge).toMatchObject({
       artifact: {
-        artifact_id: "52ed3d289ed37b607125f5003b3694fa6a81910c8e37d18dec219e5f597684ad",
+        artifact_id: "896fceb0adf0be1e472db9e353bddaf9be316108506f89357d6c16add0048237",
         evidence_status: "measured_run",
       },
       format_version: "moodboard.viewer-pixel-rag-bridge.v1",
       generator_revision: "moodboard.pixel-rag-viewer-bridge.v1",
       input: {
-        artifact_id: "52ed3d289ed37b607125f5003b3694fa6a81910c8e37d18dec219e5f597684ad",
-        canonical_sha256: "893246e8ed475987f1334eaaadf0c68f87372312e71eb963e425896b23f3fc65",
-        sha256: "893246e8ed475987f1334eaaadf0c68f87372312e71eb963e425896b23f3fc65",
+        artifact_id: "896fceb0adf0be1e472db9e353bddaf9be316108506f89357d6c16add0048237",
+        canonical_sha256: "854c9e06e3138bb8e27b2f82b23926e0ce3164cddf2a14230787ea00f4983626",
+        sha256: "854c9e06e3138bb8e27b2f82b23926e0ce3164cddf2a14230787ea00f4983626",
       },
       state: "projected",
     });
     expect(verifiedPixelRagArtifact.artifact_id).toBe(
-      "52ed3d289ed37b607125f5003b3694fa6a81910c8e37d18dec219e5f597684ad",
+      "896fceb0adf0be1e472db9e353bddaf9be316108506f89357d6c16add0048237",
     );
     expect(verifiedPixelRagArtifact.evidence_status).toBe("measured_run");
-
-    const drifted = { ...pixelRagBridge, future: true };
-    expect(() => decodePixelRagBridge(drifted)).toThrow(/unknown key/i);
   });
 
   it("projects measured engine evidence without upgrading the independent preference fixture", () => {
     const artifact = engineArtifact();
-    const bridge = decodePixelRagBridge({
+    // The synthetic fixture deliberately bypasses the build-only Python trust boundary. Runtime
+    // production code can project only the checked-in, Python-prevalidated bridge export.
+    const bridge = {
       artifact,
       format_version: "moodboard.viewer-pixel-rag-bridge.v1",
       generator_revision: "moodboard.pixel-rag-viewer-bridge.v1",
@@ -346,10 +359,8 @@ describe("Pixel RAG demo artifact", () => {
         sha256: "4".repeat(64),
       },
       state: "projected",
-    });
-
-    if (bridge.state !== "projected") throw new Error("expected projected test bridge");
-    const projected = projectEnginePixelRagArtifact(bridge);
+    } as unknown as PythonPrevalidatedProjectedPixelRagBridge;
+    const projected = projectPythonPrevalidatedPixelRagArtifact(bridge);
 
     expect(projected.artifact_id).toBe(artifact.artifact_id);
     expect(projected.evidence_status).toBe("measured_run");
@@ -375,6 +386,20 @@ describe("Pixel RAG demo artifact", () => {
       "ndcg_at_5",
       "mrr",
       "recall_at_5",
+    ]);
+    expect(projected.intents[0]?.raw_score_order).toEqual([
+      {
+        asset_id: "raw-apple",
+        content_ref: "8".repeat(64),
+        score: 0.9627652950584888,
+        source_search_rank: 1,
+      },
+      {
+        asset_id: "raw-lemon",
+        content_ref: "7".repeat(64),
+        score: 0.910125,
+        source_search_rank: 2,
+      },
     ]);
     expect(projected.intents[0]?.output.history).toEqual([
       expect.objectContaining({
@@ -411,6 +436,26 @@ describe("Pixel RAG demo artifact", () => {
     });
     expect(projected.preference.status).toBe("governed_snapshot_fixture");
     expect(projected.status_label).toMatch(/measured engine artifact/i);
+  });
+
+  it("does not accept arbitrary engine JSON as Python-prevalidated evidence", () => {
+    const artifact = engineArtifact();
+    const structurallyValidButUnvalidated = {
+      artifact,
+      format_version: "moodboard.viewer-pixel-rag-bridge.v1",
+      generator_revision: "moodboard.pixel-rag-viewer-bridge.v1",
+      input: {
+        artifact_id: artifact.artifact_id,
+        byte_size: 1234,
+        canonical_sha256: "5".repeat(64),
+        schema_version: "moodboard.pixel-rag-artifact.v1",
+        sha256: "4".repeat(64),
+      },
+      state: "projected",
+    } as const;
+
+    // @ts-expect-error arbitrary engine JSON is not Python-prevalidated
+    projectPythonPrevalidatedPixelRagArtifact(structurallyValidButUnvalidated);
   });
 
   it("is a closed, intent-specific, provenance-complete projection", () => {

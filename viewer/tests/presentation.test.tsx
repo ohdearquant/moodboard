@@ -109,6 +109,9 @@ describe("editorial report presentation", () => {
     expect(within(lab).getByText("Raw Qwen geometry · ungated")).toBeTruthy();
     expect(within(lab).getByText("Intent-routed control")).toBeTruthy();
     expect(within(lab).getByText(/deterministic filter integrity/i)).toBeTruthy();
+    expect(within(lab).getByText("Complete ungated Qwen score order")).toBeTruthy();
+    expect(within(lab).getByText("fruit_apple_meadow")).toBeTruthy();
+    expect(within(lab).getByText("0.9627652950584888")).toBeTruthy();
     expect(within(lab).getByText("Rejected predecessor")).toBeTruthy();
     expect(within(lab).getByText("Source-backed deterministic composite")).toBeTruthy();
     expect(within(lab).getByText(/no exact-RGB or aesthetic claim/i)).toBeTruthy();

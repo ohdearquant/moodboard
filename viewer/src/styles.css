@@ -585,6 +585,15 @@ code {
 .pixel-routing-comparison small { color: #93948d; font-size: 0.5rem; line-height: 1.35; }
 .pixel-routing-comparison b { align-self: center; color: #7893ff; font: 400 1rem ui-monospace, monospace; }
 .pixel-routing-comparison p { grid-column: 1 / -1; color: #858780; font-size: 0.5rem; line-height: 1.45; }
+.pixel-raw-score-order { margin-top: 0.55rem; border: 1px solid var(--lab-line); background: rgb(120 147 255 / 4%); }
+.pixel-raw-score-order summary { padding: 0.55rem 0.7rem; color: #aebcf4; cursor: pointer; font-size: 0.49rem; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; }
+.pixel-raw-score-order ol { max-height: 190px; margin: 0; padding: 0; overflow: auto; border-top: 1px solid var(--lab-line); list-style: none; }
+.pixel-raw-score-order li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.65rem; align-items: baseline; padding: 0.38rem 0.7rem; border-bottom: 1px solid rgb(255 255 255 / 5%); }
+.pixel-raw-score-order li:last-child { border-bottom: 0; }
+.pixel-raw-score-order li span { overflow-wrap: anywhere; font: 0.5rem ui-monospace, monospace; }
+.pixel-raw-score-order li small { color: #858780; font-size: 0.46rem; }
+.pixel-raw-score-order li strong { color: #dbe2ff; font: 0.5rem ui-monospace, monospace; }
+.pixel-raw-score-order > p { padding: 0.5rem 0.7rem; border-top: 1px solid var(--lab-line); color: #858780; font-size: 0.48rem; line-height: 1.4; }
 
 .pixel-output { position: relative; margin-top: 0.8rem; padding: 1rem; border-left: 4px solid #c9ffb5; background: rgb(201 255 181 / 7%); }
 .pixel-output > span { color: #aebda8; font-size: 0.52rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
