@@ -4,6 +4,15 @@
   "title": "Moodboard Pixel RAG measured-input contract v1",
   "type": "object",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": { "evidence_status": { "const": "measured_run" } },
+        "required": ["evidence_status"]
+      },
+      "then": { "required": ["evidence_bindings"] }
+    }
+  ],
   "required": [
     "descriptor",
     "evidence_status",
@@ -15,7 +24,39 @@
   ],
   "properties": {
     "descriptor": { "$ref": "#/$defs/descriptor" },
+    "evidence_bindings": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/evidenceBinding" },
+            { "properties": { "kind": { "const": "evaluation_preregistration" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/evidenceBinding" },
+            { "properties": { "kind": { "const": "intent_freeze" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/evidenceBinding" },
+            { "properties": { "kind": { "const": "verification_summary" } } }
+          ]
+        }
+      ],
+      "items": false
+    },
     "evidence_status": { "enum": ["contract_fixture", "measured_run"] },
+    "experimental_visual_embedding_diagnostics": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/experimentalVisualEmbeddingDiagnostics" }
+      ]
+    },
     "generated_at": { "$ref": "#/$defs/timestamp" },
     "intents": {
       "type": "array",
@@ -28,6 +69,7 @@
       "items": false
     },
     "khive_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "projection": { "$ref": "#/$defs/projection" },
     "schema_version": { "const": "moodboard.pixel-rag-measurements.v1" },
     "source_record": { "$ref": "#/$defs/khiveRecord" }
   },
@@ -40,6 +82,103 @@
     "timestamp": {
       "type": "string",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+Z$"
+    },
+    "evidenceBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "sha256"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "evaluation_preregistration",
+            "intent_freeze",
+            "verification_summary"
+          ]
+        },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "diagnosticContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "interpretation",
+        "kind",
+        "raw_cosine_is_probability",
+        "validated_csd_or_style_probability"
+      ],
+      "properties": {
+        "interpretation": {
+          "const": "descriptive diagnostic only; no calibrated semantic or style claim"
+        },
+        "kind": { "const": "experimental_qwen_visual_embedding_cosine" },
+        "raw_cosine_is_probability": { "const": false },
+        "validated_csd_or_style_probability": { "const": false }
+      }
+    },
+    "localOutputRegionIntentAlignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mean_apple_cosine",
+        "mean_lemon_cosine",
+        "mean_lemon_minus_apple_margin",
+        "output_role"
+      ],
+      "properties": {
+        "mean_apple_cosine": { "type": "number", "minimum": -1, "maximum": 1 },
+        "mean_lemon_cosine": { "type": "number", "minimum": -1, "maximum": 1 },
+        "mean_lemon_minus_apple_margin": { "type": "number", "minimum": -2, "maximum": 2 },
+        "output_role": { "const": "local_output_region_diagnostic" }
+      }
+    },
+    "restyleContentRetention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cosine", "output_role"],
+      "properties": {
+        "cosine": { "type": "number", "minimum": -1, "maximum": 1 },
+        "output_role": { "const": "external_precomputed_global_restyle" }
+      }
+    },
+    "restyleStyleAffinity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claude_centroid_cosine",
+        "claude_minus_vangogh_margin",
+        "claude_reference_count",
+        "output_role",
+        "vangogh_centroid_cosine",
+        "vangogh_reference_count"
+      ],
+      "properties": {
+        "claude_centroid_cosine": { "type": "number", "minimum": -1, "maximum": 1 },
+        "claude_minus_vangogh_margin": { "type": "number", "minimum": -2, "maximum": 2 },
+        "claude_reference_count": { "const": 4 },
+        "output_role": { "const": "external_precomputed_global_restyle" },
+        "vangogh_centroid_cosine": { "type": "number", "minimum": -1, "maximum": 1 },
+        "vangogh_reference_count": { "const": 4 }
+      }
+    },
+    "experimentalVisualEmbeddingDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "local_output_region_intent_alignment",
+        "restyle_content_retention",
+        "restyle_style_affinity"
+      ],
+      "properties": {
+        "contract": { "$ref": "#/$defs/diagnosticContract" },
+        "local_output_region_intent_alignment": {
+          "$ref": "#/$defs/localOutputRegionIntentAlignment"
+        },
+        "restyle_content_retention": { "$ref": "#/$defs/restyleContentRetention" },
+        "restyle_style_affinity": { "$ref": "#/$defs/restyleStyleAffinity" }
+      }
     },
     "khiveRecord": {
       "type": "object",
@@ -121,7 +260,7 @@
         "schema_version": { "const": "moodboard.visual-descriptor.v1" }
       }
     },
-    "confirmation": {
+    "legacyConfirmation": {
       "type": "object",
       "additionalProperties": false,
       "required": ["actor", "confirmed_at", "method"],
@@ -130,6 +269,28 @@
         "confirmed_at": { "$ref": "#/$defs/timestamp" },
         "method": { "const": "human_confirmed" }
       }
+    },
+    "evidenceBoundConfirmation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_kind",
+        "evidence_sha256",
+        "json_pointer",
+        "method"
+      ],
+      "properties": {
+        "evidence_kind": { "const": "evaluation_preregistration" },
+        "evidence_sha256": { "$ref": "#/$defs/digest" },
+        "json_pointer": { "type": "string", "pattern": "^/" },
+        "method": { "const": "evidence_bound_human_confirmation" }
+      }
+    },
+    "confirmation": {
+      "oneOf": [
+        { "$ref": "#/$defs/legacyConfirmation" },
+        { "$ref": "#/$defs/evidenceBoundConfirmation" }
+      ]
     },
     "region": {
       "type": "object",
@@ -168,8 +329,13 @@
     "verificationMetric": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "method_revision", "operator", "threshold", "value"],
+      "required": ["id", "operator", "threshold", "value"],
+      "oneOf": [
+        { "required": ["method_revision"] },
+        { "required": ["evidence_field"] }
+      ],
       "properties": {
+        "evidence_field": { "$ref": "#/$defs/evidenceField" },
         "id": {
           "enum": ["outside_mask_ssim", "content_retention", "intent_alignment"]
         },
@@ -179,14 +345,71 @@
         "value": { "type": "number", "minimum": -1, "maximum": 1 }
       }
     },
+    "evidenceField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_kind", "evidence_sha256", "json_pointer"],
+      "properties": {
+        "evidence_kind": { "const": "verification_summary" },
+        "evidence_sha256": { "$ref": "#/$defs/digest" },
+        "json_pointer": { "type": "string", "pattern": "^/" }
+      }
+    },
+    "projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "sha256"],
+      "properties": {
+        "revision": {
+          "const": "moodboard.adobe-demo-frozen-evidence-projection.v1"
+        },
+        "sha256": { "$ref": "#/$defs/digest" }
+      }
+    },
     "generator": {
       "type": "object",
       "additionalProperties": false,
       "required": ["execution_mode", "provider", "service"],
       "properties": {
+        "deterministic_postprocess": { "$ref": "#/$defs/deterministicPostprocess" },
         "execution_mode": { "const": "precomputed_external" },
         "provider": { "type": "string", "minLength": 1 },
         "service": { "type": "string", "minLength": 1 }
+      }
+    },
+    "deterministicPostprocess": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "provenance_sha256", "revision"],
+      "properties": {
+        "method": {
+          "enum": [
+            "source_backed_region_overlay",
+            "restore_source_pixels_outside_confirmed_region"
+          ]
+        },
+        "provenance_sha256": { "$ref": "#/$defs/digest" },
+        "revision": { "type": "string", "minLength": 1 }
+      }
+    },
+    "negativeOutputEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disposition",
+        "evidence_id",
+        "generator",
+        "verification_metrics"
+      ],
+      "properties": {
+        "disposition": { "const": "rejected" },
+        "evidence_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$" },
+        "generator": { "$ref": "#/$defs/generator" },
+        "verification_metrics": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/verificationMetric" }
+        }
       }
     },
     "intent": {
@@ -214,6 +437,11 @@
         },
         "id": { "enum": ["local_replace", "global_restyle"] },
         "namespace": { "type": "string", "minLength": 1 },
+        "negative_output_evidence": {
+          "type": "array",
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/negativeOutputEvidence" }
+        },
         "query_record": { "$ref": "#/$defs/queryRecord" },
         "region": {
           "oneOf": [

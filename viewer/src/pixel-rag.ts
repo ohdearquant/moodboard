@@ -8,7 +8,7 @@ import pixelRagBridgeDocument from "./generated/pixel-rag-bridge.json";
 
 export type PixelRagIntentId = "local_replace" | "global_restyle";
 export type PixelRagEvidenceStatus = "contract_fixture" | "measured_run";
-export type PixelRagGranularity = "confirmed_mask" | "whole_frame";
+export type PixelRagGranularity = "confirmed_region" | "whole_frame";
 
 export interface PixelRagMediaRef {
   readonly kind: "report_candidate" | "report_reference";
@@ -108,7 +108,7 @@ export interface PixelRagPipelineStage {
 }
 
 export interface PixelRagMetric {
-  readonly id: "precision_at_3" | "ndcg_at_5" | "intent_top3_jaccard" | "outside_mask_ssim" | "content_retention" | "intent_alignment";
+  readonly id: "precision_at_3" | "ndcg_at_5" | "mrr" | "recall_at_5" | "intent_top3_jaccard" | "outside_mask_ssim" | "content_retention" | "intent_alignment";
   readonly label: string;
   readonly value: number | null;
   readonly display: string;
@@ -128,17 +128,36 @@ export interface PixelRagIntent {
     readonly namespace: string;
     readonly corpus_label: string;
     readonly rationale: string;
-    readonly mask_ref: string | null;
+    readonly region_query_ref: string | null;
+    readonly rectangle: {
+      readonly height: number;
+      readonly width: number;
+      readonly x: number;
+      readonly y: number;
+    } | null;
   };
   readonly evidence: readonly PixelRagEvidenceHit[];
   readonly pipeline: readonly PixelRagPipelineStage[];
   readonly metrics: readonly PixelRagMetric[];
+  readonly raw_metrics?: readonly PixelRagMetric[];
+  readonly verification_status: "not_run" | "passed" | "failed";
   readonly output: {
     readonly state: "external_precomputed_fixture" | "recorded_external_output" | "not_available";
     readonly label: string;
     readonly content_ref: string | null;
     readonly rollback_ref: string;
     readonly caveat: string;
+    readonly history?: readonly {
+      readonly content_ref: string;
+      readonly disposition: "rejected";
+      readonly evidence_id: string;
+      readonly verification: readonly PixelRagMetric[];
+    }[];
+    readonly postprocess?: {
+      readonly method: "source_backed_region_overlay";
+      readonly provenance_sha256: string;
+      readonly revision: string;
+    } | null;
   };
 }
 
@@ -164,6 +183,14 @@ export interface PixelRagArtifact {
     readonly source_page: string;
   };
   readonly intents: readonly PixelRagIntent[];
+  readonly qwen_diagnostics?: {
+    readonly interpretation: string;
+    readonly local_lemon_minus_apple_margin: number;
+    readonly raw_cosine_is_probability: false;
+    readonly restyle_content_retention: number;
+    readonly style_margin: number;
+    readonly validated_style_probability: false;
+  };
   readonly preference: {
     readonly status: "governed_snapshot_fixture" | "trained_snapshot";
     readonly explanation: string;
@@ -284,12 +311,13 @@ export const pixelRagArtifact = {
       title: "Replace apple tree with lemon tree",
       prompt: "Replace only the selected apple tree with a mature lemon tree. Preserve the ground, sky, people, and camera geometry.",
       query: {
-        granularity: "confirmed_mask",
-        label: "Confirmed tree mask",
+        granularity: "confirmed_region",
+        label: "Confirmed editable rectangle",
         namespace: "demo:replace:lemon-tree",
         corpus_label: "Lemon trees · silhouette, view, light",
         rationale: "Retrieve region-compatible lemon-tree evidence; whole-frame painting similarity would answer the wrong question.",
-        mask_ref: "sha256:760d394bf9b4350301f29fcff17f315412ad8a0ae3de9c9ef1b3a92f915bcc11",
+        region_query_ref: "sha256:760d394bf9b4350301f29fcff17f315412ad8a0ae3de9c9ef1b3a92f915bcc11",
+        rectangle: { height: 0.9, width: 0.72, x: 0.18, y: 0.05 },
       },
       evidence: [
         fixtureHit(1, "reference_02.png", "a1f3d5526341c49554b1377d705a4ef9663626e17f49cb6d89cacc377961b15c", "Eureka lemon · lateral canopy", "Dataset manifest fixture", 0.882, "Closest canopy silhouette and diffuse light."),
@@ -302,6 +330,7 @@ export const pixelRagArtifact = {
         { id: "ndcg_at_5", label: "nDCG@5", value: 0.86, display: "0.860", target: "≥ 0.800", passed: true, source: "contract_fixture" },
         { id: "outside_mask_ssim", label: "Outside-mask SSIM", value: 0.963, display: "0.963", target: "≥ 0.950", passed: true, source: "contract_fixture" },
       ],
+      verification_status: "passed",
       output: {
         state: "external_precomputed_fixture",
         label: "Firefly Fill boundary · output fixture",
@@ -321,7 +350,8 @@ export const pixelRagArtifact = {
         namespace: "demo:style:claude-lorrain",
         corpus_label: "Claude Lorrain · public-domain paintings",
         rationale: "Retrieve global style evidence while a separate content anchor protects layout and subject identity.",
-        mask_ref: null,
+        region_query_ref: null,
+        rectangle: null,
       },
       evidence: [
         fixtureHit(1, "reference_10.png", "65d29543dffe714b664332b9943b074a5fc3a380dd749834674600beb4f4be7f", "Pastoral landscape · luminous distance", "Claude Lorrain corpus fixture", 0.901, "Closest atmospheric depth and warm horizon."),
@@ -334,6 +364,7 @@ export const pixelRagArtifact = {
         { id: "ndcg_at_5", label: "nDCG@5", value: 0.91, display: "0.910", target: "≥ 0.800", passed: true, source: "contract_fixture" },
         { id: "content_retention", label: "Content retention", value: 0.886, display: "0.886", target: "reported, not gated", passed: true, source: "contract_fixture" },
       ],
+      verification_status: "passed",
       output: {
         state: "external_precomputed_fixture",
         label: "Firefly Style Reference boundary · output fixture",
@@ -496,7 +527,7 @@ function metricAt(value: unknown, path: string): PixelRagMetric {
     throw new Error(`${path}.passed cannot exist without a measured value`);
   }
   return {
-    id: exact(record.id, ["precision_at_3", "ndcg_at_5", "intent_top3_jaccard", "outside_mask_ssim", "content_retention", "intent_alignment"], `${path}.id`),
+    id: exact(record.id, ["precision_at_3", "ndcg_at_5", "mrr", "recall_at_5", "intent_top3_jaccard", "outside_mask_ssim", "content_retention", "intent_alignment"], `${path}.id`),
     label: stringAt(record.label, `${path}.label`),
     value: measured,
     display: stringAt(record.display, `${path}.display`),
@@ -508,9 +539,9 @@ function metricAt(value: unknown, path: string): PixelRagMetric {
 
 function intentAt(value: unknown, path: string): PixelRagIntent {
   const record = objectAt(value, path);
-  closed(record, ["id", "eyebrow", "title", "prompt", "query", "evidence", "pipeline", "metrics", "output"], path);
+  closed(record, ["id", "eyebrow", "title", "prompt", "query", "evidence", "pipeline", "metrics", "raw_metrics", "verification_status", "output"], path);
   const query = objectAt(record.query, `${path}.query`);
-  closed(query, ["granularity", "label", "namespace", "corpus_label", "rationale", "mask_ref"], `${path}.query`);
+  closed(query, ["granularity", "label", "namespace", "corpus_label", "rationale", "region_query_ref", "rectangle"], `${path}.query`);
   const evidence = arrayAt(record.evidence, `${path}.evidence`).map((hit, index) => hitAt(hit, `${path}.evidence[${index}]`));
   if (evidence.length !== 3 || evidence.some((hit, index) => hit.rank !== index + 1)) {
     throw new Error(`${path}.evidence must have three contiguous ranks`);
@@ -520,25 +551,91 @@ function intentAt(value: unknown, path: string): PixelRagIntent {
     throw new Error(`${path}.pipeline must preserve the declared stage sequence`);
   }
   const metrics = arrayAt(record.metrics, `${path}.metrics`).map((metric, index) => metricAt(metric, `${path}.metrics[${index}]`));
+  const rawMetrics = record.raw_metrics === undefined
+    ? undefined
+    : arrayAt(record.raw_metrics, `${path}.raw_metrics`).map((metric, index) => metricAt(metric, `${path}.raw_metrics[${index}]`));
   const output = objectAt(record.output, `${path}.output`);
-  closed(output, ["state", "label", "content_ref", "rollback_ref", "caveat"], `${path}.output`);
-  const maskRef = query.mask_ref === null ? null : contentRefAt(query.mask_ref, `${path}.query.mask_ref`);
+  closed(output, ["state", "label", "content_ref", "rollback_ref", "caveat", "history", "postprocess"], `${path}.output`);
+  const history = output.history === undefined
+    ? undefined
+    : arrayAt(output.history, `${path}.output.history`).map((item, index) => {
+      const itemPath = `${path}.output.history[${index}]`;
+      const entry = objectAt(item, itemPath);
+      closed(entry, ["content_ref", "disposition", "evidence_id", "verification"], itemPath);
+      const verification = arrayAt(entry.verification, `${itemPath}.verification`)
+        .map((metric, metricIndex) => metricAt(
+          metric,
+          `${itemPath}.verification[${metricIndex}]`,
+        ));
+      if (!verification.some((metric) => metric.passed === false)) {
+        throw new Error(`${itemPath} must retain at least one failed verifier`);
+      }
+      return {
+        content_ref: contentRefAt(entry.content_ref, `${itemPath}.content_ref`),
+        disposition: exact(entry.disposition, ["rejected"], `${itemPath}.disposition`),
+        evidence_id: stringAt(entry.evidence_id, `${itemPath}.evidence_id`),
+        verification,
+      };
+    });
+  const postprocess = output.postprocess === undefined || output.postprocess === null
+    ? output.postprocess
+    : (() => {
+      const entry = objectAt(output.postprocess, `${path}.output.postprocess`);
+      closed(entry, ["method", "provenance_sha256", "revision"], `${path}.output.postprocess`);
+      return {
+        method: exact(entry.method, ["source_backed_region_overlay"], `${path}.output.postprocess.method`),
+        provenance_sha256: shaAt(
+          entry.provenance_sha256,
+          `${path}.output.postprocess.provenance_sha256`,
+        ),
+        revision: stringAt(entry.revision, `${path}.output.postprocess.revision`),
+      };
+    })();
+  const regionQueryRef = query.region_query_ref === null
+    ? null
+    : contentRefAt(query.region_query_ref, `${path}.query.region_query_ref`);
+  const rectangle = query.rectangle === null
+    ? null
+    : (() => {
+      const entry = objectAt(query.rectangle, `${path}.query.rectangle`);
+      closed(entry, ["height", "width", "x", "y"], `${path}.query.rectangle`);
+      const parsed = {
+        height: finiteAt(entry.height, `${path}.query.rectangle.height`),
+        width: finiteAt(entry.width, `${path}.query.rectangle.width`),
+        x: finiteAt(entry.x, `${path}.query.rectangle.x`),
+        y: finiteAt(entry.y, `${path}.query.rectangle.y`),
+      };
+      if (
+        parsed.height <= 0 || parsed.width <= 0 || parsed.x < 0 || parsed.y < 0
+        || parsed.x + parsed.width > 1 || parsed.y + parsed.height > 1
+      ) {
+        throw new Error(`${path}.query.rectangle must remain inside the normalized frame`);
+      }
+      return parsed;
+    })();
   return {
     id: exact(record.id, ["local_replace", "global_restyle"], `${path}.id`),
     eyebrow: stringAt(record.eyebrow, `${path}.eyebrow`),
     title: stringAt(record.title, `${path}.title`),
     prompt: stringAt(record.prompt, `${path}.prompt`),
     query: {
-      granularity: exact(query.granularity, ["confirmed_mask", "whole_frame"], `${path}.query.granularity`),
+      granularity: exact(query.granularity, ["confirmed_region", "whole_frame"], `${path}.query.granularity`),
       label: stringAt(query.label, `${path}.query.label`),
       namespace: stringAt(query.namespace, `${path}.query.namespace`),
       corpus_label: stringAt(query.corpus_label, `${path}.query.corpus_label`),
       rationale: stringAt(query.rationale, `${path}.query.rationale`),
-      mask_ref: maskRef,
+      region_query_ref: regionQueryRef,
+      rectangle,
     },
     evidence,
     pipeline,
     metrics,
+    ...(rawMetrics === undefined ? {} : { raw_metrics: rawMetrics }),
+    verification_status: exact(
+      record.verification_status,
+      ["not_run", "passed", "failed"],
+      `${path}.verification_status`,
+    ),
     output: {
       state: exact(output.state, ["external_precomputed_fixture", "recorded_external_output", "not_available"], `${path}.output.state`),
       label: stringAt(output.label, `${path}.output.label`),
@@ -547,6 +644,8 @@ function intentAt(value: unknown, path: string): PixelRagIntent {
         : contentRefAt(output.content_ref, `${path}.output.content_ref`),
       rollback_ref: contentRefAt(output.rollback_ref, `${path}.output.rollback_ref`),
       caveat: stringAt(output.caveat, `${path}.output.caveat`),
+      ...(history === undefined ? {} : { history }),
+      ...(postprocess === undefined ? {} : { postprocess }),
     },
   };
 }
@@ -575,7 +674,7 @@ function snapshotAt(value: unknown, path: string): PixelRagPreferenceSnapshot {
 
 export function decodePixelRagArtifact(value: unknown): PixelRagArtifact {
   const record = objectAt(value, "$pixel_rag");
-  closed(record, ["format_version", "artifact_id", "evidence_status", "status_label", "source", "intents", "preference", "provenance"], "$pixel_rag");
+  closed(record, ["format_version", "artifact_id", "evidence_status", "status_label", "source", "intents", "qwen_diagnostics", "preference", "provenance"], "$pixel_rag");
   exact(record.format_version, [1], "$pixel_rag.format_version");
   const source = objectAt(record.source, "$pixel_rag.source");
   closed(source, ["asset_id", "label", "content_sha256", "source_page", "media", "khive"], "$pixel_rag.source");
@@ -600,6 +699,7 @@ export function decodePixelRagArtifact(value: unknown): PixelRagArtifact {
       khiveAt(source.khive, "$pixel_rag.source.khive").content_ref,
       ...intents.flatMap((intent) => [
         ...intent.evidence.map((hit) => hit.khive.content_ref),
+        ...(intent.output.history ?? []).map((entry) => entry.content_ref),
         intent.output.content_ref,
         intent.output.rollback_ref,
       ]),
@@ -610,6 +710,23 @@ export function decodePixelRagArtifact(value: unknown): PixelRagArtifact {
   }
   const provenance = objectAt(record.provenance, "$pixel_rag.provenance");
   closed(provenance, ["generated_at", "source_manifest_sha256", "khive_revision", "lattice_descriptor", "run_fingerprint"], "$pixel_rag.provenance");
+  const qwen = record.qwen_diagnostics === undefined
+    ? undefined
+    : (() => {
+      const entry = objectAt(record.qwen_diagnostics, "$pixel_rag.qwen_diagnostics");
+      closed(entry, ["interpretation", "local_lemon_minus_apple_margin", "raw_cosine_is_probability", "restyle_content_retention", "style_margin", "validated_style_probability"], "$pixel_rag.qwen_diagnostics");
+      if (entry.raw_cosine_is_probability !== false || entry.validated_style_probability !== false) {
+        throw new Error("$pixel_rag.qwen_diagnostics must remain explicitly non-probabilistic");
+      }
+      return {
+        interpretation: stringAt(entry.interpretation, "$pixel_rag.qwen_diagnostics.interpretation"),
+        local_lemon_minus_apple_margin: finiteAt(entry.local_lemon_minus_apple_margin, "$pixel_rag.qwen_diagnostics.local_lemon_minus_apple_margin"),
+        raw_cosine_is_probability: false as const,
+        restyle_content_retention: finiteAt(entry.restyle_content_retention, "$pixel_rag.qwen_diagnostics.restyle_content_retention"),
+        style_margin: finiteAt(entry.style_margin, "$pixel_rag.qwen_diagnostics.style_margin"),
+        validated_style_probability: false as const,
+      };
+    })();
   return {
     format_version: 1,
     artifact_id: stringAt(record.artifact_id, "$pixel_rag.artifact_id"),
@@ -624,6 +741,7 @@ export function decodePixelRagArtifact(value: unknown): PixelRagArtifact {
       khive: khiveAt(source.khive, "$pixel_rag.source.khive"),
     },
     intents,
+    ...(qwen === undefined ? {} : { qwen_diagnostics: qwen }),
     preference: {
       status: exact(preference.status, ["governed_snapshot_fixture", "trained_snapshot"], "$pixel_rag.preference.status"),
       explanation: stringAt(preference.explanation, "$pixel_rag.preference.explanation"),
@@ -762,6 +880,8 @@ function enginePipeline(value: unknown, path: string): readonly PixelRagPipeline
 const metricLabels: Readonly<Record<PixelRagMetric["id"], string>> = {
   precision_at_3: "P@3",
   ndcg_at_5: "nDCG@5",
+  mrr: "MRR",
+  recall_at_5: "Recall@5",
   intent_top3_jaccard: "Top-3 overlap",
   outside_mask_ssim: "Outside-mask SSIM",
   content_retention: "Content retention",
@@ -774,7 +894,7 @@ function engineRetrievalMetric(
   evidenceStatus: PixelRagEvidenceStatus,
 ): PixelRagMetric {
   const record = objectAt(value, path);
-  const id = exact(record.id, ["precision_at_3", "ndcg_at_5"], `${path}.id`);
+  const id = exact(record.id, ["precision_at_3", "ndcg_at_5", "mrr", "recall_at_5"], `${path}.id`);
   const source = exact(record.source, ["contract_fixture", "measured_run"], `${path}.source`);
   if (source !== evidenceStatus) throw new Error(`${path}.source does not match artifact evidence`);
   const state = exact(record.state, ["computed", "not_computed"], `${path}.state`);
@@ -903,6 +1023,7 @@ function engineOutput(
   value: unknown,
   path: string,
   rollbackRef: string,
+  history: NonNullable<PixelRagIntent["output"]["history"]>,
 ): PixelRagIntent["output"] {
   if (value === null) {
     return {
@@ -911,11 +1032,31 @@ function engineOutput(
       content_ref: null,
       rollback_ref: rollbackRef,
       caveat: "The governed retrieval plan exists, but this artifact supplies no generator output.",
+      history,
+      postprocess: null,
     };
   }
   const record = objectAt(value, path);
   exact(record.state, ["precomputed_external_output"], `${path}.state`);
   const generator = objectAt(record.generator, `${path}.generator`);
+  const postprocess = generator.deterministic_postprocess === undefined
+    ? null
+    : (() => {
+      const entry = objectAt(generator.deterministic_postprocess, `${path}.generator.deterministic_postprocess`);
+      closed(
+        entry,
+        ["method", "provenance_sha256", "revision"],
+        `${path}.generator.deterministic_postprocess`,
+      );
+      return {
+        method: exact(entry.method, ["source_backed_region_overlay"], `${path}.generator.deterministic_postprocess.method`),
+        provenance_sha256: shaAt(
+          entry.provenance_sha256,
+          `${path}.generator.deterministic_postprocess.provenance_sha256`,
+        ),
+        revision: stringAt(entry.revision, `${path}.generator.deterministic_postprocess.revision`),
+      };
+    })();
   const registration = objectAt(record.blob_store_registration, `${path}.blob_store_registration`);
   const registrationState = exact(
     registration.state,
@@ -940,7 +1081,37 @@ function engineOutput(
     caveat: registrationState === "registered"
       ? "External generator bytes are registered under the matching immutable Khive ContentRef."
       : "External generator bytes are hashed locally and are not claimed as a Khive BlobStore record.",
+    history,
+    postprocess,
   };
+}
+
+function engineOutputHistory(
+  value: unknown,
+  path: string,
+  evidenceStatus: PixelRagEvidenceStatus,
+): NonNullable<PixelRagIntent["output"]["history"]> {
+  return arrayAt(value, path).map((item, index) => {
+    const itemPath = `${path}[${index}]`;
+    const entry = objectAt(item, itemPath);
+    const output = objectAt(entry.output, `${itemPath}.output`);
+    const verification = objectAt(entry.verification, `${itemPath}.verification`);
+    const metrics = arrayAt(verification.metrics, `${itemPath}.verification.metrics`)
+      .map((metric, metricIndex) => engineVerificationMetric(
+        metric,
+        `${itemPath}.verification.metrics[${metricIndex}]`,
+        evidenceStatus,
+      ));
+    if (!metrics.some((candidate) => candidate.passed === false)) {
+      throw new Error(`${itemPath} must preserve at least one failed verifier`);
+    }
+    return {
+      content_ref: contentRefAt(output.output_content_ref, `${itemPath}.output.output_content_ref`),
+      disposition: exact(entry.disposition, ["rejected"], `${itemPath}.disposition`),
+      evidence_id: stringAt(entry.evidence_id, `${itemPath}.evidence_id`),
+      verification: metrics,
+    };
+  });
 }
 
 function engineIntent(
@@ -967,7 +1138,23 @@ function engineIntent(
       `${path}.retrieval.metrics[${index}]`,
       evidenceStatus,
     ));
+  const rawDiagnostics = retrieval.raw_diagnostics === undefined
+    ? null
+    : objectAt(retrieval.raw_diagnostics, `${path}.retrieval.raw_diagnostics`);
+  const rawMetrics = rawDiagnostics === null
+    ? undefined
+    : arrayAt(rawDiagnostics.metrics, `${path}.retrieval.raw_diagnostics.metrics`)
+      .map((entry, index) => engineRetrievalMetric(
+        entry,
+        `${path}.retrieval.raw_diagnostics.metrics[${index}]`,
+        evidenceStatus,
+      ));
   const verification = objectAt(record.verification, `${path}.verification`);
+  const verificationStatus = exact(
+    verification.status,
+    ["not_run", "passed", "failed"],
+    `${path}.verification.status`,
+  );
   const verificationMetrics = arrayAt(verification.metrics, `${path}.verification.metrics`)
     .map((entry, index) => engineVerificationMetric(
       entry,
@@ -976,15 +1163,31 @@ function engineIntent(
     ));
   const plan = objectAt(record.plan, `${path}.plan`);
   const queryRef = contentRefAt(query.content_ref, `${path}.route.query.content_ref`);
+  const routeRegion = local
+    ? objectAt(route.region, `${path}.route.region`)
+    : null;
+  const rectangle = routeRegion === null
+    ? null
+    : {
+      height: finiteAt(routeRegion.height, `${path}.route.region.height`),
+      width: finiteAt(routeRegion.width, `${path}.route.region.width`),
+      x: finiteAt(routeRegion.x, `${path}.route.region.x`),
+      y: finiteAt(routeRegion.y, `${path}.route.region.y`),
+    };
+  const history = engineOutputHistory(
+    record.negative_output_evidence ?? [],
+    `${path}.negative_output_evidence`,
+    evidenceStatus,
+  );
   return {
     id,
     eyebrow: local ? "Local semantic replacement" : "Global style transfer",
     title: local ? "Replace apple tree with lemon tree" : "Restyle as Claude Lorrain",
     prompt: stringAt(record.designer_prompt, `${path}.designer_prompt`),
     query: {
-      granularity: local ? "confirmed_mask" : "whole_frame",
+      granularity: local ? "confirmed_region" : "whole_frame",
       label: local
-        ? `Confirmed · ${stringAt(objectAt(route.region, `${path}.route.region`).label, `${path}.route.region.label`)}`
+        ? `Confirmed · ${stringAt(routeRegion?.label, `${path}.route.region.label`)}`
         : "Whole frame",
       namespace: stringAt(route.namespace, `${path}.route.namespace`),
       corpus_label: local
@@ -993,12 +1196,56 @@ function engineIntent(
       rationale: local
         ? "A confirmed region queries only governed lemon-tree evidence; global painting similarity would answer the wrong task."
         : "The whole source queries governed Claude Lorrain evidence while verification remains a separate content-preservation concern.",
-      mask_ref: local ? queryRef : null,
+      region_query_ref: local ? queryRef : null,
+      rectangle,
     },
     evidence,
     pipeline: enginePipeline(plan.stages, `${path}.plan.stages`),
     metrics: [...retrievalMetrics, ...verificationMetrics, crossMetric],
-    output: engineOutput(record.output, `${path}.output`, rollbackRef),
+    ...(rawMetrics === undefined ? {} : { raw_metrics: rawMetrics }),
+    verification_status: verificationStatus,
+    output: engineOutput(record.output, `${path}.output`, rollbackRef, history),
+  };
+}
+
+function engineQwenDiagnostics(
+  value: unknown,
+  path: string,
+): NonNullable<PixelRagArtifact["qwen_diagnostics"]> | undefined {
+  if (value === null || value === undefined) return undefined;
+  const record = objectAt(value, path);
+  const contract = objectAt(record.contract, `${path}.contract`);
+  if (
+    contract.raw_cosine_is_probability !== false
+    || contract.validated_csd_or_style_probability !== false
+  ) {
+    throw new Error(`${path} must remain explicitly non-probabilistic`);
+  }
+  const local = objectAt(
+    record.local_output_region_intent_alignment,
+    `${path}.local_output_region_intent_alignment`,
+  );
+  const retention = objectAt(
+    record.restyle_content_retention,
+    `${path}.restyle_content_retention`,
+  );
+  const style = objectAt(record.restyle_style_affinity, `${path}.restyle_style_affinity`);
+  return {
+    interpretation: stringAt(contract.interpretation, `${path}.contract.interpretation`),
+    local_lemon_minus_apple_margin: finiteAt(
+      local.mean_lemon_minus_apple_margin,
+      `${path}.local_output_region_intent_alignment.mean_lemon_minus_apple_margin`,
+    ),
+    raw_cosine_is_probability: false,
+    restyle_content_retention: finiteAt(
+      retention.cosine,
+      `${path}.restyle_content_retention.cosine`,
+    ),
+    style_margin: finiteAt(
+      style.claude_minus_vangogh_margin,
+      `${path}.restyle_style_affinity.claude_minus_vangogh_margin`,
+    ),
+    validated_style_probability: false,
   };
 }
 
@@ -1049,6 +1296,10 @@ export function projectEnginePixelRagArtifact(
     "$pixel_rag_bridge.artifact.source_manifest",
   );
   const provenance = objectAt(engine.provenance, "$pixel_rag_bridge.artifact.provenance");
+  const qwen = engineQwenDiagnostics(
+    engine.experimental_visual_embedding_diagnostics,
+    "$pixel_rag_bridge.artifact.experimental_visual_embedding_diagnostics",
+  );
   const artifact = {
     format_version: 1,
     artifact_id: artifactId,
@@ -1071,6 +1322,7 @@ export function projectEnginePixelRagArtifact(
       khive: sourceKhive,
     },
     intents,
+    ...(qwen === undefined ? {} : { qwen_diagnostics: qwen }),
     // Preference evidence is governed by its own artifact. The bridge never upgrades this panel.
     preference: pixelRagArtifact.preference,
     provenance: {

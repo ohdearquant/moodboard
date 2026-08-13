@@ -4,6 +4,42 @@
   "title": "Moodboard governed Pixel RAG artifact v1",
   "type": "object",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": { "evidence_status": { "const": "measured_run" } },
+        "required": ["evidence_status"]
+      },
+      "then": {
+        "properties": {
+          "provenance": { "required": ["evidence_sha256"] }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "provenance": {
+            "properties": {
+              "compiler_revision": { "const": "moodboard.pixel-rag-compiler.v2" }
+            },
+            "required": ["compiler_revision"]
+          }
+        },
+        "required": ["provenance"]
+      },
+      "then": {
+        "properties": {
+          "intents": {
+            "prefixItems": [
+              { "$ref": "#/$defs/extendedIntent" },
+              { "$ref": "#/$defs/extendedIntent" }
+            ]
+          }
+        }
+      }
+    }
+  ],
   "required": [
     "artifact_id",
     "contracts",
@@ -40,6 +76,12 @@
     },
     "descriptor": { "$ref": "#/$defs/descriptor" },
     "evidence_status": { "$ref": "#/$defs/evidenceStatus" },
+    "experimental_visual_embedding_diagnostics": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/experimentalVisualEmbeddingDiagnostics" }
+      ]
+    },
     "intents": {
       "type": "array",
       "minItems": 2,
@@ -61,10 +103,14 @@
         "run_fingerprint"
       ],
       "properties": {
-        "compiler_revision": { "const": "moodboard.pixel-rag-compiler.v1" },
+        "compiler_revision": {
+          "enum": ["moodboard.pixel-rag-compiler.v1", "moodboard.pixel-rag-compiler.v2"]
+        },
+        "evidence_sha256": { "$ref": "#/$defs/evidenceSha256" },
         "generated_at": { "$ref": "#/$defs/timestamp" },
         "khive_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
         "measurements_sha256": { "$ref": "#/$defs/digest" },
+        "projection": { "$ref": "#/$defs/projection" },
         "run_fingerprint": { "$ref": "#/$defs/digest" }
       }
     },
@@ -84,6 +130,101 @@
   },
   "$defs": {
     "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "evidenceSha256": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evaluation_preregistration",
+        "intent_freeze",
+        "verification_summary"
+      ],
+      "properties": {
+        "evaluation_preregistration": { "$ref": "#/$defs/digest" },
+        "intent_freeze": { "$ref": "#/$defs/digest" },
+        "verification_summary": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "diagnosticContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "interpretation",
+        "kind",
+        "raw_cosine_is_probability",
+        "validated_csd_or_style_probability"
+      ],
+      "properties": {
+        "interpretation": {
+          "const": "descriptive diagnostic only; no calibrated semantic or style claim"
+        },
+        "kind": { "const": "experimental_qwen_visual_embedding_cosine" },
+        "raw_cosine_is_probability": { "const": false },
+        "validated_csd_or_style_probability": { "const": false }
+      }
+    },
+    "localOutputRegionIntentAlignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mean_apple_cosine",
+        "mean_lemon_cosine",
+        "mean_lemon_minus_apple_margin",
+        "output_role"
+      ],
+      "properties": {
+        "mean_apple_cosine": { "type": "number", "minimum": -1, "maximum": 1 },
+        "mean_lemon_cosine": { "type": "number", "minimum": -1, "maximum": 1 },
+        "mean_lemon_minus_apple_margin": { "type": "number", "minimum": -2, "maximum": 2 },
+        "output_role": { "const": "local_output_region_diagnostic" }
+      }
+    },
+    "restyleContentRetention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cosine", "output_role"],
+      "properties": {
+        "cosine": { "type": "number", "minimum": -1, "maximum": 1 },
+        "output_role": { "const": "external_precomputed_global_restyle" }
+      }
+    },
+    "restyleStyleAffinity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claude_centroid_cosine",
+        "claude_minus_vangogh_margin",
+        "claude_reference_count",
+        "output_role",
+        "vangogh_centroid_cosine",
+        "vangogh_reference_count"
+      ],
+      "properties": {
+        "claude_centroid_cosine": { "type": "number", "minimum": -1, "maximum": 1 },
+        "claude_minus_vangogh_margin": { "type": "number", "minimum": -2, "maximum": 2 },
+        "claude_reference_count": { "const": 4 },
+        "output_role": { "const": "external_precomputed_global_restyle" },
+        "vangogh_centroid_cosine": { "type": "number", "minimum": -1, "maximum": 1 },
+        "vangogh_reference_count": { "const": 4 }
+      }
+    },
+    "experimentalVisualEmbeddingDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "local_output_region_intent_alignment",
+        "restyle_content_retention",
+        "restyle_style_affinity"
+      ],
+      "properties": {
+        "contract": { "$ref": "#/$defs/diagnosticContract" },
+        "local_output_region_intent_alignment": {
+          "$ref": "#/$defs/localOutputRegionIntentAlignment"
+        },
+        "restyle_content_retention": { "$ref": "#/$defs/restyleContentRetention" },
+        "restyle_style_affinity": { "$ref": "#/$defs/restyleStyleAffinity" }
+      }
+    },
     "uuid": {
       "type": "string",
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -218,7 +359,7 @@
         "schema_version": { "const": "moodboard.visual-descriptor.v1" }
       }
     },
-    "confirmation": {
+    "legacyConfirmation": {
       "type": "object",
       "additionalProperties": false,
       "required": ["actor", "confirmed_at", "method"],
@@ -227,6 +368,28 @@
         "confirmed_at": { "$ref": "#/$defs/timestamp" },
         "method": { "const": "human_confirmed" }
       }
+    },
+    "evidenceBoundConfirmation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_kind",
+        "evidence_sha256",
+        "json_pointer",
+        "method"
+      ],
+      "properties": {
+        "evidence_kind": { "const": "evaluation_preregistration" },
+        "evidence_sha256": { "$ref": "#/$defs/digest" },
+        "json_pointer": { "type": "string", "pattern": "^/" },
+        "method": { "const": "evidence_bound_human_confirmation" }
+      }
+    },
+    "confirmation": {
+      "oneOf": [
+        { "$ref": "#/$defs/legacyConfirmation" },
+        { "$ref": "#/$defs/evidenceBoundConfirmation" }
+      ]
     },
     "region": {
       "type": "object",
@@ -339,7 +502,7 @@
           "additionalProperties": false,
           "required": ["id", "reason", "source", "state", "value"],
           "properties": {
-            "id": { "enum": ["precision_at_3", "ndcg_at_5"] },
+            "id": { "enum": ["precision_at_3", "ndcg_at_5", "mrr", "recall_at_5"] },
             "reason": { "type": "string", "minLength": 1 },
             "source": { "$ref": "#/$defs/evidenceStatus" },
             "state": { "const": "not_computed" },
@@ -371,6 +534,39 @@
             "state": { "const": "computed" },
             "value": { "type": "number", "minimum": 0, "maximum": 1 }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "source", "state", "value"],
+          "properties": {
+            "id": { "const": "mrr" },
+            "source": { "$ref": "#/$defs/evidenceStatus" },
+            "state": { "const": "computed" },
+            "value": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "k",
+            "relevant_retrieved",
+            "source",
+            "state",
+            "total_relevant",
+            "value"
+          ],
+          "properties": {
+            "id": { "const": "recall_at_5" },
+            "k": { "const": 5 },
+            "relevant_retrieved": { "type": "integer", "minimum": 0 },
+            "source": { "$ref": "#/$defs/evidenceStatus" },
+            "state": { "const": "computed" },
+            "total_relevant": { "type": "integer", "minimum": 0 },
+            "value": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
         }
       ]
     },
@@ -396,8 +592,11 @@
         "metrics": {
           "type": "array",
           "minItems": 2,
-          "maxItems": 2,
+          "maxItems": 4,
           "items": { "$ref": "#/$defs/retrievalMetric" }
+        },
+        "metrics_interpretation": {
+          "const": "structural_routing_control_not_learned_retrieval_quality"
         },
         "ranked_evidence": {
           "type": "array",
@@ -405,7 +604,38 @@
           "maxItems": 3,
           "items": { "$ref": "#/$defs/rankedEvidence" }
         },
+        "raw_diagnostics": { "$ref": "#/$defs/rawDiagnostics" },
         "raw_hit_count": { "type": "integer", "minimum": 3, "maximum": 100 }
+      }
+    },
+    "rawDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exact_score_order",
+        "gate",
+        "interpretation",
+        "metrics",
+        "probabilistic_interpretation"
+      ],
+      "properties": {
+        "exact_score_order": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/exactOrder" }
+        },
+        "gate": { "const": "ungated" },
+        "interpretation": {
+          "const": "experimental_qwen_visual_embedding_geometry_not_probability"
+        },
+        "metrics": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/retrievalMetric" }
+        },
+        "probabilistic_interpretation": { "const": false }
       }
     },
     "conditioning": {
@@ -477,14 +707,18 @@
       "additionalProperties": false,
       "required": [
         "id",
-        "method_revision",
         "operator",
         "passed",
         "source",
         "threshold",
         "value"
       ],
+      "oneOf": [
+        { "required": ["method_revision"] },
+        { "required": ["evidence_field"] }
+      ],
       "properties": {
+        "evidence_field": { "$ref": "#/$defs/evidenceField" },
         "id": { "enum": ["outside_mask_ssim", "content_retention", "intent_alignment"] },
         "method_revision": { "type": "string", "minLength": 1 },
         "operator": { "enum": ["greater_than_or_equal", "less_than_or_equal"] },
@@ -492,6 +726,27 @@
         "source": { "$ref": "#/$defs/evidenceStatus" },
         "threshold": { "type": "number", "minimum": -1, "maximum": 1 },
         "value": { "type": "number", "minimum": -1, "maximum": 1 }
+      }
+    },
+    "evidenceField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_kind", "evidence_sha256", "json_pointer"],
+      "properties": {
+        "evidence_kind": { "const": "verification_summary" },
+        "evidence_sha256": { "$ref": "#/$defs/digest" },
+        "json_pointer": { "type": "string", "pattern": "^/" }
+      }
+    },
+    "projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "sha256"],
+      "properties": {
+        "revision": {
+          "const": "moodboard.adobe-demo-frozen-evidence-projection.v1"
+        },
+        "sha256": { "$ref": "#/$defs/digest" }
       }
     },
     "verification": {
@@ -508,9 +763,20 @@
       "additionalProperties": false,
       "required": ["execution_mode", "provider", "service"],
       "properties": {
+        "deterministic_postprocess": { "$ref": "#/$defs/deterministicPostprocess" },
         "execution_mode": { "const": "precomputed_external" },
         "provider": { "type": "string", "minLength": 1 },
         "service": { "type": "string", "minLength": 1 }
+      }
+    },
+    "deterministicPostprocess": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "provenance_sha256", "revision"],
+      "properties": {
+        "method": { "const": "source_backed_region_overlay" },
+        "provenance_sha256": { "$ref": "#/$defs/digest" },
+        "revision": { "type": "string", "minLength": 1 }
       }
     },
     "registration": {
@@ -552,13 +818,23 @@
         "blob_store_registration": { "$ref": "#/$defs/registration" },
         "byte_size": { "type": "integer", "minimum": 1, "maximum": 25165824 },
         "external_location": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "path"],
-          "properties": {
-            "kind": { "const": "local_file" },
-            "path": { "type": "string", "minLength": 1 }
-          }
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": { "kind": { "const": "identity_only" } }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "path"],
+              "properties": {
+                "kind": { "const": "local_file" },
+                "path": { "type": "string", "minLength": 1 }
+              }
+            }
+          ]
         },
         "generator": { "$ref": "#/$defs/generator" },
         "image": { "$ref": "#/$defs/image" },
@@ -567,6 +843,28 @@
         "output_sha256": { "$ref": "#/$defs/digest" },
         "rollback": { "$ref": "#/$defs/khiveRecord" },
         "state": { "const": "precomputed_external_output" }
+      }
+    },
+    "negativeOutputEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disposition", "evidence_id", "output", "verification"],
+      "properties": {
+        "disposition": { "const": "rejected" },
+        "evidence_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$" },
+        "output": {
+          "allOf": [
+            { "$ref": "#/$defs/output" },
+            {
+              "properties": {
+                "blob_store_registration": {
+                  "properties": { "state": { "const": "registered" } }
+                }
+              }
+            }
+          ]
+        },
+        "verification": { "$ref": "#/$defs/verification" }
       }
     },
     "intent": {
@@ -584,6 +882,11 @@
       "properties": {
         "designer_prompt": { "type": "string", "minLength": 1 },
         "id": { "enum": ["local_replace", "global_restyle"] },
+        "negative_output_evidence": {
+          "type": "array",
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/negativeOutputEvidence" }
+        },
         "output": {
           "oneOf": [
             { "type": "null" },
@@ -596,13 +899,37 @@
         "verification": { "$ref": "#/$defs/verification" }
       }
     },
+    "extendedIntent": {
+      "allOf": [
+        { "$ref": "#/$defs/intent" },
+        {
+          "properties": {
+            "retrieval": {
+              "required": ["metrics_interpretation", "raw_diagnostics"],
+              "properties": {
+                "metrics": { "minItems": 4, "maxItems": 4 }
+              }
+            }
+          }
+        }
+      ]
+    },
     "crossMetric": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "intersection_count", "source", "union_count", "value"],
+      "required": [
+        "id",
+        "intersection_count",
+        "source",
+        "union_count",
+        "value"
+      ],
       "properties": {
         "id": { "const": "intent_top3_jaccard" },
         "intersection_count": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "interpretation": {
+          "const": "structural_routing_control_not_learned_retrieval_quality"
+        },
         "source": { "$ref": "#/$defs/evidenceStatus" },
         "union_count": { "type": "integer", "minimum": 0, "maximum": 6 },
         "value": { "type": "number", "minimum": 0, "maximum": 1 }

@@ -649,6 +649,9 @@ function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
   const [activeIntentId, setActiveIntentId] = useState(initialIntent.id);
   const intent = artifact.intents.find((candidate) => candidate.id === activeIntentId) ?? initialIntent;
   const source = resolvePixelRagMediaSource(artifact.source, model);
+  const verificationLabel = intent.verification_status === "not_run"
+    ? "Not run"
+    : intent.verification_status === "passed" ? "Passed" : "Failed";
 
   return (
     <section className="pixel-rag-lab" aria-label="Pixel RAG intent lab">
@@ -689,7 +692,7 @@ function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
         <aside className="pixel-source-panel">
           <div className="pixel-panel-title">
             <span>Source · immutable</span>
-            <span>{intent.query.granularity === "confirmed_mask" ? "Region query" : "Global query"}</span>
+            <span>{intent.query.granularity === "confirmed_region" ? "Region query" : "Global query"}</span>
           </div>
           <div className={`pixel-source-frame pixel-source-${intent.query.granularity}`}>
             <SafeImage
@@ -697,8 +700,17 @@ function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
               alt={`Source asset ${artifact.source.asset_id}`}
               fallback="Source fixture does not resolve in this report."
             />
-            {intent.query.granularity === "confirmed_mask" ? (
-              <div className="pixel-mask" aria-label="Confirmed editable mask overlay">
+            {intent.query.granularity === "confirmed_region" && intent.query.rectangle ? (
+              <div
+                className="pixel-region"
+                aria-label="Confirmed editable rectangle overlay"
+                style={{
+                  height: `${intent.query.rectangle.height * 100}%`,
+                  left: `${intent.query.rectangle.x * 100}%`,
+                  top: `${intent.query.rectangle.y * 100}%`,
+                  width: `${intent.query.rectangle.width * 100}%`,
+                }}
+              >
                 <span>editable</span>
               </div>
             ) : (
@@ -721,7 +733,13 @@ function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
             <article>
               <span>Query granularity</span>
               <strong>{intent.query.label}</strong>
-              <small>{intent.query.mask_ref ? `mask · ${shortDigest(intent.query.mask_ref)}` : "all pixels editable; layout protected by verifier"}</small>
+              <small>
+                {intent.query.region_query_ref
+                  ? `region crop query · ${shortDigest(intent.query.region_query_ref)}`
+                  : intent.verification_status === "not_run"
+                    ? "all pixels editable; layout constraint declared; verifier not run"
+                    : `all pixels editable; layout verifier ${intent.verification_status}`}
+              </small>
             </article>
             <article>
               <span>Active Khive namespace</span>
@@ -796,6 +814,25 @@ function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
               </article>
             ))}
           </div>
+          <p className={`pixel-verification-status pixel-verification-${intent.verification_status}`}>
+            Selected edit verification · <strong>{verificationLabel}</strong>
+          </p>
+          {intent.raw_metrics ? (
+            <div className="pixel-routing-comparison" aria-label="Raw and routed retrieval comparison">
+              <div>
+                <span>Raw Qwen geometry · ungated</span>
+                <strong>{intent.raw_metrics.find((metric) => metric.id === "precision_at_3")?.display}</strong>
+                <small>P@3 before the declared intent filter</small>
+              </div>
+              <b aria-hidden="true">→</b>
+              <div>
+                <span>Intent-routed control</span>
+                <strong>{intent.metrics.find((metric) => metric.id === "precision_at_3")?.display}</strong>
+                <small>P@3 after the explicit collection gate</small>
+              </div>
+              <p>Routing metrics test deterministic filter integrity. They are not learned quality or probabilities.</p>
+            </div>
+          ) : null}
           <div className="pixel-output">
             <span>{intent.output.label}</span>
             <strong>{intent.output.state === "not_available" ? "No external output" : "Recorded external output"}</strong>
@@ -809,7 +846,44 @@ function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
               </div>
               <div><dt>Rollback</dt><dd title={intent.output.rollback_ref}>{shortDigest(intent.output.rollback_ref)}</dd></div>
             </dl>
+            {intent.output.history?.length ? (
+              <ol className="pixel-output-history" aria-label="Governed output iterations">
+                {intent.output.history.map((entry) => (
+                  <li key={entry.evidence_id}>
+                    <span>Rejected predecessor</span>
+                    <strong>
+                      {entry.verification.map((metric) => `${metric.label} ${metric.display}`).join(" · ")}
+                    </strong>
+                    <small title={entry.content_ref}>
+                      {shortDigest(entry.content_ref)} · failed {entry.verification
+                        .filter((metric) => metric.passed === false)
+                        .map((metric) => metric.target)
+                        .join(", ")}
+                    </small>
+                  </li>
+                ))}
+                {intent.output.state === "not_available" ? null : (
+                  <li className="pixel-output-selected">
+                    <span>Selected output</span>
+                    <strong>{intent.output.postprocess ? "Source-backed deterministic composite" : "Registered external output"}</strong>
+                    <small>
+                      {intent.output.postprocess
+                        ? `${intent.output.postprocess.revision} · selected verifier ${verificationLabel.toLowerCase()}; no exact-RGB or aesthetic claim · provenance ${shortDigest(intent.output.postprocess.provenance_sha256)}`
+                        : `immutable Khive registration · selected verifier ${verificationLabel.toLowerCase()}`}
+                    </small>
+                  </li>
+                )}
+              </ol>
+            ) : null}
           </div>
+          {artifact.qwen_diagnostics ? (
+            <aside className="pixel-qwen-diagnostics" aria-label="Experimental Qwen diagnostics">
+              <div><span>Local lemon − apple</span><strong>{artifact.qwen_diagnostics.local_lemon_minus_apple_margin.toFixed(6)}</strong></div>
+              <div><span>Restyle retention</span><strong>{artifact.qwen_diagnostics.restyle_content_retention.toFixed(6)}</strong></div>
+              <div><span>Claude − Van Gogh</span><strong>{artifact.qwen_diagnostics.style_margin.toFixed(6)}</strong></div>
+              <p>{artifact.qwen_diagnostics.interpretation}. Cosines are geometry—not probability or validated style.</p>
+            </aside>
+          ) : null}
         </section>
 
         <PreferenceReplayPanel evidence={measuredPreferenceReplayEvidence} />

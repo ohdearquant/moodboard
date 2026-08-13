@@ -73,6 +73,50 @@ function engineIntent(id: "local_replace" | "global_restyle"): any {
   return {
     designer_prompt: local ? "Replace the selected tree." : "Restyle the whole frame.",
     id,
+    negative_output_evidence: local
+      ? [{
+          disposition: "rejected",
+          evidence_id: "external_precomputed_failed_locality_v1",
+          output: {
+            blob_store_registration: {
+              content_ref: "1".repeat(64),
+              record_id: "00000000-0000-4000-8000-000000000010",
+              state: "registered",
+            },
+            generator: {
+              execution_mode: "precomputed_external",
+              provider: "OpenAI",
+              service: "ImageGen through Codex built-in",
+            },
+            output_content_ref: "1".repeat(64),
+            output_sha256: "2".repeat(64),
+            rollback: {
+              content_ref: "a".repeat(64),
+              record_id: "00000000-0000-4000-8000-000000000001",
+            },
+            state: "precomputed_external_output",
+          },
+          verification: {
+            metrics: [{
+              id: "outside_mask_ssim",
+              operator: "greater_than_or_equal",
+              passed: false,
+              source: "measured_run",
+              threshold: 0.95,
+              value: 0.3849,
+            }, {
+              id: "intent_alignment",
+              method_revision: "moodboard.intent-alignment.v1",
+              operator: "greater_than_or_equal",
+              passed: true,
+              source: "measured_run",
+              threshold: 0.7,
+              value: 0.8,
+            }],
+            status: "failed",
+          },
+        }]
+      : [],
     output: local
       ? {
           blob_store_registration: {
@@ -81,6 +125,11 @@ function engineIntent(id: "local_replace" | "global_restyle"): any {
             state: "registered",
           },
           generator: {
+            deterministic_postprocess: {
+              method: "source_backed_region_overlay",
+              provenance_sha256: "6".repeat(64),
+              revision: "ffmpeg-7.1.1-mask-overlay-v1",
+            },
             execution_mode: "precomputed_external",
             provider: "openai-imagegen",
             service: "Codex built-in ImageGen",
@@ -122,7 +171,29 @@ function engineIntent(id: "local_replace" | "global_restyle"): any {
           state: "computed",
           value: 0.91,
         },
+        { id: "mrr", source: "measured_run", state: "computed", value: 1 },
+        {
+          id: "recall_at_5",
+          k: 5,
+          relevant_retrieved: 3,
+          source: "measured_run",
+          state: "computed",
+          total_relevant: 3,
+          value: 1,
+        },
       ],
+      metrics_interpretation: "structural_routing_control_not_learned_retrieval_quality",
+      raw_diagnostics: {
+        gate: "ungated",
+        interpretation: "experimental_qwen_visual_embedding_geometry_not_probability",
+        metrics: [
+          { id: "precision_at_3", judged_relevant: 1, k: 3, source: "measured_run", state: "computed", value: 1 / 3 },
+          { gain_scale: [0, 1, 2, 3], id: "ndcg_at_5", k: 5, source: "measured_run", state: "computed", value: 0.51 },
+          { id: "mrr", source: "measured_run", state: "computed", value: 1 / 3 },
+          { id: "recall_at_5", k: 5, relevant_retrieved: 2, source: "measured_run", state: "computed", total_relevant: 3, value: 2 / 3 },
+        ],
+        probabilistic_interpretation: false,
+      },
       ranked_evidence: evidence,
     },
     route: {
@@ -192,6 +263,29 @@ function engineArtifact(): any {
       pooling: "mean_visual_tokens",
     },
     evidence_status: "measured_run",
+    experimental_visual_embedding_diagnostics: {
+      contract: {
+        interpretation: "descriptive diagnostic only; no calibrated semantic or style claim",
+        kind: "experimental_qwen_visual_embedding_cosine",
+        raw_cosine_is_probability: false,
+        validated_csd_or_style_probability: false,
+      },
+      local_output_region_intent_alignment: {
+        mean_apple_cosine: 0.8773,
+        mean_lemon_cosine: 0.8791,
+        mean_lemon_minus_apple_margin: 0.0018,
+        output_role: "local_output_region_diagnostic",
+      },
+      restyle_content_retention: { cosine: 0.8287, output_role: "external_precomputed_global_restyle" },
+      restyle_style_affinity: {
+        claude_centroid_cosine: 0.847032,
+        claude_minus_vangogh_margin: 0.000006,
+        claude_reference_count: 4,
+        output_role: "external_precomputed_global_restyle",
+        vangogh_centroid_cosine: 0.847026,
+        vangogh_reference_count: 4,
+      },
+    },
     intents: [engineIntent("local_replace"), engineIntent("global_restyle")],
     provenance: {
       generated_at: "2026-08-12T19:00:00Z",
@@ -214,15 +308,25 @@ function engineArtifact(): any {
 }
 
 describe("Pixel RAG demo artifact", () => {
-  it("consumes only the closed build-time bridge and keeps the explicit fallback sentinel", () => {
-    expect(pixelRagBridge).toEqual({
-      artifact: null,
+  it("consumes the Python-validated, byte-bound measured bridge shell", () => {
+    expect(pixelRagBridge).toMatchObject({
+      artifact: {
+        artifact_id: "52ed3d289ed37b607125f5003b3694fa6a81910c8e37d18dec219e5f597684ad",
+        evidence_status: "measured_run",
+      },
       format_version: "moodboard.viewer-pixel-rag-bridge.v1",
       generator_revision: "moodboard.pixel-rag-viewer-bridge.v1",
-      input: null,
-      state: "fallback",
+      input: {
+        artifact_id: "52ed3d289ed37b607125f5003b3694fa6a81910c8e37d18dec219e5f597684ad",
+        canonical_sha256: "893246e8ed475987f1334eaaadf0c68f87372312e71eb963e425896b23f3fc65",
+        sha256: "893246e8ed475987f1334eaaadf0c68f87372312e71eb963e425896b23f3fc65",
+      },
+      state: "projected",
     });
-    expect(verifiedPixelRagArtifact.artifact_id).toBe(pixelRagArtifact.artifact_id);
+    expect(verifiedPixelRagArtifact.artifact_id).toBe(
+      "52ed3d289ed37b607125f5003b3694fa6a81910c8e37d18dec219e5f597684ad",
+    );
+    expect(verifiedPixelRagArtifact.evidence_status).toBe("measured_run");
 
     const drifted = { ...pixelRagBridge, future: true };
     expect(() => decodePixelRagBridge(drifted)).toThrow(/unknown key/i);
@@ -264,6 +368,39 @@ describe("Pixel RAG demo artifact", () => {
       .toMatchObject({ display: "Not computed", passed: null, value: null });
     expect(projected.intents[0]?.metrics.find((metric) => metric.id === "outside_mask_ssim"))
       .toMatchObject({ display: "0.380", passed: false, target: "≥ 0.950" });
+    expect(projected.intents[0]?.metrics.find((metric) => metric.id === "mrr"))
+      .toMatchObject({ display: "1.000", passed: null });
+    expect(projected.intents[0]?.raw_metrics?.map((metric) => metric.id)).toEqual([
+      "precision_at_3",
+      "ndcg_at_5",
+      "mrr",
+      "recall_at_5",
+    ]);
+    expect(projected.intents[0]?.output.history).toEqual([
+      expect.objectContaining({
+        content_ref: "1".repeat(64),
+        disposition: "rejected",
+        verification: expect.arrayContaining([
+          expect.objectContaining({ display: "0.385", passed: false }),
+          expect.objectContaining({ display: "0.800", passed: true }),
+        ]),
+      }),
+    ]);
+    expect(projected.intents[0]?.output.postprocess).toMatchObject({
+      method: "source_backed_region_overlay",
+      provenance_sha256: "6".repeat(64),
+      revision: "ffmpeg-7.1.1-mask-overlay-v1",
+    });
+    expect(projected.intents.map((intent) => intent.verification_status)).toEqual([
+      "failed",
+      "not_run",
+    ]);
+    expect(projected.qwen_diagnostics).toMatchObject({
+      raw_cosine_is_probability: false,
+      local_lemon_minus_apple_margin: 0.0018,
+      style_margin: 0.000006,
+      validated_style_probability: false,
+    });
     expect(projected.intents[0]?.output).toMatchObject({
       content_ref: "e".repeat(64),
       state: "recorded_external_output",
@@ -285,7 +422,7 @@ describe("Pixel RAG demo artifact", () => {
       "global_restyle",
     ]);
     expect(decoded.intents.map((intent) => intent.query.granularity)).toEqual([
-      "confirmed_mask",
+      "confirmed_region",
       "whole_frame",
     ]);
     expect(decoded.evidence_status).toBe("contract_fixture");

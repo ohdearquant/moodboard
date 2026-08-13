@@ -101,16 +101,26 @@ describe("editorial report presentation", () => {
     expect(
       within(lab).getByRole("button", { name: /replace apple tree with lemon tree/i }).getAttribute("aria-pressed"),
     ).toBe("true");
-    expect(within(lab).getByText("Confirmed tree mask")).toBeTruthy();
-    expect(within(lab).getByText("demo:replace:lemon-tree")).toBeTruthy();
+    expect(within(lab).getByText("Confirmed · primary apple tree canopy and trunk")).toBeTruthy();
+    expect(within(lab).getByText("adobe-demo-replace-v1")).toBeTruthy();
     expect(within(lab).getAllByText(/Public domain|CC0/).length).toBeGreaterThanOrEqual(3);
-    expect(within(lab).getByText(/external generator boundary/i)).toBeTruthy();
-    expect(within(lab).getAllByText(/immutable Khive output/i).length).toBeGreaterThanOrEqual(1);
+    expect(within(lab).getByText(/Execute outside Moodboard\/Khive/i)).toBeTruthy();
+    expect(within(lab).getByText("Immutable output")).toBeTruthy();
+    expect(within(lab).getByText("Raw Qwen geometry · ungated")).toBeTruthy();
+    expect(within(lab).getByText("Intent-routed control")).toBeTruthy();
+    expect(within(lab).getByText(/deterministic filter integrity/i)).toBeTruthy();
+    expect(within(lab).getByText("Rejected predecessor")).toBeTruthy();
+    expect(within(lab).getByText("Source-backed deterministic composite")).toBeTruthy();
+    expect(within(lab).getByText(/no exact-RGB or aesthetic claim/i)).toBeTruthy();
+    expect(within(lab).getByLabelText("Experimental Qwen diagnostics")).toBeTruthy();
+    expect(within(lab).getByText(/geometry—not probability or validated style/i)).toBeTruthy();
 
     fireEvent.click(within(lab).getByRole("button", { name: /restyle as Claude Lorrain/i }));
     expect(within(lab).getByText("Whole frame")).toBeTruthy();
-    expect(within(lab).getByText("demo:style:claude-lorrain")).toBeTruthy();
+    expect(within(lab).getByText("adobe-demo-restyle-v1")).toBeTruthy();
     expect(within(lab).getByText("nDCG@5")).toBeTruthy();
+    expect(within(lab).getByText(/layout constraint declared; verifier not run/i)).toBeTruthy();
+    expect(within(lab).getByText("Not run")).toBeTruthy();
     expect(within(lab).getByText(/real Khive replay not frozen/i)).toBeTruthy();
     expect(within(lab).getByText(/will not substitute fixture probabilities/i)).toBeTruthy();
     expect(within(lab).queryByText("Model B · learned snapshot")).toBeNull();
