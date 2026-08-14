@@ -1,4 +1,4 @@
-"""Generate Adobe-facing procedural imagery through the real Moodboard engine.
+"""Generate showcase procedural imagery through the real Moodboard engine.
 
 The source recipe is deterministic and owns pixels only. The JSON report is never assembled or
 patched here: ``moodboard build`` and ``moodboard rank`` are the only report producers.
@@ -253,7 +253,7 @@ def _generate(repository: Path, workspace: Path, seed: int) -> tuple[Path, dict[
         "build",
         references_argument,
         "--name",
-        "Adobe editorial system",
+        "Governed editorial system",
         "--output",
         board_argument,
     ]
@@ -304,7 +304,7 @@ def _generate(repository: Path, workspace: Path, seed: int) -> tuple[Path, dict[
     engine_revision, engine_source_digest, engine_source_dirty = _engine_source_identity(repository)
     manifest = {
         "format_version": 1,
-        "scenario": "adobe-editorial-system",
+        "scenario": "governed-editorial-system",
         "seed": seed,
         "report_sha256": _sha256(report),
         "report_schema_version": document["schema_version"],

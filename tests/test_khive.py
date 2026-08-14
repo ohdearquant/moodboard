@@ -33,6 +33,7 @@ from moodboard.khive import (
     KhiveSearchHit,
     KhiveSearchResult,
 )
+from moodboard.preference import read_preference_feature_artifact
 
 FAKE_KKERNEL = r"""#!/usr/bin/env python3
 import base64
@@ -56,7 +57,7 @@ def descriptor(revision="weights-r1"):
         "model_name": "qwen3.5-vlm-pooled-visual",
         "model_revision": revision,
         "checkpoint_sha256": "1" * 64,
-        "inference": {"provider": "lattice-embed", "version": "0.7.1"},
+        "inference": {"provider": "lattice-embed", "version": "0.9.0"},
         "preprocessing": {
             "revision": "moodboard-qwen35-srgb-pad32-max448-v1",
             "max_side": 448,
@@ -83,6 +84,8 @@ def descriptor(revision="weights-r1"):
 args = sys.argv[1:]
 if not args or args[0] != "exec":
     raise SystemExit(90)
+if "--serial" not in args:
+    raise SystemExit(92)
 
 def value(flag):
     return args[args.index(flag) + 1]
@@ -91,16 +94,37 @@ ops_path = pathlib.Path(value("--ops-file"))
 save_path = pathlib.Path(value("--save-file"))
 ops = [json.loads(line) for line in ops_path.read_text().splitlines()]
 
+mode = os.environ.get("FAKE_KKERNEL_MODE", "ok")
 log_path = os.environ.get("FAKE_KKERNEL_LOG")
+prior_ingest_calls = 0
+prior_ingest_rows = 0
+if log_path and pathlib.Path(log_path).exists():
+    for line in pathlib.Path(log_path).read_text(encoding="utf-8").splitlines():
+        prior = json.loads(line)
+        ingest_rows = [op for op in prior["ops"] if op["tool"] == "moodboard.ingest"]
+        if ingest_rows:
+            prior_ingest_calls += 1
+            prior_ingest_rows += len(ingest_rows)
 if log_path:
     with open(log_path, "a", encoding="utf-8") as handle:
         handle.write(json.dumps({"argv": args, "ops": ops}, separators=(",", ":")) + "\n")
+if mode == "fail-second-ingest-process" and any(
+    op["tool"] == "moodboard.ingest" for op in ops
+) and prior_ingest_calls == 1:
+    print("deliberate second ingest process failure", file=sys.stderr)
+    raise SystemExit(93)
 
-mode = os.environ.get("FAKE_KKERNEL_MODE", "ok")
 rows = []
-ingest_index = 0
+ingest_index = prior_ingest_rows
 for op in ops:
     tool = op["tool"]
+    if tool in {"create", "moodboard.model", "moodboard.ingest", "moodboard.search"}:
+        if op["args"].get("namespace") != value("--namespace"):
+            print(
+                "operation namespace does not match kkernel attribution namespace",
+                file=sys.stderr,
+            )
+            raise SystemExit(91)
     if tool == "moodboard.model":
         result = {"descriptor": descriptor(), "experimental": True}
         if mode == "model-extra-key":
@@ -110,6 +134,8 @@ for op in ops:
     elif tool == "moodboard.ingest":
         vector = [0.0, 0.0, 0.0, 0.0]
         vector[ingest_index % 4] = 1.0
+        if mode == "constant-vector":
+            vector = [1.0, 0.0, 0.0, 0.0]
         used_descriptor = descriptor("weights-r2") if mode == "drift" else descriptor()
         if mode == "wrong-dimension":
             vector = vector[:-1]
@@ -138,6 +164,23 @@ for op in ops:
         elif mode == "ingest-missing-key":
             result.pop("created")
         ingest_index += 1
+    elif tool == "create":
+        result = {
+            "id": "00000000-0000-4000-8000-000000000100",
+            "namespace": op["args"]["namespace"],
+            "created_at": "2026-08-12T16:00:00+00:00",
+            "updated_at": "2026-08-12T16:00:00+00:00",
+            "kind": "artifact",
+            "entity_type": "moodboard",
+            "name": op["args"]["name"],
+            "description": op["args"]["description"],
+            "properties": op["args"]["properties"],
+            "tags": op["args"]["tags"],
+            "deleted_at": None,
+            "merged_into": None,
+            "merge_event_id": None,
+            "content_ref": None,
+        }
     elif tool == "moodboard.search":
         query_asset_id = op["args"]["asset_id"]
         hits = [
@@ -156,6 +199,8 @@ for op in ops:
                 "content_ref": "b" * 64,
             },
         ]
+        if op["args"]["namespace"] == "foreign-namespace":
+            hits = []
         result = {
             "query_asset_id": query_asset_id,
             "descriptor": descriptor("weights-r2")
@@ -320,11 +365,89 @@ def test_encoder_batches_in_order_and_keeps_large_image_bytes_out_of_argv(fake_k
     assert "--ops-file" in ingest["argv"]
     assert "--save-file" in ingest["argv"]
     assert "--strict" in ingest["argv"]
+    assert "--serial" in ingest["argv"]
     assert ingest["argv"][ingest["argv"].index("--actor") + 1] == "lambda:moodboard-tests"
     assert ingest["argv"][ingest["argv"].index("--expect-actor") + 1] == ("lambda:moodboard-tests")
     assert ingest["argv"][ingest["argv"].index("--namespace") + 1] == "moodboard-tests"
+    assert {op["args"]["namespace"] for op in ingest["ops"]} == {"moodboard-tests"}
     assert not Path(ingest["argv"][ingest["argv"].index("--ops-file") + 1]).exists()
     assert not Path(ingest["argv"][ingest["argv"].index("--save-file") + 1]).exists()
+
+
+def test_encoder_partitions_unique_ingests_into_fixed_eight_operation_processes(fake_kkernel):
+    executable, log = fake_kkernel
+    encoder = KhiveLatticeEncoder(_client(executable))
+    images = [np.full((2, 3, 3), value, dtype=np.uint8) for value in range(17)]
+
+    embedded = encoder.embed_assets(
+        images,
+        names=tuple(f"candidate-{index:02d}.png" for index in range(len(images))),
+    )
+
+    ingests = [call for call in _calls(log) if call["ops"][0]["tool"] == "moodboard.ingest"]
+    assert [len(call["ops"]) for call in ingests] == [8, 8, 1]
+    assert [operation["args"]["name"] for call in ingests for operation in call["ops"]] == [
+        f"candidate-{index:02d}.png" for index in range(len(images))
+    ]
+    np.testing.assert_array_equal(
+        embedded,
+        np.vstack([np.eye(4, dtype=np.float32)[index % 4] for index in range(len(images))]),
+    )
+    assert [asset.asset_id for asset in encoder.last_assets] == [
+        f"00000000-0000-0000-0000-{index:012x}" for index in range(1, 18)
+    ]
+
+
+def test_encoder_deduplicates_globally_before_partitioning_ingest_processes(fake_kkernel):
+    executable, log = fake_kkernel
+    encoder = KhiveLatticeEncoder(_client(executable))
+    unique = [np.full((2, 3, 3), value, dtype=np.uint8) for value in range(9)]
+    images = [*unique[:8], unique[0].copy(), unique[8]]
+    names = tuple(f"candidate-{index:02d}.png" for index in range(len(images)))
+
+    embedded = encoder.embed_assets(images, names=names)
+
+    ingests = [call for call in _calls(log) if call["ops"][0]["tool"] == "moodboard.ingest"]
+    assert [len(call["ops"]) for call in ingests] == [8, 1]
+    assert [operation["args"]["name"] for call in ingests for operation in call["ops"]] == [
+        *names[:8],
+        names[9],
+    ]
+    np.testing.assert_array_equal(embedded[0], embedded[8])
+    assert encoder.last_assets[0].asset_id == encoder.last_assets[8].asset_id
+    assert encoder.last_assets[0].content_ref == encoder.last_assets[8].content_ref
+    assert encoder.last_assets[0].created is True
+    assert encoder.last_assets[8].created is False
+
+
+def test_encoder_stops_after_a_failed_second_ingest_process_without_partial_state(
+    fake_kkernel, monkeypatch
+):
+    executable, log = fake_kkernel
+    monkeypatch.setenv("FAKE_KKERNEL_MODE", "fail-second-ingest-process")
+    encoder = KhiveLatticeEncoder(_client(executable))
+    images = [np.full((2, 3, 3), value, dtype=np.uint8) for value in range(17)]
+
+    with pytest.raises(KhiveProtocolError, match="deliberate second ingest process failure"):
+        encoder.embed(images)
+
+    ingests = [call for call in _calls(log) if call["ops"][0]["tool"] == "moodboard.ingest"]
+    assert [len(call["ops"]) for call in ingests] == [8, 8]
+    assert encoder.last_assets == ()
+
+
+def test_encoder_validates_each_ingest_process_before_starting_the_next(fake_kkernel, monkeypatch):
+    executable, log = fake_kkernel
+    monkeypatch.setenv("FAKE_KKERNEL_MODE", "ingest-extra-key")
+    encoder = KhiveLatticeEncoder(_client(executable))
+    images = [np.full((2, 3, 3), value, dtype=np.uint8) for value in range(17)]
+
+    with pytest.raises(KhiveProtocolError, match="unknown keys"):
+        encoder.embed(images)
+
+    ingests = [call for call in _calls(log) if call["ops"][0]["tool"] == "moodboard.ingest"]
+    assert [len(call["ops"]) for call in ingests] == [8]
+    assert encoder.last_assets == ()
 
 
 def test_client_passes_an_explicit_config_and_keeps_environment_fallback_optional(
@@ -376,8 +499,13 @@ def test_client_search_returns_closed_typed_ranked_asset_locators(fake_kkernel):
         ),
     )
     model, search = _calls(log)
-    assert model["ops"] == [{"args": {}, "tool": "moodboard.model"}]
-    assert search["ops"] == [{"args": {"asset_id": query, "top_k": 2}, "tool": "moodboard.search"}]
+    assert model["ops"] == [{"args": {"namespace": "moodboard-tests"}, "tool": "moodboard.model"}]
+    assert search["ops"] == [
+        {
+            "args": {"asset_id": query, "namespace": "moodboard-tests", "top_k": 2},
+            "tool": "moodboard.search",
+        }
+    ]
     assert search["argv"][search["argv"].index("--actor") + 1] == "lambda:moodboard-tests"
     assert search["argv"][search["argv"].index("--expect-actor") + 1] == ("lambda:moodboard-tests")
 
@@ -389,7 +517,41 @@ def test_client_search_omits_the_optional_top_k_and_uses_the_pack_default(fake_k
     result = _client(executable).search(query)
 
     assert len(result.hits) == 2
-    assert _calls(log)[1]["ops"][0]["args"] == {"asset_id": query}
+    assert _calls(log)[1]["ops"][0]["args"] == {
+        "asset_id": query,
+        "namespace": "moodboard-tests",
+    }
+
+
+def test_operation_arguments_cannot_override_the_configured_storage_namespace(fake_kkernel):
+    executable, log = fake_kkernel
+
+    with pytest.raises(ValueError, match="conflicts with the configured Khive namespace"):
+        _client(executable).ingest(
+            ({"image_base64": "", "namespace": "a-different-storage-namespace"},)
+        )
+
+    assert not log.exists()
+
+
+def test_foreign_namespace_search_keeps_global_uuid_lookup_and_returns_no_candidates(
+    fake_kkernel,
+):
+    executable, log = fake_kkernel
+    query = "00000000-0000-0000-0000-000000000001"
+    client = KhiveClient(
+        executable=executable,
+        actor="lambda:moodboard-tests",
+        namespace="foreign-namespace",
+    )
+
+    result = client.search(query, top_k=100)
+
+    assert result.query_asset_id == query
+    assert result.hits == ()
+    assert {
+        operation["args"]["namespace"] for call in _calls(log) for operation in call["ops"]
+    } == {"foreign-namespace"}
 
 
 @pytest.mark.parametrize("top_k", [0, 101, True, 1.5, "2"])
@@ -611,18 +773,19 @@ def test_descriptor_canonicalization_has_a_cross_language_golden_fingerprint(fak
     descriptor = KhiveLatticeEncoder(_client(executable)).descriptor
 
     assert descriptor.fingerprint == (
-        "59f1ababe9229fe1a2e871a92172d7f84461d28729172bbba5f7c55c4ccd0a53"
+        "5d62815b1b662fa926c58aaaf58553e3d842b615cd90f431fe6e7c1bd782ea0b"
     )
     assert descriptor.model_key == (
-        "moodboard_59f1ababe9229fe1a2e871a92172d7f84461d28729172bbba5f7c55c4ccd0a53_4"
+        "moodboard_5d62815b1b662fa926c58aaaf58553e3d842b615cd90f431fe6e7c1bd782ea0b_4"
     )
+    assert KHIVE_ADAPTER_REVISION == "moodboard-khive-adapter-v3"
 
     synthetic = descriptor.to_json_dict()
     synthetic.pop("fingerprint")
     synthetic.pop("model_key")
     synthetic["prompt"]["sha256"] = "2" * 64
     assert hashlib.sha256(encoders_module._canonical_json(synthetic).encode()).hexdigest() == (
-        "88a9b26b399d878c77c3a4743dc38d2f538a951874b3c2fb6eb3d62d9cfbfd1c"
+        "b57fb3cf43da387cde12425e6d7d442af269ba37ecabfbe4c975cb80abdf56e5"
     )
 
 
@@ -630,6 +793,7 @@ def test_descriptor_canonicalization_has_a_cross_language_golden_fingerprint(fak
     ("field", "value", "message"),
     [
         ("model_name", "another-visual-model", "model_name"),
+        ("inference_version", "0.7.1", "inference"),
         ("prompt_sha256", "3" * 64, "prompt"),
     ],
 )
@@ -638,7 +802,9 @@ def test_descriptor_v1_rejects_known_semantic_fields_with_different_values(
 ):
     executable, _ = fake_kkernel
     document = KhiveLatticeEncoder(_client(executable)).descriptor.to_json_dict()
-    if field == "prompt_sha256":
+    if field == "inference_version":
+        document["inference"]["version"] = value
+    elif field == "prompt_sha256":
         document["prompt"]["sha256"] = value
     else:
         document[field] = value
@@ -808,6 +974,22 @@ def test_total_decoded_byte_budget_fails_before_base64_or_ingest(
 
     assert encoder.last_assets == ()
     assert len(_calls(log)) == 1
+
+
+def test_ingest_process_partitioning_cannot_reset_the_logical_call_byte_budget(
+    fake_kkernel, monkeypatch
+):
+    executable, log = fake_kkernel
+    images = [np.full((2, 3, 3), value, dtype=np.uint8) for value in range(9)]
+    one_payload_size = len(encoders_module._png_bytes(images[0], 0))
+    monkeypatch.setattr(encoders_module, "KHIVE_REQUEST_MAX_BYTES", 8 * one_payload_size)
+    encoder = KhiveLatticeEncoder(_client(executable))
+
+    with pytest.raises(ValueError, match="in-process request budget"):
+        encoder.embed(images)
+
+    assert encoder.last_assets == ()
+    assert len(_calls(log)) == 1  # model discovery only; no durable prefix
 
 
 def test_programmatic_budget_stops_before_encoding_a_later_array(fake_kkernel, monkeypatch):
@@ -1137,6 +1319,7 @@ def test_cli_khive_opt_in_pins_config_and_persists_reference_locations(fake_kker
     build_ingest = next(call for call in calls if call["ops"][0]["tool"] == "moodboard.ingest")
     assert build_ingest["argv"][build_ingest["argv"].index("--actor") + 1] == "lambda:cli-test"
     assert build_ingest["argv"][build_ingest["argv"].index("--namespace") + 1] == "cli-test"
+    assert {op["args"]["namespace"] for op in build_ingest["ops"]} == {"cli-test"}
     assert build_ingest["argv"][build_ingest["argv"].index("--config") + 1] == str(
         tmp_path / "khive.toml"
     )
@@ -1190,6 +1373,184 @@ def test_rank_parser_exposes_the_same_explicit_encoder_and_khive_configuration(t
     assert selected.khive_namespace == "rank-space"
     assert selected.khive_config == tmp_path / "khive.toml"
     assert default.khive_config is None
+
+
+def test_rank_parser_exposes_opt_in_preference_feature_artifact() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "rank",
+            "candidate.png",
+            "--board",
+            "brand.mb",
+            "--references",
+            "references",
+            "--output",
+            "report.json",
+            "--preference-features-output",
+            "preference-features.json",
+        ]
+    )
+
+    assert args.preference_features_output == Path("preference-features.json")
+
+
+def test_rank_preference_export_requires_khive_before_reading_inputs(tmp_path: Path) -> None:
+    report = tmp_path / "report.json"
+    artifact = tmp_path / "features.json"
+    error = io.StringIO()
+
+    status = cli.main(
+        [
+            "rank",
+            str(tmp_path / "missing-candidate.png"),
+            "--board",
+            str(tmp_path / "missing.mb"),
+            "--references",
+            str(tmp_path / "missing-references"),
+            "--output",
+            str(report),
+            "--preference-features-output",
+            str(artifact),
+        ],
+        out=io.StringIO(),
+        err=error,
+    )
+
+    assert status == 1
+    assert "requires --encoder khive-lattice" in error.getvalue()
+    assert not report.exists() and not artifact.exists()
+
+
+def test_rank_preference_export_rejects_colliding_output_before_khive(
+    fake_kkernel, tmp_path: Path
+) -> None:
+    executable, log = fake_kkernel
+    output = tmp_path / "same.json"
+    error = io.StringIO()
+
+    status = cli.main(
+        [
+            "rank",
+            str(tmp_path / "missing-candidate.png"),
+            "--board",
+            str(tmp_path / "missing.mb"),
+            "--references",
+            str(tmp_path / "missing-references"),
+            "--output",
+            str(output),
+            "--preference-features-output",
+            str(output),
+            "--encoder",
+            "khive-lattice",
+            "--khive-executable",
+            str(executable),
+        ],
+        out=io.StringIO(),
+        err=error,
+    )
+
+    assert status == 1
+    assert "must differ from the report output" in error.getvalue()
+    assert not log.exists()
+
+
+def test_rank_exports_real_geometry_only_after_valid_report(
+    fake_kkernel, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable, log = fake_kkernel
+    monkeypatch.setenv("FAKE_KKERNEL_MODE", "constant-vector")
+    references = _two_reference_directory(tmp_path / "references")
+    candidates = _two_reference_directory(tmp_path / "candidates")
+    board_path = tmp_path / "khive.mb"
+    report_path = tmp_path / "report.json"
+    feature_path = tmp_path / "preference-features.json"
+    khive_options = [
+        "--encoder",
+        "khive-lattice",
+        "--khive-executable",
+        str(executable),
+        "--khive-actor",
+        "lambda:preference-cli",
+        "--khive-namespace",
+        "preference-cli",
+    ]
+    assert (
+        cli.main(
+            ["build", str(references), "--output", str(board_path), *khive_options],
+            out=io.StringIO(),
+            err=io.StringIO(),
+        )
+        == 0
+    )
+
+    publish_saw_valid_report: list[bool] = []
+    original_publish = KhiveClient.publish_board
+
+    def checked_publish(client, **arguments):
+        document = json.loads(report_path.read_text(encoding="utf-8"))
+        publish_saw_valid_report.append(document["schema_version"] == "1.1")
+        return original_publish(client, **arguments)
+
+    monkeypatch.setattr(KhiveClient, "publish_board", checked_publish)
+    out = io.StringIO()
+    error = io.StringIO()
+    status = cli.main(
+        [
+            "rank",
+            str(candidates),
+            "--board",
+            str(board_path),
+            "--references",
+            str(references),
+            "--output",
+            str(report_path),
+            "--alpha",
+            "0.5",
+            "--preference-features-output",
+            str(feature_path),
+            *khive_options,
+        ],
+        out=out,
+        err=error,
+    )
+
+    assert status == 0, error.getvalue()
+    assert publish_saw_valid_report == [True]
+    artifact = read_preference_feature_artifact(feature_path)
+    board = read_board(board_path)
+    assert artifact.board_entity_id == "00000000-0000-4000-8000-000000000100"
+    assert artifact.board_id == board.board_id
+    assert artifact.source_report_sha256 == hashlib.sha256(report_path.read_bytes()).hexdigest()
+    assert len(artifact.candidates) == 2
+    report_document = json.loads(report_path.read_text(encoding="utf-8"))
+    report_assets = {asset["asset_id"]: asset for asset in report_document["assets"]}
+    for candidate in artifact.candidates:
+        reported = report_assets[candidate.label]
+        assert candidate.features.values.shape == (10,)
+        assert np.isfinite(candidate.features.values).all()
+        assert candidate.features.values[0] == 1.0
+        assert candidate.features.values[1] == 1.0
+        assert candidate.features.values[2] == 1.0
+        assert candidate.features.values[3] == pytest.approx(reported["score"])
+        assert candidate.features.values[4] == pytest.approx(
+            reported["interval"]["high"] - reported["interval"]["low"]
+        )
+        assert candidate.features.values[5] == 1.0
+        assert candidate.features.values[6] == 0.5
+        np.testing.assert_allclose(
+            candidate.features.values[7:],
+            [1.0 - reported["axes"][axis] for axis in ("palette", "tone", "composition")],
+            rtol=0.0,
+            atol=1e-7,
+        )
+    calls = _calls(log)
+    assert not any(op["tool"] == "kg.create" for call in calls for op in call["ops"])
+    create = next(call for call in calls if call["ops"][0]["tool"] == "create")
+    create_args = create["ops"][0]["args"]
+    assert create_args["namespace"] == "preference-cli"
+    assert create_args["properties"]["board_id"] == board.board_id
+    assert create_args["properties"]["source_report_sha256"] == artifact.source_report_sha256
+    assert f"preference features {feature_path}" in out.getvalue()
 
 
 def test_retrieve_parser_exposes_a_focused_khive_only_surface(tmp_path):
@@ -1265,7 +1626,7 @@ def test_retrieve_cli_reports_ranked_khive_locators_without_coherence_semantics(
     assert model["argv"][model["argv"].index("--config") + 1] == str(tmp_path / "khive.toml")
     assert search["ops"][0] == {
         "tool": "moodboard.search",
-        "args": {"asset_id": query, "top_k": 2},
+        "args": {"asset_id": query, "namespace": "retrieve-cli", "top_k": 2},
     }
 
 

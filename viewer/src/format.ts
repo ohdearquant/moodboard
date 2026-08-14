@@ -4,6 +4,11 @@ export function formatNumber(value: number): string {
   return String(value);
 }
 
+export function formatCompactNumber(value: number): string {
+  const rounded = Number(value.toPrecision(4));
+  return Object.is(rounded, -0) ? "0" : String(rounded);
+}
+
 export function shortDigest(value: string): string {
   if (value.length <= 18) return value;
   return `${value.slice(0, 10)}…${value.slice(-6)}`;

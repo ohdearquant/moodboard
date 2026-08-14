@@ -1,0 +1,258 @@
+{
+  "schema_version": "moodboard.demo-sources.v1",
+  "dataset_id": "showcase-public-domain-v1",
+  "assets": [
+    {
+      "asset_id": "fruit_apple_blossom",
+      "collection": "fruit-apple",
+      "provider": "wikimedia_commons",
+      "file_title": "File:Apple tree blossom.JPG",
+      "metadata_url": "https://commons.wikimedia.org/w/api.php?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=url%7Cextmetadata&titles=File%3AApple_tree_blossom.JPG",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Apple_tree_blossom.JPG",
+      "download_url": "https://commons.wikimedia.org/w/index.php?title=Special%3ARedirect%2Ffile%2FApple_tree_blossom.JPG&width=1280",
+      "expected": {
+        "artist": "Rosser1954",
+        "copyrighted": "False",
+        "license_id": "PDM-1.0",
+        "license_short_name": "Public domain",
+        "license_url": "https://creativecommons.org/publicdomain/mark/1.0/",
+        "object_name": "Apple tree blossom",
+        "page_id": 4015868,
+        "public_domain": true,
+        "source_license_url": null
+      }
+    },
+    {
+      "asset_id": "fruit_apple_garden",
+      "collection": "fruit-apple",
+      "provider": "wikimedia_commons",
+      "file_title": "File:Apple tree in a garden.JPG",
+      "metadata_url": "https://commons.wikimedia.org/w/api.php?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=url%7Cextmetadata&titles=File%3AApple_tree_in_a_garden.JPG",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Apple_tree_in_a_garden.JPG",
+      "download_url": "https://commons.wikimedia.org/w/index.php?title=Special%3ARedirect%2Ffile%2FApple_tree_in_a_garden.JPG&width=1280",
+      "expected": {
+        "artist": "SeppVei",
+        "copyrighted": "False",
+        "license_id": "PDM-1.0",
+        "license_short_name": "Public domain",
+        "license_url": "https://creativecommons.org/publicdomain/mark/1.0/",
+        "object_name": "Apple tree in a garden",
+        "page_id": 7050693,
+        "public_domain": true,
+        "source_license_url": null
+      }
+    },
+    {
+      "asset_id": "fruit_apple_meadow",
+      "collection": "fruit-apple",
+      "provider": "wikimedia_commons",
+      "file_title": "File:Apple tree, Streuobstwiese in Ehrenbach, 1.jpg",
+      "metadata_url": "https://commons.wikimedia.org/w/api.php?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=url%7Cextmetadata&titles=File%3AApple_tree%2C_Streuobstwiese_in_Ehrenbach%2C_1.jpg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Apple_tree,_Streuobstwiese_in_Ehrenbach,_1.jpg",
+      "download_url": "https://commons.wikimedia.org/w/index.php?title=Special%3ARedirect%2Ffile%2FApple_tree%2C_Streuobstwiese_in_Ehrenbach%2C_1.jpg&width=1280",
+      "expected": {
+        "artist": "Gerda Arendt",
+        "copyrighted": "True",
+        "license_id": "CC0-1.0",
+        "license_short_name": "CC0",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "object_name": "Apple tree, Streuobstwiese in Ehrenbach, 1",
+        "page_id": 147648186,
+        "public_domain": true,
+        "source_license_url": "http://creativecommons.org/publicdomain/zero/1.0/deed.en"
+      }
+    },
+    {
+      "asset_id": "fruit_lemon_argos",
+      "collection": "fruit-lemon",
+      "provider": "wikimedia_commons",
+      "file_title": "File:Lemon tree, 2022.jpg",
+      "metadata_url": "https://commons.wikimedia.org/w/api.php?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=url%7Cextmetadata&titles=File%3ALemon_tree%2C_2022.jpg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Lemon_tree,_2022.jpg",
+      "download_url": "https://commons.wikimedia.org/w/index.php?title=Special%3ARedirect%2Ffile%2FLemon_tree%2C_2022.jpg&width=1280",
+      "expected": {
+        "artist": "NikosLikomitros",
+        "copyrighted": "True",
+        "license_id": "CC0-1.0",
+        "license_short_name": "CC0",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "object_name": "Lemon tree, 2022",
+        "page_id": 127380076,
+        "public_domain": true,
+        "source_license_url": "http://creativecommons.org/publicdomain/zero/1.0/deed.en"
+      }
+    },
+    {
+      "asset_id": "fruit_lemon_detail",
+      "collection": "fruit-lemon",
+      "provider": "wikimedia_commons",
+      "file_title": "File:Eureka-lemon.jpg",
+      "metadata_url": "https://commons.wikimedia.org/w/api.php?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=url%7Cextmetadata&titles=File%3AEureka-lemon.jpg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Eureka-lemon.jpg",
+      "download_url": "https://commons.wikimedia.org/w/index.php?title=Special%3ARedirect%2Ffile%2FEureka-lemon.jpg&width=1280",
+      "expected": {
+        "artist": "Stickpen",
+        "copyrighted": "False",
+        "license_id": "PDM-1.0",
+        "license_short_name": "Public domain",
+        "license_url": "https://creativecommons.org/publicdomain/mark/1.0/",
+        "object_name": "Eureka-lemon",
+        "page_id": 9853313,
+        "public_domain": true,
+        "source_license_url": null
+      }
+    },
+    {
+      "asset_id": "fruit_lemon_menton",
+      "collection": "fruit-lemon",
+      "provider": "wikimedia_commons",
+      "file_title": "File:Menton lemon tree.jpg",
+      "metadata_url": "https://commons.wikimedia.org/w/api.php?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=url%7Cextmetadata&titles=File%3AMenton_lemon_tree.jpg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Menton_lemon_tree.jpg",
+      "download_url": "https://commons.wikimedia.org/w/index.php?title=Special%3ARedirect%2Ffile%2FMenton_lemon_tree.jpg&width=1280",
+      "expected": {
+        "artist": "Tangopaso",
+        "copyrighted": "False",
+        "license_id": "PDM-1.0",
+        "license_short_name": "Public domain",
+        "license_url": "https://creativecommons.org/publicdomain/mark/1.0/",
+        "object_name": "Menton lemon tree",
+        "page_id": 19375453,
+        "public_domain": true,
+        "source_license_url": null
+      }
+    },
+    {
+      "asset_id": "fruit_lemon_santa_clara",
+      "collection": "fruit-lemon",
+      "provider": "wikimedia_commons",
+      "file_title": "File:Lemon Tree in Santa Clara California.jpg",
+      "metadata_url": "https://commons.wikimedia.org/w/api.php?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=url%7Cextmetadata&titles=File%3ALemon_Tree_in_Santa_Clara_California.jpg",
+      "page_url": "https://commons.wikimedia.org/wiki/File:Lemon_Tree_in_Santa_Clara_California.jpg",
+      "download_url": "https://commons.wikimedia.org/w/index.php?title=Special%3ARedirect%2Ffile%2FLemon_Tree_in_Santa_Clara_California.jpg&width=1280",
+      "expected": {
+        "artist": "Tomwsulcer",
+        "copyrighted": "True",
+        "license_id": "CC0-1.0",
+        "license_short_name": "CC0",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "object_name": "Lemon Tree in Santa Clara California",
+        "page_id": 18770817,
+        "public_domain": true,
+        "source_license_url": "http://creativecommons.org/publicdomain/zero/1.0/deed.en"
+      }
+    },
+    {
+      "asset_id": "style_claude_ford",
+      "collection": "style-claude-lorrain",
+      "provider": "met",
+      "object_id": 435905,
+      "metadata_url": "https://collectionapi.metmuseum.org/public/collection/v1/objects/435905",
+      "page_url": "https://www.metmuseum.org/art/collection/search/435905",
+      "download_url": "https://images.metmuseum.org/CRDImages/ep/web-large/DP123844.jpg",
+      "expected": {
+        "artist": "Claude Lorrain (Claude Gellée)",
+        "public_domain": true,
+        "title": "The Ford"
+      }
+    },
+    {
+      "asset_id": "style_claude_pastoral",
+      "collection": "style-claude-lorrain",
+      "provider": "met",
+      "object_id": 435906,
+      "metadata_url": "https://collectionapi.metmuseum.org/public/collection/v1/objects/435906",
+      "page_url": "https://www.metmuseum.org/art/collection/search/435906",
+      "download_url": "https://images.metmuseum.org/CRDImages/ep/web-large/DP-17628-001.jpg",
+      "expected": {
+        "artist": "Claude Lorrain (Claude Gellée)",
+        "public_domain": true,
+        "title": "Pastoral Landscape: The Roman Campagna"
+      }
+    },
+    {
+      "asset_id": "style_claude_sunrise",
+      "collection": "style-claude-lorrain",
+      "provider": "met",
+      "object_id": 435907,
+      "metadata_url": "https://collectionapi.metmuseum.org/public/collection/v1/objects/435907",
+      "page_url": "https://www.metmuseum.org/art/collection/search/435907",
+      "download_url": "https://images.metmuseum.org/CRDImages/ep/web-large/DP-14936-013.jpg",
+      "expected": {
+        "artist": "Claude Lorrain (Claude Gellée)",
+        "public_domain": true,
+        "title": "Sunrise"
+      }
+    },
+    {
+      "asset_id": "style_claude_trojan_women",
+      "collection": "style-claude-lorrain",
+      "provider": "met",
+      "object_id": 435908,
+      "metadata_url": "https://collectionapi.metmuseum.org/public/collection/v1/objects/435908",
+      "page_url": "https://www.metmuseum.org/art/collection/search/435908",
+      "download_url": "https://images.metmuseum.org/CRDImages/ep/web-large/DP226145.jpg",
+      "expected": {
+        "artist": "Claude Lorrain (Claude Gellée)",
+        "public_domain": true,
+        "title": "The Trojan Women Setting Fire to Their Fleet"
+      }
+    },
+    {
+      "asset_id": "style_vangogh_cypresses",
+      "collection": "style-vincent-van-gogh",
+      "provider": "met",
+      "object_id": 437980,
+      "metadata_url": "https://collectionapi.metmuseum.org/public/collection/v1/objects/437980",
+      "page_url": "https://www.metmuseum.org/art/collection/search/437980",
+      "download_url": "https://images.metmuseum.org/CRDImages/ep/web-large/DP130999.jpg",
+      "expected": {
+        "artist": "Vincent van Gogh",
+        "public_domain": true,
+        "title": "Cypresses"
+      }
+    },
+    {
+      "asset_id": "style_vangogh_flowering_orchard",
+      "collection": "style-vincent-van-gogh",
+      "provider": "met",
+      "object_id": 436527,
+      "metadata_url": "https://collectionapi.metmuseum.org/public/collection/v1/objects/436527",
+      "page_url": "https://www.metmuseum.org/art/collection/search/436527",
+      "download_url": "https://images.metmuseum.org/CRDImages/ep/web-large/DP-14936-045.jpg",
+      "expected": {
+        "artist": "Vincent van Gogh",
+        "public_domain": true,
+        "title": "The Flowering Orchard"
+      }
+    },
+    {
+      "asset_id": "style_vangogh_olive_trees",
+      "collection": "style-vincent-van-gogh",
+      "provider": "met",
+      "object_id": 437998,
+      "metadata_url": "https://collectionapi.metmuseum.org/public/collection/v1/objects/437998",
+      "page_url": "https://www.metmuseum.org/art/collection/search/437998",
+      "download_url": "https://images.metmuseum.org/CRDImages/ep/web-large/DT1946.jpg",
+      "expected": {
+        "artist": "Vincent van Gogh",
+        "public_domain": true,
+        "title": "Olive Trees"
+      }
+    },
+    {
+      "asset_id": "style_vangogh_wheat_field",
+      "collection": "style-vincent-van-gogh",
+      "provider": "met",
+      "object_id": 436535,
+      "metadata_url": "https://collectionapi.metmuseum.org/public/collection/v1/objects/436535",
+      "page_url": "https://www.metmuseum.org/art/collection/search/436535",
+      "download_url": "https://images.metmuseum.org/CRDImages/ep/web-large/DP-42549-001.jpg",
+      "expected": {
+        "artist": "Vincent van Gogh",
+        "public_domain": true,
+        "title": "Wheat Field with Cypresses"
+      }
+    }
+  ]
+}

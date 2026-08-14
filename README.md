@@ -34,6 +34,11 @@ detail to be checked and refuted, which is a claim about transparency rather tha
 
 ## Run it
 
+For the governed 15-image public-domain integration corpus, including its atomic
+fetch command and manifest contract, see
+[`docs/showcase-corpus.md`](docs/showcase-corpus.md). The corpus is an integration fixture,
+not a substitute for the acceptance measurements described below.
+
 ```bash
 uv run moodboard build references/ -o brand.mb
 uv run moodboard rank candidates/ -b brand.mb -r references/ -o report.json
@@ -74,6 +79,7 @@ uv run moodboard build references/ -o brand.mb \
   --khive-namespace local
 
 uv run moodboard rank candidates/ -b brand.mb -r references/ -o report.json \
+  --preference-features-output preference-features.json \
   --encoder khive-lattice \
   --khive-executable kkernel \
   --khive-config /absolute/path/to/khive.toml \
@@ -95,6 +101,13 @@ dimensioned, or non-unit embedding results stop the run. See
 `retrieve` reports Khive's self-excluded exact-cosine neighbours, asset UUIDs, BlobStore
 content references, and names. Its cosine is retrieval evidence in `[-1,1]`; it is not
 the conformal moodboard score, an aesthetic/coherence measurement, or a replacement for `rank`.
+
+`rank --preference-features-output PATH` is a Khive-Lattice-only opt-in. After the closed report
+has validated and been written, it publishes one live `artifact/moodboard` in the exact configured
+namespace and atomically writes an ADR-149 feature artifact. That artifact binds the board entity,
+descriptor, report SHA-256, frozen ten-feature producer, candidate pool, and Khive asset/BlobStore
+locators. It is a governed handoff for later `serve` and learning interactions; it does not train a
+model or merge learned preference into conformal evidence.
 
 Exact source-byte ingest in this v1 pack accepts PNG, JPEG, and WebP. The offline classical
 encoder retains the CLI's broader image-format support.
@@ -131,15 +144,20 @@ export KHIVE_MOODBOARD_CHECKPOINT_SHA256=64-lowercase-hex
 The pack always computes the canonical checkpoint-tree SHA-256. When the optional expected
 digest is omitted, call `moodboard.model()` once and pin its returned `checkpoint_sha256` for
 subsequent deployment attestation. Actor and namespace remain explicit Moodboard CLI options;
-they are not inferred from the storage root.
+they are not inferred from the storage root. Moodboard sends the configured namespace both as
+`kkernel` execution attribution and inside every pack operation, where it selects durable asset,
+vector, and retrieval state. Khive asset UUID lookup remains global; the namespace narrows vector
+candidates, so searching a globally known asset from another namespace succeeds with no hits.
 
-One Moodboard request is bounded to 64 total asset occurrences and 32 MiB of decoded bytes
-across those occurrences, before content deduplication. Admission is rolling: a source file is
-read only to the remaining budget plus one byte, and an array's exact canonical-PNG size is
-checked before encoding it. The client streams its ops JSONL, but `kkernel` currently retains
-batch JSON in process; the conservative aggregate limit prevents multi-gigabyte base64 amplification.
-Larger corpora must be deliberately partitioned into audited calls rather than being silently
-split into repeated cold model loads.
+One logical Moodboard encoder call is bounded to 64 total asset occurrences and 32 MiB of decoded
+bytes across those occurrences, before content deduplication. Admission is rolling: a source file
+is read only to the remaining budget plus one byte, and an array's exact canonical-PNG size is
+checked before encoding it. Complete-call admission and ContentRef deduplication finish before
+ingest; ordered unique assets are then submitted in groups of at most eight per serial `kkernel`
+process so one ops batch stays inside Khive's bounded shared request-read deadline. A failed group
+returns no matrix or partial local asset catalogue and prevents later groups, although already
+committed Khive operations remain durable. Larger corpora must still be deliberately partitioned
+into audited logical calls.
 
 Khive-mode CLI loading applies the same source count/byte limits before Pillow decoding, rejects
 either source side above 8192 pixels, and retains at most 256 MiB of matte-composited RGB arrays

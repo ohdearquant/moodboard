@@ -49,17 +49,22 @@ server result, because doing so would hide a broken wire or model contract.
 The plain `Encoder.embed` boundary receives decoded arrays, not source files. Programmatic array
 callers are therefore converted without mutation to RGB8 or RGBA8 using the same accepted value
 ranges as the classical axes, then encoded as deterministic PNG bytes. RGBA remains transparent
-so the descriptor-pinned server matte, rather than the adapter, owns alpha compositing. The
-exact PNG encoder is frozen as `moodboard-khive-adapter-v1`: every scanline uses filter 0 and
+so the descriptor-pinned server matte, rather than the adapter, owns alpha compositing. The exact
+PNG encoder remains byte-frozen in `moodboard-khive-adapter-v3`: every scanline uses filter 0 and
 the zlib stream uses a fixed wrapper plus manually framed DEFLATE stored blocks, with fixed PNG
 chunk framing/CRC and Adler-32. It therefore has no Pillow/zlib compressor heuristic in its byte
 identity. A byte-for-byte RGBA and BLAKE3 golden plus a fresh-process test pin the result;
-changing any array-to-byte conversion requires an adapter revision bump. The encoder revision
-entering `board_hash` is `<descriptor fingerprint>+<adapter revision>`, so a client-side
-conversion cannot move embeddings under an unchanged board model identity. Their BlobStore `content_ref`
-identifies that **canonical adapter rendition**, not the bytes of a JPEG, PNG, or other file the
-array may once have come from. The PNG media type and a stable position/name are supplied to
-`moodboard.ingest`.
+changing any array-to-byte conversion requires an adapter revision bump. Adapter v2 produces the
+same canonical PNG bytes as v1 but binds the selected storage namespace inside each pack operation;
+that persistence-scope correction requires a revision bump even though vector math did not change.
+Adapter v3 preserves those bytes and namespace rules but bounds each serial Khive ingest process to
+eight unique assets. That changes durable failure boundaries and therefore also requires a revision
+bump even though it does not change the descriptor or returned vector math.
+The encoder revision entering `board_hash` is
+`<descriptor fingerprint>+<adapter revision>`, so a client-side conversion cannot move embeddings
+under an unchanged board model identity. Their BlobStore `content_ref` identifies that **canonical
+adapter rendition**, not the bytes of a JPEG, PNG, or other file the array may once have come from.
+The PNG media type and a stable position/name are supplied to `moodboard.ingest`.
 
 The CLI has a stronger, narrow path-aware seam. It rereads each `LoadedImage.path` immediately
 before ingest, verifies that the SHA-256 still equals the source digest already entering
@@ -88,7 +93,10 @@ This repository adds a small application adapter, not a general Khive SDK. It in
 `kkernel exec` non-interactively with all of the following pinned on every call:
 
 - an explicit actor and the identical `--expect-actor` value;
-- an explicit namespace;
+- an explicit CLI namespace for execution attribution;
+- that same exact namespace in every `moodboard.model`, `moodboard.ingest`, and
+  `moodboard.search` argument object, where the pack selects durable storage and retrieval;
+- `--serial`, so one process executes its bounded ingest group in physical input order;
 - `--strict`; and
 - temporary `--ops-file` and `--save-file` paths.
 
@@ -96,19 +104,39 @@ The ops file is JSONL, so image bytes never enter argv. The result file is parse
 submitted operation and in submission order. The adapter verifies the command's manifest,
 row count, checksum, tool name, per-row success flag, and result shape before returning any
 value. Non-zero exit, partial output, malformed JSON, a failed row, or a manifest disagreement
-fails the whole encoder call. Temporary files are private to the invocation and are removed
-on exit.
+fails the whole local encoder call without returning a partial matrix or partial `last_assets`.
+Already committed Khive operations remain durable; the process protocol is fail-closed, not a
+cross-process transaction. Temporary files are private to each invocation and are removed on exit.
+
+The operation-level namespace is deliberate rather than redundant. `kkernel --namespace`
+controls execution attribution and gate policy; it does not implicitly select the namespace used
+by pack storage APIs. Omitting `args.namespace` therefore persisted and searched the pack's local
+default while the command line appeared to name another namespace. Adapter v2 injects one
+authoritative configured value into both layers and rejects a low-level conflicting override.
 
 Ops JSONL is streamed one operation at a time instead of first concatenating the whole base64
-batch in another Python string. Before byte deduplication, one request is capped at 64 total
-asset occurrences and 32 MiB of decoded source/rendition bytes. Admission happens while inputs
-are produced: source files are read to at most the remaining budget plus one byte, and canonical
-PNG size is computed from array geometry before encoding. This is intentionally below the pack's
-per-object ceiling because current in-process `kkernel` parsing retains and clones batch JSON.
-The adapter fails before submission when the aggregate budget is exceeded. It does not
-silently split one logical call into multiple `kkernel` processes: that would repeatedly
-cold-load the model and turn an all-or-nothing returned matrix into several durable partial
-side effects. A caller can deliberately partition a larger corpus into audited calls.
+batch in another Python string. Before byte deduplication, one logical encoder call is capped at
+64 total asset occurrences and 32 MiB of decoded source/rendition bytes. Admission happens while
+inputs are produced: source files are read to at most the remaining budget plus one byte, and
+canonical PNG size is computed from array geometry before encoding. This is intentionally below
+the pack's per-object ceiling because current in-process `kkernel` parsing retains and clones batch
+JSON.
+The adapter fails before submission when the aggregate budget is exceeded. It also computes every
+ContentRef and performs complete-call byte deduplication before the first process starts, then
+submits the ordered unique operations in consecutive groups of at most eight. `kkernel --serial`
+scopes one bounded request-read deadline to the complete ops batch; limiting unique ingests per
+process prevents a valid larger logical call from exhausting that shared deadline. The fixed bound
+does not reset or weaken the complete-call occurrence or byte budgets.
+
+Each successful group is validated completely before the next process starts. A descriptor drift,
+row/content mismatch, malformed response, or process failure stops later groups, clears local
+`last_assets`, and exposes no matrix. Khive operations commit independently, so a successful group
+or a successful prefix inside the failing group can remain as visual assets, blobs, and vector rows.
+Retrying the same namespace and bytes reuses the namespace-plus-ContentRef visual-asset identity and
+reports `created=false`, but inference and indexing run again. A caller that requires an empty
+evidence substrate after failure must use a fresh isolated state path; the adapter does not attempt
+unsafe compensating deletion. The extra model cold loads are the accepted cost of retaining Khive's
+bounded cancellation policy instead of raising or disabling its deadline.
 
 The Khive CLI loader enforces the same occurrence/source-byte bounds before Pillow decode,
 rejects either source side above the pack's 8192-pixel ceiling, and caps cumulative retained
@@ -123,11 +151,11 @@ is therefore a versioned cross-repository contract change, not an opaque substit
 this v1 adapter.
 
 Before dispatch, the adapter deduplicates byte-identical inputs by that same ContentRef and
-submits only the first occurrence. Khive's batch dispatcher may run operations concurrently;
-without this step, duplicate rows can race the pack's lookup-before-create path and waste a
-second full inference. The validated asset and vector fan back to every original position in
-order. The first occurrence's name/caption wins, and later occurrence metadata reports
-`created=false` because it did not cause another publication.
+submits only the first occurrence across the complete logical call. Without this step, duplicate
+rows can waste a second full inference or cross an eight-operation process boundary with different
+identity. The validated asset and vector fan back to every original position in order. The first
+occurrence's name/caption wins, and later occurrence metadata reports `created=false` because it did
+not cause another publication.
 
 `ClassicalEncoder` remains the default for both `build` and `rank`. Khive/Lattice is selected
 explicitly and its executable, optional config path, actor, and namespace are explicit command options. An ordinary
@@ -144,6 +172,12 @@ descriptor drift. The CLI prints rank, raw cosine, asset id, content reference, 
 is a required non-empty bounded UTF-8 string and is rendered with JSON escaping so control
 characters cannot forge terminal rows. The CLI never labels that retrieval value as coherence,
 aesthetic quality, style fit, or a conformal score.
+
+Khive's entity identity contract resolves a canonical asset UUID globally; namespace is
+attribution and candidate scope, not entity isolation. `moodboard.search` therefore resolves the
+query asset globally and restricts vector candidates to `args.namespace`. A known query asset
+searched from a foreign namespace returns a valid result with an empty `hits` array rather than a
+missing-query error. Authorization remains a separate gate-policy concern.
 
 ### Asset locations extend `brand.mb` without changing board identity
 
@@ -181,6 +215,11 @@ identity.
 
 **Call Lattice directly from Python.** Rejected for this integration. It bypasses the governed
 model/preprocessing identity and leaves Khive retrieval with no canonical asset or vector.
+
+**Raise or disable Khive's request-read deadline for a large serial ingest.** Rejected. The
+deadline is a bounded cancellation guarantee shared by the complete ops batch, not an inference
+throughput knob. Eight-operation process groups retain that guard and make the durable boundary
+explicit; removing it would trade a deterministic recovery point for an unbounded local request.
 
 **Replace conformal scoring with nearest-neighbour retrieval.** Rejected. Retrieval similarity
 has no conformal meaning, interval, effective-sample-size correction, or abstention semantics.

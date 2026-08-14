@@ -26,6 +26,13 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_REGISTRY = REPO_ROOT / "eval" / "thresholds.json"
 PACKAGED_REGISTRY = "moodboard/eval/thresholds.json"
+DEMO_RUNTIME_DATA = {
+    REPO_ROOT / "moodboard" / "demo_sources_v1.json": "moodboard/demo_sources_v1.json",
+    REPO_ROOT
+    / "moodboard"
+    / "schema"
+    / "demo_manifest_v1.schema.json": "moodboard/schema/demo_manifest_v1.schema.json",
+}
 
 
 def _build_wheel(destination: Path) -> Path:
@@ -120,6 +127,20 @@ def test_the_schema_the_report_validates_against_also_ships(tmp_path):
         "the current report writer schema is missing from the wheel, so rank/report validation "
         "cannot run from an installed copy"
     )
+
+
+def test_the_demo_acquisition_catalog_and_manifest_contract_ship_byte_for_byte(tmp_path):
+    wheel = _build_wheel(tmp_path / "dist")
+
+    with zipfile.ZipFile(wheel) as archive:
+        for source, packaged_path in DEMO_RUNTIME_DATA.items():
+            assert packaged_path in archive.namelist(), (
+                f"{packaged_path} is missing from the wheel, so installed demo acquisition "
+                "cannot validate its governed inputs or output"
+            )
+            assert archive.read(packaged_path) == source.read_bytes(), (
+                f"the wheel's {packaged_path} differs from the reviewed repository bytes"
+            )
 
 
 def test_the_verified_viewer_package_ships_when_the_build_has_staged_it(tmp_path):

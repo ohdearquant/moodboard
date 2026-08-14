@@ -35,6 +35,7 @@ export type ViewerAction =
       readonly issues: readonly ReportIssue[];
     }
   | { readonly type: "select"; readonly assetId: string | null }
+  | { readonly type: "inspect"; readonly assetId: string }
   | { readonly type: "hover"; readonly assetId: string | null }
   | { readonly type: "focus"; readonly assetId: string | null }
   | { readonly type: "filter"; readonly filter: OutcomeFilter }
@@ -64,12 +65,39 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
       return initialViewerState;
     case "select":
       return state.phase === "ready" ? { ...state, selectedAssetId: action.assetId } : state;
+    case "inspect":
+      return state.phase === "ready"
+        ? {
+            ...state,
+            selectedAssetId: action.assetId,
+            hoveredAssetId: null,
+            focusedAssetId: null,
+            outcomeFilter: "all",
+          }
+        : state;
     case "hover":
       return state.phase === "ready" ? { ...state, hoveredAssetId: action.assetId } : state;
     case "focus":
       return state.phase === "ready" ? { ...state, focusedAssetId: action.assetId } : state;
-    case "filter":
-      return state.phase === "ready" ? { ...state, outcomeFilter: action.filter } : state;
+    case "filter": {
+      if (state.phase !== "ready") return state;
+      if (action.filter === "all") {
+        return { ...state, hoveredAssetId: null, focusedAssetId: null, outcomeFilter: "all" };
+      }
+      const selected = state.model.report.assets.find(
+        (asset) => asset.asset_id === state.selectedAssetId,
+      );
+      const firstMatch = state.model.report.assets.find((asset) => asset.state === action.filter);
+      return {
+        ...state,
+        selectedAssetId: selected?.state === action.filter
+          ? state.selectedAssetId
+          : firstMatch?.asset_id ?? null,
+        hoveredAssetId: null,
+        focusedAssetId: null,
+        outcomeFilter: action.filter,
+      };
+    }
   }
 }
 
@@ -81,7 +109,7 @@ export function activeAssetId(state: ViewerState): string | null {
 export function rankedAssets(model: ReportModel): readonly ScoredAsset[] {
   return model.report.assets
     .filter((asset): asset is ScoredAsset => asset.state === "scored")
-    .toSorted((left, right) => left.rank - right.rank || left.asset_id.localeCompare(right.asset_id));
+    .toSorted((left, right) => left.rank - right.rank);
 }
 
 export function abstainedAssets(model: ReportModel): readonly Asset[] {

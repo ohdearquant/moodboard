@@ -522,7 +522,7 @@ ADR-0011 adds a second implementation without changing `Encoder`:
 ```python
 class KhiveLatticeEncoder:
     name: str  # "khive:" plus the descriptor's model_name
-    revision: str  # "<descriptor fingerprint>+moodboard-khive-adapter-v1"
+    revision: str  # "<descriptor fingerprint>+moodboard-khive-adapter-v3"
     dim: int  # descriptor dimensions
     descriptor: VisualDescriptor
     last_assets: tuple[KhiveAsset, ...]
@@ -535,7 +535,7 @@ class KhiveLatticeEncoder:
 Construction first calls `moodboard.model()` and validates the closed
 `moodboard.visual-descriptor.v1` object. Its SHA-256 `fingerprint` is recomputed over compact,
 recursively key-sorted JSON excluding `fingerprint` and `model_key`; `model_key` must then equal
-`moodboard_<fingerprint>_<dimensions>`. The v1 descriptor pins Lattice 0.7.1, Qwen3.5 visual
+`moodboard_<fingerprint>_<dimensions>`. The v1 descriptor pins `lattice-embed` 0.9.0, Qwen3.5 visual
 token mean pooling, sRGB/Lanczos preprocessing padded to the model's 32-pixel spatial-merge
 alignment at a maximum side of 448, the prompt identity, checkpoint SHA-256, dimension and L2
 normalisation. Root and nested key sets are closed. Every ingest repeats the same descriptor,
@@ -549,14 +549,23 @@ metadata labels the BlobStore object `canonical-png-rendition`; the path-aware c
 `source-bytes`. RGBA stays RGBA so the descriptor-pinned Khive matte owns compositing. The v1
 path-aware source contract admits PNG, JPEG, and WebP and rejects another MIME before dispatch.
 The adapter revision and a byte-exact RGBA PNG golden freeze array conversion as part of the
-encoder identity; a conversion change must bump that revision. The encoder is internal and
+encoder identity; a conversion or persistence-scope change must bump that revision. Revision 2
+retains revision 1's byte-exact PNG rendition and adds operation-level storage namespace binding.
+Revision 3 retains both and partitions globally admitted, globally byte-deduplicated unique ingests
+into ordered groups of at most eight per `kkernel` process. That process boundary is
+identity-bearing because it changes the durable failure scope even though returned vector math is
+unchanged.
+The encoder is internal and
 byte-frozen: filter-0 scanlines, a fixed zlib wrapper, manually framed DEFLATE stored blocks,
 fixed PNG chunks/CRC, and Adler-32. It does not delegate canonical byte identity to a ranged
 Pillow or compressor implementation.
 
 `moodboard/khive.py` is an application adapter, not a general SDK. Every invocation uses
-`kkernel exec --ops-file ... --save-file ... --strict` with explicit `--actor`, identical
-`--expect-actor`, and explicit `--namespace`. An optional config path is passed as `--config`;
+`kkernel exec --ops-file ... --save-file ... --strict --serial` with explicit `--actor`, identical
+`--expect-actor`, and explicit `--namespace`. The CLI namespace remains execution attribution;
+the same exact configured value is also injected into the closed `args` object of every supported
+Moodboard operation and the narrow bare `create` board publication because those fields select
+durable storage, retrieval, and learning scope. An optional config path is passed as `--config`;
 when absent, Khive's normal environment/discovery fallback remains active. It verifies the saved JSONL manifest, byte
 checksum, row count, per-row tool/order, success flag, and strict JSON before releasing any
 result. Image base64 never appears in argv.
@@ -594,6 +603,9 @@ class KhiveClient:
 `top_k` is absent for the pack default or a plain integer in `[1,100]`. Query and hit asset ids
 are bare canonical UUIDs. Search discovers and validates the model descriptor before the first
 query; the response descriptor must match it exactly. The result and each hit are closed objects.
+Asset-id lookup remains global under Khive's identity contract while vector candidates are
+selected from the operation namespace. A globally known query asset in another namespace is
+therefore a successful search with zero hits, not a missing-query protocol failure.
 Hits are self-excluded, unique by asset id, ranked contiguously from one, and ordered by
 non-increasing finite cosine similarity in `[-1,1]`. Names are required non-empty UTF-8 strings
 within the pack limit, and content references are raw 64-character lowercase BLAKE3 hex. The
@@ -601,17 +613,102 @@ within the pack limit, and content references are raw 64-character lowercase BLA
 label retrieval as style fit, coherence, or a calibrated score. It renders each name as a JSON
 string so control characters cannot forge terminal rows.
 
+ADR-149 preference export remains a separate opt-in on `rank`. The canonical producer consumes the
+candidate embedding, complete reference matrix, candidate-local member indices/effective support,
+conformal score and interval, and three classical distances while that geometry is still in memory.
+It never reconstructs missing values from the serialized report. Only scored candidates are
+eligible, and fewer than two fail rather than fabricating a pairwise pool. After `write_report`
+validates and atomically publishes the report, its exact bytes are SHA-256 hashed; only then does the
+client issue its one narrow bare `create` operation for a live `artifact/moodboard`. Khive's
+registered verb name is canonical here; the adapter has no compatibility fallback to the
+unregistered `kg.create` spelling.
+The entity's closed
+properties bind board id, model key, descriptor fingerprint, report digest, feature schema, and
+producer identity. A strict response parser requires the exact Entity wire shape, matching namespace
+and properties, and null deletion/merge/content lifecycle fields.
+
+The resulting `moodboard.preference-feature-artifact.v2` stores that board entity UUID and a
+domain-separated scope digest over the board, descriptor, report, producer, schema, and independent
+candidate-pool digest. Candidate rows bind canonical Khive asset UUIDs and BlobStore content refs.
+The artifact writer is atomic. `--preference-features-output` is rejected with the classical encoder
+or when it aliases the report or `brand.mb`, before an encoder is constructed or Khive is invoked.
+This handoff does not itself call `serve`, collect judgments, or train a preference model.
+
+The governed replay adds three narrow typed batch items and corresponding client methods; this is
+still not a generic Khive SDK:
+
+```python
+@dataclass(frozen=True)
+class KhiveServeRequest:
+    candidates: Sequence[Mapping[str, Any]]
+    candidate_pool_sha256: str
+    policy_revision: str = "moodboard-demo-pairs-v1"
+    pair_propensity: float | None = None
+
+
+@dataclass(frozen=True)
+class KhiveJudgmentRequest:
+    serve_id: str
+    left_result_occurrence_id: str
+    right_result_occurrence_id: str
+    choice: Literal["left", "right", "tie", "abstain"]
+    reason_code: str | None = None
+    response_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class KhivePreferenceRequest:
+    left: Mapping[str, Any]
+    right: Mapping[str, Any]
+```
+
+`batch_serve`, `batch_judge`, and `batch_preference` reject empty input, validate the complete
+ordered input before starting `kkernel`, submit only their one fixed Moodboard verb, and return one
+typed result per input row after the existing manifest checksum, tool-order, row-count, and success
+checks. Every returned preference scope must bind the resolved Khive actor exactly: an explicitly
+configured request actor is represented as `actor_kind="actor"` and `actor_id` equal to the complete
+requested actor string (for example `lambda:showcase-policy-simulated`). The adapter neither
+splits the actor string on `:` nor accepts a prefixed or reconstructed compatibility spelling.
+The adapter always requests `kkernel exec --serial`: ops-file parsing may chunk the input,
+but physical pack execution is sequential and preserves occurrence-dependent ordering without
+reader contention. The outer `--presentation verbose` flag selects lossless response rendering;
+inside each `moodboard.serve` argument bag, the distinct `exposure` object records the experiment's
+`preference_probability_shown`, `source_rank_shown`, and optional served-model provenance. Neither
+`presentation` nor `presentation_per_op` is a verb argument: Khive reserves both names for the
+request envelope and rejects them during typed parsing.
+
+Serial execution is ordered, not atomic or fail-fast. Khive validates the complete typed ops-file
+snapshot before its first dispatch, so a structural error such as an envelope-reserved argument
+makes zero handler writes. After that preflight, an individual handler failure may still leave a
+successful prefix durable, later rows may execute, and `--strict` reports the failed batch with a
+nonzero process status after row execution. A failed judgment batch can therefore leave judgments
+whose exact retry returns `created=false`; the governed fresh replay recovers only in fresh
+isolated state rather than pretending to roll back or accepting reused rows. Their singleton
+counterparts delegate to a one-item batch. Serve and judgment remain separate batches because
+displayed-side labels depend on Khive's returned randomized occurrence identities.
+
 For each ingest, it also recomputes the Khive BlobStore v1 BLAKE3-256 `content_ref` over the
 submitted bytes and requires the same row to return that value. This detects swapped successful
 rows even though every operation has the identical `moodboard.ingest` tool name.
-Byte-identical inputs are submitted once and fanned back to every original position, preventing
-parallel duplicate-creation races and duplicate inference. First-occurrence name/caption wins;
-later occurrence metadata carries `created=False`.
+Byte-identical inputs are deduplicated across the complete logical call, submitted once, and fanned
+back to every original position. First-occurrence name/caption wins; later occurrence metadata
+carries `created=False`.
 One logical call admits at most 64 total asset occurrences and 32 MiB of decoded bytes across
 those occurrences before deduplication. Source reads are bounded to remaining budget plus one;
-array geometry is checked against exact canonical-PNG size before encoding. Khive-mode CLI
-loading applies the same occurrence/source-byte gate before decode, caps either side at 8192,
-and retains at most 256 MiB of matte-composited RGB arrays. Classical loading is unchanged.
+array geometry is checked against exact canonical-PNG size before encoding. All input admission,
+byte production, ContentRef computation, and global deduplication finish before the first ingest
+process. Unique operations are then submitted in stable consecutive groups of at most eight, so one
+serial ops batch cannot consume the entire bounded Khive request-read deadline. The process groups
+do not reset either logical-call budget.
+
+Every returned group is fully validated before the next process starts. A failed process or invalid
+result stops later groups, leaves `last_assets` empty, and returns no matrix. This is not a
+transaction: operations commit independently, so a validated earlier group or a successful prefix
+of the failing group may remain durable in Khive. Same-state retry converges on the existing
+namespace-plus-ContentRef asset UUID with `created=False`, while inference and indexing run again;
+the adapter performs no compensating deletion. Khive-mode CLI loading also applies the same
+occurrence/source-byte gate before decode, caps either side at 8192, and retains at most 256 MiB of
+matte-composited RGB arrays. Classical loading is unchanged.
 
 **A gap left implicit in the specification, closed here.** The classical encoder is specified
 as "built from the palette/tone/composition features below, concatenated and L2-normalised",

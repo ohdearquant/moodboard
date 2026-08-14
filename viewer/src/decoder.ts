@@ -14,6 +14,7 @@ import {
 import type {
   Asset,
   AxisDefinition,
+  DecodeProgress,
   DecodeResult,
   ImageIdentity,
   ReferenceEntry,
@@ -553,6 +554,11 @@ async function sha256Hex(value: string): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+async function sha256Bytes(value: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(value).buffer);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 interface ProbeTarget {
   readonly key: string;
   readonly path: string;
@@ -564,6 +570,7 @@ interface ProbeTarget {
 async function probeThumbnails(
   report: ReportProjection,
   probe: ThumbnailProbe,
+  onProgress?: ((completed: number, total: number) => void) | undefined,
 ): Promise<{
   readonly issues: readonly ReportIssue[];
   readonly referenceSources: ReadonlyMap<string, SafeThumbnailSource>;
@@ -585,30 +592,38 @@ async function probeThumbnails(
     });
   }
 
+  let completed = 0;
+  onProgress?.(completed, targets.length);
+
   let nextTarget = 0;
   const worker = async () => {
     while (nextTarget < targets.length) {
       const target = targets[nextTarget];
       nextTarget += 1;
       if (!target) continue;
-    const source = safeSource(target.identity.thumbnail);
-    if (!source) {
-      issues.push(issue(target.strict ? "fatal" : "diagnostic", "integrity", target.path, "Thumbnail MIME or base64 payload is not safe to render."));
-      continue;
-    }
-    let result: "decoded" | "undecodable";
-    try {
-      result = await probe.decode(source, target.identity.thumbnail.width, target.identity.thumbnail.height);
-    } catch {
-      issues.push(issue("fatal", "thumbnail-probe", target.path, "The browser thumbnail probe could not execute."));
-      continue;
-    }
-    if (result !== "decoded") {
-      issues.push(issue(target.strict ? "fatal" : "diagnostic", "integrity", target.path, "Thumbnail bytes did not decode to their declared dimensions and MIME."));
-      continue;
-    }
-    if (target.kind === "reference") referenceSources.set(target.key, source);
-    else candidateSources.set(target.key, source);
+      try {
+        const source = safeSource(target.identity.thumbnail);
+        if (!source) {
+          issues.push(issue(target.strict ? "fatal" : "diagnostic", "integrity", target.path, "Thumbnail MIME or base64 payload is not safe to render."));
+          continue;
+        }
+        let result: "decoded" | "undecodable";
+        try {
+          result = await probe.decode(source, target.identity.thumbnail.width, target.identity.thumbnail.height);
+        } catch {
+          issues.push(issue("fatal", "thumbnail-probe", target.path, "The browser thumbnail probe could not execute."));
+          continue;
+        }
+        if (result !== "decoded") {
+          issues.push(issue(target.strict ? "fatal" : "diagnostic", "integrity", target.path, "Thumbnail bytes did not decode to their declared dimensions and MIME."));
+          continue;
+        }
+        if (target.kind === "reference") referenceSources.set(target.key, source);
+        else candidateSources.set(target.key, source);
+      } finally {
+        completed += 1;
+        onProgress?.(completed, targets.length);
+      }
     }
   };
   await Promise.all(
@@ -623,6 +638,7 @@ async function probeThumbnails(
 
 function makeModel(
   report: ReportProjection,
+  documentSha256: string,
   origin: ReportOrigin,
   diagnostics: readonly ReportIssue[],
   referenceSources: ReadonlyMap<string, SafeThumbnailSource>,
@@ -630,6 +646,7 @@ function makeModel(
 ): ReportModel {
   return {
     report,
+    documentSha256,
     origin,
     diagnostics,
     referencesById: new Map(report.references.map((reference) => [reference.reference_id, reference])),
@@ -652,10 +669,32 @@ export function createReportDecoder(probe: ThumbnailProbe = new BrowserThumbnail
     return { ok: true, projection, diagnostics: cross.filter((item) => item.severity === "diagnostic") };
   };
 
-  const decode = async (bytes: Uint8Array, origin: ReportOrigin): Promise<DecodeResult> => {
+  const decode = async (
+    bytes: Uint8Array,
+    origin: ReportOrigin,
+    onProgress?: ((progress: DecodeProgress) => void) | undefined,
+  ): Promise<DecodeResult> => {
+    const emit = (progress: DecodeProgress) => {
+      try {
+        onProgress?.(progress);
+      } catch {
+        // Presentation progress must never alter evidence validation.
+      }
+    };
     const structural = validateStructure(bytes);
     if (!structural.ok) return structural;
+    emit({ phase: "schema" });
     const report = structural.projection;
+    let documentSha256: string;
+    try {
+      documentSha256 = await sha256Bytes(bytes);
+      emit({ phase: "hash" });
+    } catch {
+      return {
+        ok: false,
+        issues: [issue("fatal", "integrity", "/", "The report byte identity could not be verified.")],
+      };
+    }
     const integrity: ReportIssue[] = [];
     if (report.schema_version === "1.1") {
       try {
@@ -667,7 +706,11 @@ export function createReportDecoder(probe: ThumbnailProbe = new BrowserThumbnail
         integrity.push(issue("fatal", "integrity", "/provenance/schema/sha256", "The packaged schema identity could not be verified."));
       }
     }
-    const probed = await probeThumbnails(report, probe);
+    const probed = await probeThumbnails(
+      report,
+      probe,
+      (completed, total) => emit({ phase: "images", completed, total }),
+    );
     integrity.push(...probed.issues);
     const fatal = normalizeIssues(integrity.filter((item) => item.severity === "fatal"));
     if (fatal.length > 0) return { ok: false, issues: fatal };
@@ -675,7 +718,8 @@ export function createReportDecoder(probe: ThumbnailProbe = new BrowserThumbnail
       ...structural.diagnostics,
       ...integrity.filter((item) => item.severity === "diagnostic"),
     ]);
-    return { ok: true, model: makeModel(report, origin, diagnostics, probed.referenceSources, probed.candidateSources) };
+    emit({ phase: "bindings" });
+    return { ok: true, model: makeModel(report, documentSha256, origin, diagnostics, probed.referenceSources, probed.candidateSources) };
   };
 
   return { validateStructure, decode };

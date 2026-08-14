@@ -9,11 +9,16 @@
     "test": "vitest run",
     "validators:check": "node scripts/generate-validators.mjs --check",
     "validators:write": "node scripts/generate-validators.mjs --write",
+    "pixel-rag:check": "uv run --frozen --project .. --python 3.14.3 python -m moodboard.pixel_rag_viewer --input ../.cache/showcase-final-handoff-v1/run-20260813-final4/pixel/pixel-rag-artifact.json --manifest ../.cache/showcase-public-domain-v1/run-20260812-final-current/manifest.json --check src/generated/pixel-rag-bridge.json",
+    "pixel-rag:write": "uv run --frozen --project .. --python 3.14.3 python -m moodboard.pixel_rag_viewer",
+    "firefly:check": "uv run --frozen --project .. --python 3.14.3 python -m moodboard.firefly_viewer --check src/generated/firefly-bridge.json",
+    "preference-replay:check": "uv run --frozen --project .. --python 3.14.3 python -m moodboard.preference_replay_viewer --check src/generated/preference-replay-bridge.json --require-projected",
+    "preference-replay:write": "uv run --frozen --project .. --python 3.14.3 python -m moodboard.preference_replay_viewer",
     "fixture:check": "uv run --frozen --python 3.14.3 python scripts/generate_showcase_fixture.py --check tests/fixtures/showcase",
     "fixture:write": "uv run --frozen --python 3.14.3 python scripts/generate_showcase_fixture.py --write tests/fixtures/showcase",
     "build:vite": "vite build",
     "package": "node scripts/package-artifacts.mjs",
-    "build": "npm run validators:check && npm run typecheck && npm run build:vite && npm run package",
+    "build": "npm run validators:check && npm run pixel-rag:check && npm run firefly:check && npm run preference-replay:check && npm run typecheck && npm run build:vite && npm run package",
     "test:ci": "npm run fixture:check && npm run validators:check && npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
