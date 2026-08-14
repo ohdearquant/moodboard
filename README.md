@@ -82,7 +82,9 @@ an image is “on brand,” and they do not replace human review.
 The offline encoder is the default. The opt-in Khive path stores exact visual assets in BlobStore
 and obtains frozen Lattice descriptors through the Moodboard pack. The commands below assume a
 preconfigured `kkernel` with that pack enabled, a durable BlobStore, and a pinned visual checkpoint;
-the core workflow above needs none of them.
+the core workflow above needs none of them. See
+[`docs/setup-khive-lattice.md`](docs/setup-khive-lattice.md) for a cold-builder guide to obtaining
+and configuring that backend.
 
 ```bash
 uv run moodboard build references/ -o board.mb \
