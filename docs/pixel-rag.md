@@ -1,4 +1,4 @@
-# Governed, intent-scoped Pixel RAG
+# Intent-scoped Pixel RAG
 
 `moodboard.pixel_rag` freezes a control-plane artifact. It does not generate an image and it
 does not call a model. Its input is the reviewed public-domain acquisition manifest plus a
@@ -6,8 +6,8 @@ closed record of Khive retrievals. The compiler proves that every candidate Cont
 to the manifest, that the Lattice descriptor is the current `lattice-embed` 0.9.0 contract,
 and that the scores remain in the exact order returned by the measured search. A measured run
 also binds the exact preregistration, intent-freeze, and verification-summary bytes. Those
-hash bindings prove which evidence files were used; a dedicated projector is still responsible
-for proving that every projected number equals the corresponding frozen evidence field.
+hash bindings prove which input files were used; a dedicated projector is still responsible
+for proving that every projected number equals the corresponding frozen input field.
 
 ## Why one source produces two retrievals
 
@@ -15,12 +15,12 @@ Both plans start from `fruit_apple_garden`, but intent changes what is a useful 
 
 | Intent | Query | Hard metadata gate | What the visual score ranks |
 | --- | --- | --- | --- |
-| `local_replace` | a Khive asset derived from an operator-confirmed normalized tree rectangle | `collection == fruit-lemon` | view, silhouette, light, and composition compatibility among the governed lemon references |
-| `global_restyle` | the complete immutable source asset | `collection == style-claude-lorrain` | global composition compatibility among the governed Claude Lorrain references |
+| `local_replace` | a Khive asset derived from an operator-confirmed normalized tree rectangle | `collection == fruit-lemon` | view, silhouette, light, and composition compatibility among the lemon reference set |
+| `global_restyle` | the complete immutable source asset | `collection == style-claude-lorrain` | global composition compatibility among the Claude Lorrain reference set |
 
 The gate is explicit intent routing, not a claim that the visual model inferred “lemon” or
 “Claude Lorrain” from pixels. Khive owns retrieval and immutable record identity; Lattice owns
-the visual embedding and exact cosine score; the governed manifest owns collection, licence,
+the visual embedding and exact cosine score; the manifest owns collection, licence,
 and source-page metadata.
 
 Each plan keeps these stages separate and in order:
@@ -41,7 +41,7 @@ provided.
 ## Producing a measured input
 
 Use a persistent Khive state and two explicit namespaces. Ingest the 15 manifest assets into
-each namespace (or otherwise make the complete governed corpus visible there), then:
+each namespace (or otherwise make the complete corpus visible there), then:
 
 1. record `moodboard.model`'s full descriptor;
 2. confirm and save the normalized tree rectangle, create its crop/rendition, ingest it, and
@@ -59,7 +59,7 @@ each namespace (or otherwise make the complete governed corpus visible there), t
 The input must validate against
 `moodboard/schema/pixel_rag_measurements_v1.schema.json`. Use
 `evidence_status: measured_run` only for real Khive outputs and only with all three frozen
-evidence bindings. Tests use
+input files bound. Tests use
 `evidence_status: contract_fixture`; fixture numbers are never promoted automatically.
 
 If relevance judgments are absent, P@3, nDCG@5, MRR, and recall@5 are emitted as
@@ -73,13 +73,13 @@ If relevance judgments are absent, P@3, nDCG@5, MRR, and recall@5 are emitted as
 Current compiler-v2 artifacts require that fixed structural-routing interpretation both on each
 intent retrieval and on the cross-intent separation metric. The exact legacy compiler-v1
 contract fixture remains readable without those extension fields; no other artifact may shed
-them and present itself as current evidence.
+them and present itself as a current result.
 
 Both views are measured, but neither turns a cosine into a probability. If edit-verification
 measurements are absent, verification is `not_run`. Merely supplying a generated image never
 invents either kind of metric.
 
-The frozen demo evidence records that a human confirmed the crop, but it does not record an
+The frozen demo record shows that a human confirmed the crop, but it does not record an
 actor or timestamp. That case uses `evidence_bound_human_confirmation` with the exact
 preregistration hash and JSON pointer. It must not synthesize an operator identity or time.
 Likewise, a verifier value already frozen without a method revision uses `evidence_field`; it
@@ -118,7 +118,7 @@ Current compiler-v2 artifacts expose selected and historical output locations as
 `identity_only`, so a portable bridge cannot leak a workstation path. `local_file` remains
 accepted only for the exact legacy compiler-v1 contract-fixture identity tuple.
 
-## Frozen evidence projection
+## Frozen record projection
 
 For a one-off measured demo, keep the deterministic projector in the tracked `eval/` directory
 and write only its large measurements/artifact outputs to an ignored cache directory.
@@ -140,44 +140,44 @@ artifact fields were deterministically derived from those files.”
 the local output crop, restyle content retention, and Claude-Lorrain-versus-Van-Gogh reference
 centroids. The compiler checks the reported margins arithmetically. The contract explicitly
 marks these values descriptive, nonprobabilistic, and not a validated style or CSD score; a tiny
-style margin is evidence of weak discrimination, not evidence to round up into a success claim.
+style margin shows weak discrimination, not something to round up into a success claim.
 
 ## Viewer projection
 
-The engine artifact is the evidence source of truth. A viewer projection must map fields as
-follows and must not supply defaults for missing evidence:
+The engine artifact is the source of truth. A viewer projection must map fields as
+follows and must not supply defaults for missing fields:
 
 | Engine artifact | Viewer concept |
 | --- | --- |
 | `evidence_status` | measured-run / contract-fixture badge |
 | `source` | shared source identity resolved from the bridge's byte-verified media inventory |
 | `intents[].route` | granularity, exact normalized region rectangle, region-crop query identity, namespace, and active corpus |
-| `intents[].retrieval.ranked_evidence` | evidence cards, exact scores, licence, source page, Khive record and ContentRef |
+| `intents[].retrieval.ranked_evidence` | candidate cards, exact scores, licence, source page, Khive record and ContentRef |
 | `intents[].plan.stages` | control-pipeline strip |
 | `intents[].retrieval.raw_diagnostics` | complete ungated Qwen exact-score order plus four descriptive metrics; display the order without sorting or rounding and label it as geometry, never probability |
 | `intents[].retrieval.metrics` | four intent-routed structural-control metrics; preserve `not_computed` visibly |
 | `intents[].verification` | edit checks; preserve `not_run` visibly |
-| `intents[].negative_output_evidence` | rejected real outputs and their failed verifier evidence |
+| `intents[].negative_output_evidence` | rejected real outputs and their failed verifier results |
 | `intents[].output` | selected external result identity, provider/compositor provenance, BlobStore registration state, and rollback identity |
 | `experimental_visual_embedding_diagnostics` | explicitly nonprobabilistic Qwen geometry diagnostics and their limitations |
 | `cross_intent_metrics` | route-separation metric |
 | `descriptor`, `contracts`, `provenance` | model/checkpoint/Lattice, schema, Khive revision, and run identity drawer |
 
-Preference Model A/B is a separate governed artifact. The viewer may join it by board, model,
+Preference Model A/B is a separate artifact. The viewer may join it by board, model,
 feature-schema, and candidate-pool identity, but the Pixel RAG compiler never fabricates that
 join. The v2 bridge carries an offline media inventory for the immutable source and the top-three
-retrieval evidence for both intents. Before deriving any display media, compilation verifies each
+retrieval results for both intents. Before deriving any display media, compilation verifies each
 original against the artifact-bound acquisition manifest: raw SHA-256, Khive BLAKE3 ContentRef,
 byte size, decoded format and dimensions, MIME, manifest SHA-256, safe containment, and a path with
 no symlink component. The bridge retains those original identities but embeds only a deterministic
 metadata-free JPEG preview: maximum side 480 pixels, quality 45, 4:2:0 subsampling, optimized
 progressive encoding, and exact preview byte size, SHA-256, dimensions, MIME, and canonical Base64.
-It requires exactly the seven unique source/evidence identities and keeps the complete canonical
+It requires exactly the seven unique source/reference identities and keeps the complete canonical
 bridge below 256 KiB. Reading repeats the exact-set, original-identity, preview Base64, SHA-256,
 decode, geometry, MIME, metadata, per-preview, aggregate-preview, and bridge-size checks. The
 viewer therefore resolves Pixel RAG media from this bounded bridge instead of depending on
 unrelated report reference or candidate ids. Generated outputs remain identity-only in the Pixel
-RAG artifact; their visual presentation uses a separately governed measured-output bridge.
+RAG artifact; their visual presentation uses a separate measured-output bridge.
 
 Freeze a compiled artifact into the offline bundle from the repository root:
 
@@ -202,7 +202,7 @@ at build time. The checked-in `pixel-rag:check` invocation names those frozen ar
 manifest inputs explicitly. It recompiles the complete bridge deterministically from the original
 media, compares the canonical bytes with the checked-in bridge, and performs no writes. A bridge
 whose previews have been replaced and made internally self-consistent therefore still fails the
-publication gate. Pixel RAG evidence status never upgrades the independently governed preference
+publication gate. Pixel RAG's measurement status never upgrades the independently defined preference
 panel.
 
 The exported TypeScript projector accepts only a nominally branded

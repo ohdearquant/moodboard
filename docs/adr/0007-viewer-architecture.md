@@ -92,8 +92,8 @@ versions its own contract explicitly names as supported, and refuses every other
 refuses an unsupported major
 (`docs/adr/0008-report-contract-for-viewer.md:289-308`). This record's decoder follows ADR-0008's rule,
 not ADR-0002's original one — see "Report loading and version handling" below for the exact
-consequence. The closed schema therefore governs v1.0 writers, while the named-minor compatibility rule
-governs readers of every other supported minor. The v1.0 exemplar array cannot prove that a report
+consequence. The closed schema therefore applies to v1.0 writers, while the named-minor compatibility rule
+applies to readers of every other supported minor. The v1.0 exemplar array cannot prove that a report
 contains `min(3, references.length)` distinct, resolvable closest references in closest-first order.
 Legacy v1.0 reports receive visible compatibility diagnostics. ADR-0008 adds the missing producer
 guarantee in report v1.1. Remote report URLs, servers, report editing, and model
@@ -955,11 +955,11 @@ itself, and would add runtime I/O to the self-contained artifact that ADR-0001 r
 **A carousel, tabs, or one large nearest-reference image with the other two on hover.** These layouts
 give each image more pixels. They were rejected because they replace simultaneous comparison with
 memory. The images are the references nearest the candidate and therefore stay in one visible strip.
-They are the evidence for the score on a single-category board only. Exemplars are selected board-wide
+They are the basis for the score on a single-category board only. Exemplars are selected board-wide
 (`moodboard/cli.py:497-519`, called at `:589-594`) while the score is category-local
 (`docs/adr/0004-abstention.md:88-90`), so on a multi-category board the strip can contain a reference
 from a category the score was never computed against. ADR-0008 records that consequence, and the
-caption the viewer renders must not assert evidential force the field does not carry.
+caption the viewer renders must not assert more weight than the field carries.
 
 **A large point score with the interval in a tooltip or disclosure.** This is visually familiar and
 compact. It was rejected because the point becomes the remembered result while the uncertainty
@@ -986,7 +986,7 @@ The static and standalone distributions execute the same compiled presentation c
 loading mode are isolated to the source adapter, which prevents an offline rendering path from
 drifting independently.
 
-The reference evidence, interval meaning, tie rule, abstention explanation, flags, and provenance are
+The reference basis, interval meaning, tie rule, abstention explanation, flags, and provenance are
 available without hover. Pointer and keyboard interaction can add coordinated emphasis without
 carrying essential meaning.
 
@@ -1048,9 +1048,9 @@ document; if the primary workflow becomes comparison of several reports; if user
 durable; or if reference and candidate imagery moves to a streamed or authenticated resolver. Each
 condition changes state ownership or the file boundary and exceeds a presentation-component change.
 
-It is also wrong if evidence from keyboard, narrow-screen, or assistive-technology testing shows that
+It is also wrong if findings from keyboard, narrow-screen, or assistive-technology testing show that
 three permanently visible cells prevent a reader from making the simultaneous comparison ADR-0001
-requires. A replacement must preserve simultaneous evidence in another tested layout. One-at-a-time
+requires. A replacement must preserve simultaneous visibility in another tested layout. One-at-a-time
 presentation would still violate ADR-0001.
 
 The React choice should be revisited if its bundled runtime or upgrade work dominates the viewer while
@@ -1068,8 +1068,8 @@ those requests move an accepted boundary.
 
 The decision is also invalid if ADR-0008 cannot guarantee `min(3, references.length)` distinct,
 closest-first exemplars whose inline thumbnails resolve, use a supported MIME, and decode in both
-required image decoders without misrepresenting the engine's evidence. In that case ADR-0001's
-simultaneous-reference requirement and the available report evidence must be reconciled in a
+required image decoders without misrepresenting the engine's output. In that case ADR-0001's
+simultaneous-reference requirement and the available report data must be reconciled in a
 superseding decision before viewer release.
 
 The candidate preview rests on the same guarantee and fails the same way. If version 1.1 cannot

@@ -4,14 +4,14 @@
 - **Date:** 2026-08-08
 - **Extends:** ADR-0006. This record makes ADR-0006's clone-reproducibility promise operational; it
   changes no scope decision of ADR-0006 itself. It also binds the existing acceptance criteria of
-  ADR-0002 (amended by ADR-0008), ADR-0003, ADR-0004, and ADR-0005 to one evidence envelope without
+  ADR-0002 (amended by ADR-0008), ADR-0003, ADR-0004, and ADR-0005 to one results envelope without
   altering any threshold, protocol, or dataset row those records already define.
 - **Related:** [ADR-0010](0010-frontend-verification.md) registers `frontend-verification` as a
   measurable claim under the same `docs/adr/README.md:16-30` dataset-and-threshold discipline this
   record generalizes; see "One command per measurement" below. [ADR-0008](0008-report-contract-for-viewer.md)'s
   conformance gate is deliberately outside this record's `results/` namespace; see "Registry coverage
   is exact" below.
-- **Measurable claim:** none. This record defines the evidence contract around measurements
+- **Measurable claim:** none. This record defines the results contract around measurements
   and adds no statistical acceptance criterion. Every quality bar remains pre-registered in
   `eval/thresholds.json`.
 
@@ -64,7 +64,7 @@ already qualified to runnable dataset rows, and it distinguishes integrity from 
 and permission (`docs/adr/0006-standalone.md:32-40`). The qualification remains. The
 brand-photography, human-style-grouping and weight-reproduction rows are blocked today
 (`DATASETS.md:84-95,235-300,413-440`). A result contract cannot turn a missing or
-unpublishable input into evidence.
+unpublishable input into a result.
 
 ## Decision
 
@@ -72,7 +72,7 @@ Adopt one repository-native evaluation entry point and one immutable result bund
 published number is valid only when it points to a value in a committed result bundle that
 records enough information to replay the run from a clean clone.
 
-The evidence chain has these components:
+The result chain has these components:
 
 ```text
 eval/measurements.json -----------+
@@ -225,7 +225,7 @@ Publishing therefore uses two commits. First, commit all source, lock, protocol,
 model-pin and dataset-pin changes. Second, run the measurement from that clean revision and
 commit the result bundle without changing those inputs. The result commit may differ from
 `code_revision`; the recorded revision is the exact commit whose code executed and the
-later commit is only its evidence carrier.
+later commit is only its result carrier.
 
 The run identifier is the SHA-256 of canonical JSON containing the measurement identifier,
 full code revision, dependency-lock digest, measurement-registry digest, threshold-registry
@@ -254,7 +254,7 @@ times.
 in `summary.json` without rerunning a model. The measurement registry names a versioned
 schema for those files. Expanded pair sets need not be stored when the stored per-item
 values, labels and deterministic pairing rule reproduce them, but a summary statistic by
-itself is never raw evidence.
+itself is never raw data.
 
 `summary.json` carries derived metrics, the aggregation named for each metric and an array
 of checks. Each check contains an observed-value JSON Pointer, the exact
@@ -267,17 +267,17 @@ partial-pass rule and every other gate are evaluated exactly as registered
 verdict.
 
 `checksums.sha256` covers `run.json`, `summary.json` and every file under `raw/`.
-It detects alteration of committed evidence. Reproduction compares regenerated raw files and
+It detects alteration of the committed record. Reproduction compares regenerated raw files and
 the summary with the committed versions after excluding operational timestamps from the
 comparison envelope.
 
 A valid measurement run is committed whether its verdict is `PASS`, `FAIL` or
-`INFORMATIONAL`. A quality failure is evidence and is not deleted or overwritten. A
+`INFORMATIONAL`. A quality failure is a recorded result and is not deleted or overwritten. A
 download failure, schema failure or interrupted worker is not a measurement result; it
 changes no result directory and leaves the dataset or run blocked until the operational
 problem is resolved.
 
-The following artifacts are regenerated and never serve as evidence: dataset archives,
+The following artifacts are regenerated and never serve as proof: dataset archives,
 images, extracted files, manifests, model caches, virtual environments, temporary worktrees
 and replay output under `results/_reproduced/<run-id>/`. A reader-facing plot or table may
 be committed, but it records its generator command and source result pointers. It is a view
@@ -298,7 +298,7 @@ record can be accepted, existing observed numbers in ADR prose, evaluation comme
 dataset commentary must either gain a result reference or be removed. This includes measured
 axis-intervention commentary currently embedded beside the registered protocol
 (`eval/thresholds.json:141-154`). Preserving the threshold file does not exempt an observed
-number inside its commentary from evidence binding.
+number inside its commentary from a result binding.
 
 The replay sequence is:
 
@@ -415,7 +415,7 @@ produced it.
 **Commit only summaries and regenerate raw observations on demand.** This keeps the repository
 small. It is rejected because a summary cannot show whether exclusions, balancing,
 aggregation or seed handling changed. A reader could rerun the model, but could not audit the
-published calculation against the evidence that was actually used.
+published calculation against the data that was actually used.
 
 **Commit the source datasets and generated manifests with every result.** This would improve
 offline availability. It is rejected because the current sources have restrictive or
@@ -427,8 +427,7 @@ identity without republishing the inputs.
 provide searchable metadata and can handle larger artifacts. It is rejected for the current
 scale because ADR-0006 promises clone-based reproduction and excludes required external
 services from the product boundary (`docs/adr/0006-standalone.md:26-46`). An external
-dashboard may mirror results, but it cannot be the only location of evidence for a published
-number.
+dashboard may mirror results, but it cannot be the only place a published number is recorded.
 
 **Bind results to a release name or mutable tag.** This is shorter to read than a full commit
 digest. It is rejected because a name can move and does not identify uncommitted protocol or
@@ -442,7 +441,7 @@ observations and registered criterion, and from the run envelope to the exact co
 models, environment and seeds. Failed measurements remain visible, which removes the
 incentive and ability to publish only favourable valid runs.
 
-The result directory becomes an append-only evidence log. Changing code, a dependency,
+The result directory becomes an append-only record. Changing code, a dependency,
 model, dataset pin, seed or threshold creates a new identifier and preserves the old
 interpretation. A result can be discussed after the project moves on without asking which
 version of a flat JSON file the sentence meant.
@@ -460,7 +459,7 @@ commands in `DATASETS.md` must be rewritten to the canonical entry point
 Deterministic CPU execution can be slower than accelerator execution. Committing raw
 scientific output also grows the repository, and the two-commit publication sequence is less
 convenient than running against a dirty working tree. Those costs are accepted because
-convenience at this boundary would make the central public evidence replaceable.
+convenience at this boundary would make the central public record replaceable.
 
 ## Invalidation conditions
 
