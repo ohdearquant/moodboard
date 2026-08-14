@@ -634,7 +634,7 @@ The artifact writer is atomic. `--preference-features-output` is rejected with t
 or when it aliases the report or `brand.mb`, before an encoder is constructed or Khive is invoked.
 This handoff does not itself call `serve`, collect judgments, or train a preference model.
 
-The governed replay adds three narrow typed batch items and corresponding client methods; this is
+The recorded replay adds three narrow typed batch items and corresponding client methods; this is
 still not a generic Khive SDK:
 
 ```python
@@ -682,7 +682,7 @@ snapshot before its first dispatch, so a structural error such as an envelope-re
 makes zero handler writes. After that preflight, an individual handler failure may still leave a
 successful prefix durable, later rows may execute, and `--strict` reports the failed batch with a
 nonzero process status after row execution. A failed judgment batch can therefore leave judgments
-whose exact retry returns `created=false`; the governed fresh replay recovers only in fresh
+whose exact retry returns `created=false`; the replay recovers only in fresh
 isolated state rather than pretending to roll back or accepting reused rows. Their singleton
 counterparts delegate to a one-item batch. Serve and judgment remain separate batches because
 displayed-side labels depend on Khive's returned randomized occurrence identities.
