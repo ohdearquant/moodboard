@@ -162,7 +162,7 @@ describe("versioned report decoder", () => {
     }
   });
 
-  it("preflights governed JPEG and WebP headers without native decoding", () => {
+  it("preflights JPEG and WebP headers without native decoding", () => {
     const fixtures = [
       {
         mime: "image/jpeg",

@@ -111,7 +111,7 @@ function AwaitingFileView({ onFile }: { readonly onFile: (file: File) => void })
         <span className="offline-pill">Offline viewer</span>
       </header>
       <section className="start-hero" aria-labelledby="start-title">
-        <p className="eyebrow">Governed visual review</p>
+        <p className="eyebrow">Visual review</p>
         <h1 id="start-title">Does the work belong—<em>and what evidence says so?</em></h1>
         <p className="start-copy">
           Open a Moodboard report to inspect compatibility evidence, board cohesion, intentional
@@ -631,7 +631,7 @@ function MechanismGuide(): ReactNode {
       </article>
       <article>
         <span>02 · Pixel RAG routing</span>
-        <strong>Which governed references fit the declared edit intent?</strong>
+        <strong>Which references fit the declared edit intent?</strong>
         <p>An explicit collection gate filters the frozen Qwen similarity order. This routing evidence may guide prompts; its separately recorded output is not the Firefly run below.</p>
       </article>
       <article>
@@ -648,24 +648,24 @@ function MechanismGuide(): ReactNode {
   );
 }
 
-function GovernedReferenceBoard({ model }: { readonly model: ReportModel }): ReactNode {
+function ReferenceBoard({ model }: { readonly model: ReportModel }): ReactNode {
   return (
-    <section className="reference-board" aria-label="Governed reference board">
+    <section className="reference-board" aria-label="Reference board">
       <div className="section-heading reference-board-heading">
         <div>
-          <p className="eyebrow">Governed source set</p>
+          <p className="eyebrow">Source set</p>
           <h2>Scoring baseline · {model.report.references.length} original artworks</h2>
         </div>
         <p>These immutable originals define the board; every candidate fit tier is calibrated against this exact set.</p>
       </div>
       <div className="reference-board-strip">
         {model.report.references.map((reference, index) => (
-          <article key={reference.reference_id} data-testid="governed-reference-tile">
+          <article key={reference.reference_id} data-testid="reference-tile">
             <div className="reference-board-frame">
               <SafeImage
                 source={model.referenceSources.get(reference.reference_id)}
-                alt={`Governed reference ${reference.reference_id}`}
-                fallback="Governed reference preview could not be rendered."
+                alt={`Reference ${reference.reference_id}`}
+                fallback="Reference preview could not be rendered."
                 width={reference.thumbnail.width}
                 height={reference.thumbnail.height}
                 loading={index < 6 ? "eager" : "lazy"}
@@ -945,7 +945,7 @@ function CoreVerificationLine({ model }: { readonly model: ReportModel }): React
   const abstained = model.report.assets.length - scored;
   return (
     <p className="core-verification-line" aria-label="Core report verification">
-      Verified · {model.report.references.length} governed references · {model.report.assets.length} candidate outcomes · {scored} scored · {abstained} abstained · reported fit tiers preserved · no merged preference score
+      Verified · {model.report.references.length} board references · {model.report.assets.length} candidate outcomes · {scored} scored · {abstained} abstained · reported fit tiers preserved · no merged preference score
     </p>
   );
 }
@@ -1061,7 +1061,7 @@ function PreferenceReplayPanel({
   ] as const;
 
   return (
-    <section className="preference-measured" aria-label="Governed preference replay">
+    <section className="preference-measured" aria-label="Preference replay">
       <div className="section-heading preference-heading">
         <div>
           <p className="eyebrow">
@@ -1080,7 +1080,7 @@ function PreferenceReplayPanel({
           </p>
           <p>
             Three visual-similarity features derive from frozen Qwen embeddings. The other seven
-            are governed conformal fit, LOO range width, local support, palette, tone, and
+            are conformal fit, LOO range width, local support, palette, tone, and
             composition measurements. It learns only over those ten recorded numbers.
           </p>
         </article>
@@ -1277,7 +1277,7 @@ function FireflyMeasuredLoop({ model }: { readonly model: ReportModel }): ReactN
       >
         <span>{structural.label}</span>
         <strong>FAIL · structural aspect ratio</strong>
-        <p>Square output rejected before locality comparison against the governed 4:3 source.</p>
+        <p>Square output rejected before locality comparison against the 4:3 source.</p>
       </div>
 
       <ol className="firefly-timeline" aria-label="Frozen Firefly iteration timeline">
@@ -1286,7 +1286,7 @@ function FireflyMeasuredLoop({ model }: { readonly model: ReportModel }): ReactN
           <figure>
             <SafeImage
               source={source}
-              alt="Original governed apple-tree source"
+              alt="Original apple-tree source"
               fallback="Exact original apple source is unavailable."
               width={evidence.source.width}
               height={evidence.source.height}
@@ -1295,7 +1295,7 @@ function FireflyMeasuredLoop({ model }: { readonly model: ReportModel }): ReactN
           </figure>
           <div>
             <small>Immutable source · {verifiedPixelRagArtifact.source.asset_id}</small>
-            <strong>Original governed source</strong>
+            <strong>Original source</strong>
             <p>Verified preview of the immutable source; the exact original bytes were used for generation, locality comparison, and rollback.</p>
           </div>
         </li>
@@ -1315,7 +1315,7 @@ function FireflyMeasuredLoop({ model }: { readonly model: ReportModel }): ReactN
         <li className="firefly-step firefly-step-pass">
           <span>GOV</span>
           <figure>
-            <img src={selected.preview.source} alt="Governed selected Firefly replacement output" width={selected.preview.width} height={selected.preview.height} loading="lazy" decoding="async" />
+            <img src={selected.preview.source} alt="Selected Firefly replacement output" width={selected.preview.width} height={selected.preview.height} loading="lazy" decoding="async" />
           </figure>
           <div>
             <small>{selected.label}</small>
@@ -1380,7 +1380,7 @@ function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
     <section className="pixel-rag-lab" aria-label="Pixel RAG intent lab">
       <header className="pixel-rag-header">
         <div>
-          <p className="eyebrow">Pixel RAG · governed evidence routing</p>
+          <p className="eyebrow">Pixel RAG · evidence routing</p>
           <h2>Same pixels. <em>Different evidence.</em></h2>
         </div>
         <div className={`pixel-run-status pixel-run-${artifact.evidence_status}`}>
@@ -1601,7 +1601,7 @@ function PixelRagLab({ model }: { readonly model: ReportModel }): ReactNode {
               <div><dt>Rollback</dt><dd title={intent.output.rollback_ref}>{shortDigest(intent.output.rollback_ref)}</dd></div>
             </dl>
             {intent.output.history?.length ? (
-              <ol className="pixel-output-history" aria-label="Governed output iterations">
+              <ol className="pixel-output-history" aria-label="Output iterations">
                 {intent.output.history.map((entry) => (
                   <li key={entry.evidence_id}>
                     <span>Rejected predecessor</span>
@@ -1879,7 +1879,7 @@ function ReportView({
         <div className="report-title-grid">
           <div>
             <p className="eyebrow">Independent showcase fixture · board review · schema {report.schema_version}</p>
-            <h1>Governed visual evidence.</h1>
+            <h1>Visual coherence evidence.</h1>
             <p className="report-deck">One offline evidence packet, four independent decisions: embedding-relative board compatibility, intent routing, edit locality, and immutable replay. None is allowed to impersonate another.</p>
           </div>
           <dl className="board-identity">
@@ -1892,7 +1892,7 @@ function ReportView({
       <StoryStrip model={model} />
       <BoardSupportDiagnostic model={model} />
       <MechanismGuide />
-      <GovernedReferenceBoard model={model} />
+      <ReferenceBoard model={model} />
       <CandidateHeroGrid model={model} activeId={activeId} dispatch={dispatch} />
       <CoreVerificationLine model={model} />
       <AssetCollection stateModel={model} activeId={activeId} filter={filter} dispatch={dispatch} />

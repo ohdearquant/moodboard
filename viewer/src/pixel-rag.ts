@@ -389,7 +389,7 @@ export const pixelRagArtifact = {
   ],
   preference: {
     status: "governed_snapshot_fixture",
-    explanation: "Clicks append immutable judgments. A governed retrain publishes a new FANN snapshot; rankings never mutate in place.",
+    explanation: "Clicks append immutable judgments. A retrain publishes a new FANN snapshot; rankings never mutate in place.",
     before: {
       label: "Model A · baseline",
       model_id: "fann:sha256:3182544743645b831843562c401480b02315878ae67571633ea8541d4b15ab20",
@@ -1528,7 +1528,7 @@ function engineOutput(
       label: "No external output recorded",
       content_ref: null,
       rollback_ref: rollbackRef,
-      caveat: "The governed retrieval plan exists, but this artifact supplies no generator output.",
+      caveat: "The retrieval plan exists, but this artifact supplies no generator output.",
       history,
       postprocess: null,
     };
@@ -1697,8 +1697,8 @@ function engineIntent(
         ? "Lemon trees · explicit collection gate"
         : "Claude Lorrain · explicit collection gate",
       rationale: local
-        ? "A confirmed region queries only governed lemon-tree evidence; global painting similarity would answer the wrong task."
-        : "The whole source queries governed Claude Lorrain evidence while verification remains a separate content-preservation concern.",
+        ? "A confirmed region queries only lemon-tree evidence; global painting similarity would answer the wrong task."
+        : "The whole source queries Claude Lorrain evidence while verification remains a separate content-preservation concern.",
       region_query_ref: local ? queryRef : null,
       rectangle,
     },
@@ -1809,7 +1809,7 @@ export function projectPythonPrevalidatedPixelRagArtifact(
     artifact_id: artifactId,
     evidence_status: evidenceStatus,
     status_label: evidenceStatus === "measured_run"
-      ? `Measured engine artifact · input ${bridge.input.sha256.slice(0, 12)}… · preference panel remains a governed fixture`
+      ? `Measured engine artifact · input ${bridge.input.sha256.slice(0, 12)}… · preference panel remains a fixture`
       : `Engine contract fixture · input ${bridge.input.sha256.slice(0, 12)}… · not an empirical claim`,
     source: {
       asset_id: stringAt(source.asset_id, "$pixel_rag_bridge.artifact.source.asset_id"),

@@ -590,7 +590,7 @@ def compile_viewer_firefly_bridge(
         and first.get("acceptance_decision")
         == {
             "reason": (
-                "output is square while the governed source is 4:3; locality gate is not comparable"
+                "output is square while the source is 4:3; locality gate is not comparable"
             ),
             "state": "fail_structural_aspect_ratio",
         },
@@ -786,7 +786,7 @@ def compile_viewer_firefly_bridge(
                         "content_ref": _OUTPUTS["selected"]["content_ref"],
                         "decision": "pass",
                         "id": "iteration_02_cutout_composite",
-                        "label": "Selected cutout + governed compositor",
+                        "label": "Selected cutout + compositor",
                         "outside_mask_ssim": 1.0,
                         "output_sha256": _OUTPUTS["selected"]["sha256"],
                         "pass_semantics": (
@@ -878,7 +878,7 @@ def _validate_timeline(value: object, khive_assets: Mapping[str, Mapping[str, An
     if (
         selected["decision"] != "pass"
         or selected["revision"] != "pixel-rag-firefly-cutout-compositor-v1"
-        or selected["label"] != "Selected cutout + governed compositor"
+        or selected["label"] != "Selected cutout + compositor"
         or selected_value != 1.0
         or selected["pass_semantics"]
         != "deterministic_preservation_constraint_not_intrinsic_generator_locality"

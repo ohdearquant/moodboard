@@ -55,7 +55,7 @@ describe("editorial report presentation", () => {
 
     expect(screen.getByRole("heading", {
       level: 1,
-      name: "Governed visual evidence.",
+      name: "Visual coherence evidence.",
     })).toBeTruthy();
     expect(screen.getByText("Independent showcase fixture · board review · schema 1.1", { exact: true })).toBeTruthy();
     expect(screen.getByText(
@@ -84,7 +84,7 @@ describe("editorial report presentation", () => {
       <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
     );
 
-    const panel = screen.getByRole("region", { name: "Governed preference replay" });
+    const panel = screen.getByRole("region", { name: "Preference replay" });
     expect(panel.textContent).toContain("policy_simulated");
   });
 
@@ -107,7 +107,7 @@ describe("editorial report presentation", () => {
     const lab = screen.getByRole("region", { name: "Pixel RAG intent lab" });
     expect(within(lab).getByText(/fixture metrics only.*no production traffic, external benchmark, or human relevance study/i)).toBeTruthy();
     expect(within(lab).getByText(/measured engine artifact.*retrieval and verification evidence shown below/i)).toBeTruthy();
-    expect(lab.textContent).not.toContain("preference panel remains a governed fixture");
+    expect(lab.textContent).not.toContain("preference panel remains a fixture");
     expect(within(lab).getByRole("heading", {
       name: "Ranked within the declared collection gate",
     })).toBeTruthy();
@@ -176,8 +176,8 @@ describe("editorial report presentation", () => {
     expect(within(lab).getByText("nDCG@5")).toBeTruthy();
     expect(within(lab).getByText(/layout constraint declared; verifier not run/i)).toBeTruthy();
     expect(within(lab).getByText("Not run")).toBeTruthy();
-    expect(within(lab).queryByRole("region", { name: "Governed preference replay" })).toBeNull();
-    expect(screen.getByRole("region", { name: "Governed preference replay" })).toBeTruthy();
+    expect(within(lab).queryByRole("region", { name: "Preference replay" })).toBeNull();
+    expect(screen.getByRole("region", { name: "Preference replay" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "Measured Firefly iteration loop" })).toBeTruthy();
     expect(container.querySelectorAll(".pixel-evidence-card")).toHaveLength(3);
   });
@@ -283,11 +283,11 @@ describe("editorial report presentation", () => {
       <__test.ReportView model={model} activeId={null} filter="all" dispatch={dispatch} onFile={noop} />,
     );
 
-    const references = screen.getByRole("region", { name: "Governed reference board" });
+    const references = screen.getByRole("region", { name: "Reference board" });
     expect(within(references).getByRole("heading", {
       name: `Scoring baseline · ${model.report.references.length} original artworks`,
     })).toBeTruthy();
-    const referenceTiles = within(references).getAllByTestId("governed-reference-tile");
+    const referenceTiles = within(references).getAllByTestId("reference-tile");
     expect(referenceTiles).toHaveLength(model.report.references.length);
     expect(referenceTiles.map((tile) => tile.querySelector("strong")?.textContent)).toEqual(
       model.report.references.map((reference) => reference.reference_id),
@@ -491,8 +491,8 @@ describe("editorial report presentation", () => {
     );
 
     const pixel = screen.getByRole("region", { name: "Pixel RAG intent lab" });
-    expect(within(pixel).queryByRole("region", { name: "Governed preference replay" })).toBeNull();
-    const panel = screen.getByRole("region", { name: "Governed preference replay" });
+    expect(within(pixel).queryByRole("region", { name: "Preference replay" })).toBeNull();
+    const panel = screen.getByRole("region", { name: "Preference replay" });
     const firefly = screen.getByRole("region", { name: "Measured Firefly iteration loop" });
     expect(pixel.nextElementSibling).toBe(firefly);
     expect(panel.previousElementSibling).toBe(firefly);
@@ -545,7 +545,7 @@ describe("editorial report presentation", () => {
       <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
     );
 
-    expect(screen.queryByRole("region", { name: "Governed preference replay" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Preference replay" })).toBeNull();
     expect(screen.getByRole("status", { name: /preference replay not shown/i }).textContent).toMatch(
       /Preference replay not shown.*source report does not match/i,
     );
@@ -564,7 +564,7 @@ describe("editorial report presentation", () => {
       ...verifiedFireflyEvidence.source,
       sha256: "f".repeat(64),
     })).toBe(false);
-    const preference = screen.getByRole("region", { name: "Governed preference replay" });
+    const preference = screen.getByRole("region", { name: "Preference replay" });
     expect(pixel.nextElementSibling).toBe(firefly);
     expect(firefly.nextElementSibling).toBe(preference);
     expect(within(firefly).getByText("Frozen Firefly iteration · measured verification")).toBeTruthy();
@@ -599,7 +599,7 @@ describe("editorial report presentation", () => {
     expect(container.querySelectorAll(".firefly-measured-loop")).toHaveLength(1);
   });
 
-  it("compares the exact Firefly source, raw output, and governed selected output", async () => {
+  it("compares the exact Firefly source, raw output, and selected output", async () => {
     const model = withPreferenceSource(await modelFor());
     render(
       <__test.ReportView model={model} activeId={null} filter="all" dispatch={noop} onFile={noop} />,
@@ -611,9 +611,9 @@ describe("editorial report presentation", () => {
     });
     const images = within(comparison).getAllByRole("img");
     expect(images.map((image) => image.getAttribute("alt"))).toEqual([
-      "Original governed apple-tree source",
+      "Original apple-tree source",
       "Raw Firefly replacement output that failed locality",
-      "Governed selected Firefly replacement output",
+      "Selected Firefly replacement output",
     ]);
     expect(images.every((image) => image.getAttribute("src")?.startsWith("data:image/"))).toBe(true);
     expect(images[0]?.getAttribute("width")).toBe("1280");
