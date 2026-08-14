@@ -725,6 +725,372 @@ perceptual properties, palette, tone and composition; they are not required to b
 consistent with each other beyond that, and no code should assume
 `palette_distance(a, b) == 1 - cosine_similarity(palette_feature_vector(a), palette_feature_vector(b))`.
 
+## `khive.py`: the Moodboard pack wire contract
+
+`moodboard/khive.py` is an application adapter, not a general Khive SDK: it knows how to submit
+one small, fixed set of Moodboard operations through `kkernel exec` and how to prove that the
+saved result file has exactly one successful, ordered row per operation. Everything else about
+Khive, every other verb, every other pack, is out of scope for this client and out of scope for
+this section. What follows records the exact request and response shapes this adapter emits and
+consumes, so that a second client aimed at the same pack can be checked against them field by
+field.
+
+### The verbs this adapter emits
+
+Every operation travels as one JSON object per line in an ops file, `{"tool": "<name>", "args":
+{...}}`, with `args` written key-sorted and compact. The adapter emits exactly these tool names,
+and no others:
+
+| tool | emitted by |
+| --- | --- |
+| `create` | `KhiveClient.publish_board` (publishes the one `artifact/moodboard` entity) |
+| `moodboard.model` | `KhiveClient.model` |
+| `moodboard.ingest` | `KhiveClient.ingest` (arguments built by `KhiveLatticeEncoder`) |
+| `moodboard.search` | `KhiveClient.search` |
+| `moodboard.serve` | `KhiveClient.serve` / `KhiveClient.batch_serve` |
+| `moodboard.judge` | `KhiveClient.judge` / `KhiveClient.batch_judge` |
+| `moodboard.train_preference` | `KhiveClient.train_preference` |
+| `moodboard.preference` | `KhiveClient.preference` / `KhiveClient.batch_preference` |
+
+For all eight of these tools, the adapter also writes its own configured `namespace` into
+`args["namespace"]` before submission (rejecting the call outright if a caller already put a
+different namespace value there). The `--namespace` command-line flag is separate: it is Khive's
+execution-attribution namespace, and the adapter always sets it to the same configured value,
+but the two are bound independently by the pack. `moodboard.model` and `moodboard.search` are
+documented above in the `encoders.py` section together with the descriptor and search-hit shapes
+they carry; this section does not repeat those fields, only the six verbs ADR-149's preference
+loop adds plus the transport and error rules shared by every verb.
+
+### The `--ops-file` / `--save-file` transport
+
+Every call, whether it submits one operation or a batch, runs:
+
+```
+kkernel exec [--config CONFIG] --ops-file OPS --save-file SAVE \
+  --namespace NAMESPACE --actor ACTOR --expect-actor ACTOR \
+  --presentation verbose --output-format json --serial --strict
+```
+
+`--config` is only present when the client was constructed with one; otherwise Khive's normal
+environment/discovery fallback applies. `--serial` makes physical execution order match the
+submitted order. `--strict` makes a failed row change the process exit status. No image or other
+payload ever appears in `argv`; both the operations and the results travel through private
+temporary files.
+
+On success, `kkernel exec` must print exactly one non-blank JSON line to stdout: the save
+manifest. The adapter requires at least these keys (extra manifest keys are read and ignored):
+
+```json
+{
+  "path": "/absolute/path/that/resolves/to/the/requested/--save-file",
+  "rows": 3,
+  "checksum": "<sha256 hex of the exact bytes written to --save-file>",
+  "summary": {"total": 3, "succeeded": 3, "failed": 0, "aborted": 0}
+}
+```
+
+`path` must be absolute and must resolve (`Path.resolve(strict=True)`) to the same file as the
+requested `--save-file`; a symlink or a same-directory alias both fail this check. `rows` must
+equal the number of operations submitted. `checksum` must equal the SHA-256 of the bytes actually
+read back from that file. `summary.succeeded` and `summary.total` must both equal the submitted
+row count, and `summary.failed` and `summary.aborted` must both be `0`; if either is nonzero the
+adapter raises with that count reported, even if the process exit code was `0`.
+
+The save file itself is JSONL, one row per submitted operation in the same order:
+
+```json
+{"tool": "moodboard.serve", "ok": true, "result": {...}, "usage": {}}
+```
+
+The number of lines must equal the number of submitted operations, with no blank lines. For each
+row, `tool` must equal the tool name of the operation at that position (this is how the adapter
+detects a reordered or substituted row even though a batch can contain the same tool name more
+than once), `ok` must be `true`, an `error` key must not be present when `ok` is `true`, an
+`aborted` key must not be present unless it is exactly `false`, and a `result` key must be
+present. The value under `result` is the per-verb response shape documented below.
+
+### Error semantics: what fails closed
+
+Every check above is enforced before any result is handed back to the caller, and any single
+violation, anywhere in the batch, discards the entire batch: the adapter either returns one
+validated result per submitted operation, or it raises and returns nothing. Concretely:
+
+* A nonzero `kkernel exec` exit status raises immediately with the exit code and any stderr text
+  attached; the manifest and save file are not read at all.
+* Stdout that is not exactly one non-blank JSON line, or that does not parse as a JSON object,
+  raises before the save file is opened.
+* Every manifest and row check above (`path`, `rows`, `checksum`, `summary`, per-row `tool`/`ok`/
+  `error`/`aborted`/`result`) raises `moodboard.khive.KhiveProtocolError` on the first violation
+  found.
+* A row that reports `"ok": false` raises with whatever the row's `error` field contains (or
+  `"no error detail"` if that field is absent); this is the one place a per-operation failure
+  message from Khive reaches the caller.
+
+None of this makes the underlying Khive execution itself atomic. `--strict` and `--serial`
+together guarantee the *manifest* Python sees is consistent and ordered, not that a rejected
+batch left no durable effect: Khive validates the complete ops file up front, so a structural
+error (for example, an operation carrying the envelope-reserved `presentation` argument) causes
+zero handler writes, but once execution starts, an individual handler failure can still leave an
+earlier successful prefix durable in Khive while the adapter still raises and reports nothing to
+the caller. A retried `moodboard.judge` call after such a partial failure can come back with
+`created: false` because the judgment already exists; the adapter does not attempt to detect or
+undo a partial prior batch.
+
+### `moodboard.serve`
+
+Request `args` (after namespace binding), for one candidate pair:
+
+```json
+{
+  "board_entity_id": "<uuid>",
+  "board_id": "<64 lowercase hex>",
+  "descriptor": {"model_key": "moodboard_<fingerprint>_<dims>", "descriptor_fingerprint": "<64 lowercase hex>"},
+  "feature_schema_id": "f691fc73bf9a50d72157e21601fa579caa707bf2c448df546c63e915b4e42175",
+  "source_report_sha256": "<64 lowercase hex>",
+  "candidates": [
+    {"state": "scored", "asset_id": "<uuid>", "content_ref": "<64 lowercase hex>", "source_rank": 1, "features": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+    {"state": "scored", "asset_id": "<uuid>", "content_ref": "<64 lowercase hex>", "source_rank": 2, "features": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}
+  ],
+  "selection": {"policy_revision": "moodboard-demo-pairs-v1", "candidate_pool_sha256": "<64 lowercase hex>"},
+  "exposure": {"preference_probability_shown": false, "source_rank_shown": true},
+  "namespace": "<client namespace>"
+}
+```
+
+`candidates` always has exactly two entries with distinct `asset_id` and distinct `content_ref`;
+each `features` array has exactly ten finite numbers in `[0, 1]`, in the fixed order named below
+under "the preference feature artifact". `selection.policy_revision` is a trimmed, non-empty
+string of at most 128 UTF-8 bytes (the adapter's default is `moodboard-demo-pairs-v1`).
+`selection` gains an optional `pair_propensity` key, a finite number in `(0, 1]`, when the caller
+supplies one. `exposure` is always exactly these two booleans; the adapter gives the caller no
+way to change them.
+
+Response:
+
+```json
+{
+  "schema_version": "moodboard.preference-serve.v1",
+  "serve_id": "<uuid>",
+  "scope": {
+    "namespace": "<echoes request>", "actor_kind": "actor", "actor_id": "<client actor>",
+    "board_entity_id": "<echoes request>", "board_id": "<echoes request>",
+    "model_key": "<echoes request>", "descriptor_fingerprint": "<echoes request>",
+    "feature_schema_id": "<echoes request>"
+  },
+  "feature_schema": {
+    "schema_version": "moodboard.preference-features.v1",
+    "feature_schema_id": "f691fc73bf9a50d72157e21601fa579caa707bf2c448df546c63e915b4e42175",
+    "dtype": "float32",
+    "bounds": [0.0, 1.0],
+    "pair_transform": "left_minus_right",
+    "features": ["visual_local_max_similarity_01", "visual_local_top3_mean_similarity_01", "visual_local_mean_similarity_01", "style_conformal_p", "style_interval_width", "local_support_fraction", "local_effective_support_fraction", "palette_compatibility", "tone_compatibility", "composition_compatibility"]
+  },
+  "left": {"result_occurrence_id": "<uuid>", "asset_id": "<uuid>", "content_ref": "<64 lowercase hex>", "source_rank": 1},
+  "right": {"result_occurrence_id": "<uuid>", "asset_id": "<uuid>", "content_ref": "<64 lowercase hex>", "source_rank": 2},
+  "randomization": {"revision": "moodboard-side-v1", "sha256": "<64 lowercase hex>", "swap_applied": false},
+  "experimental": true
+}
+```
+
+`scope`, `feature_schema`, `randomization`, `left`, and `right` are each closed objects: exactly
+the keys shown, nothing more and nothing fewer. `scope.actor_id` must equal the exact actor
+string the client was configured with; the adapter does not split it on `:` or otherwise
+reinterpret it. `left` and `right` must have distinct `asset_id` and distinct `content_ref`.
+`swap_applied` records whether Khive presented the two candidates in flipped left/right order;
+the adapter does not undo that flip, it only reports which side is which through
+`result_occurrence_id`.
+
+### `moodboard.judge`
+
+Request `args`:
+
+```json
+{
+  "serve_id": "<uuid, from a prior moodboard.serve response>",
+  "left_result_occurrence_id": "<uuid, from the same moodboard.serve response>",
+  "right_result_occurrence_id": "<uuid, from the same moodboard.serve response>",
+  "choice": "left",
+  "reason_code": "style",
+  "response_ms": 1200,
+  "namespace": "<client namespace>"
+}
+```
+
+`reason_code` and `response_ms` are omitted entirely when the caller does not supply them, rather
+than sent as `null`. `choice` is one of `"left"`, `"right"`, `"tie"`, `"abstain"`, and constrains
+which `reason_code` values are accepted: `"left"` and `"right"` accept `null` or one of `"style"`,
+`"palette"`, `"tone"`, `"composition"`, `"other"`; `"tie"` accepts `null` or one of
+`"equally_good"`, `"equally_bad"`, `"other"`; `"abstain"` requires one of `"insufficient_context"`,
+`"both_unacceptable"`, `"render_failure"`, `"other"` (it does not accept `null`).
+`response_ms`, when present, is an integer from `0` to `3600000`. A batch submitted through
+`batch_judge` rejects a repeated `serve_id` before contacting Khive at all.
+
+Response:
+
+```json
+{
+  "schema_version": "moodboard.preference-judgment.v1",
+  "judgment_id": "<uuid>",
+  "serve_id": "<echoes request>",
+  "choice": "left",
+  "reason_code": "style",
+  "created": true,
+  "experimental": true
+}
+```
+
+`serve_id`, `choice`, and `reason_code` must echo the request exactly. `created` is `false` on an
+exact retry of an already-recorded judgment; the write is otherwise append-only and idempotent
+per `serve_id`.
+
+### `moodboard.train_preference`
+
+Request `args`:
+
+```json
+{
+  "board_entity_id": "<uuid>",
+  "board_id": "<64 lowercase hex>",
+  "descriptor": {"model_key": "moodboard_<fingerprint>_<dims>", "descriptor_fingerprint": "<64 lowercase hex>"},
+  "feature_schema_id": "f691fc73bf9a50d72157e21601fa579caa707bf2c448df546c63e915b4e42175",
+  "namespace": "<client namespace>"
+}
+```
+
+Response:
+
+```json
+{
+  "schema_version": "moodboard.preference-model.v1",
+  "preference_model_id": "<uuid>",
+  "content_ref": "<64 lowercase hex>",
+  "model_fingerprint": "<64 lowercase hex>",
+  "network_content_ref": "<64 lowercase hex>",
+  "network_sha256": "<64 lowercase hex>",
+  "created": true,
+  "scope": {"namespace": "...", "actor_kind": "actor", "actor_id": "...", "board_entity_id": "...", "board_id": "...", "model_key": "...", "descriptor_fingerprint": "...", "feature_schema_id": "..."},
+  "training": {"...": "opaque, Khive-defined, only required to be a JSON object"},
+  "calibration": {"...": "opaque, Khive-defined, only required to be a JSON object"},
+  "test_metrics": {"...": "opaque, Khive-defined, only required to be a JSON object"},
+  "fann_inference_verified": true,
+  "experimental": true
+}
+```
+
+The adapter requires `fann_inference_verified: true` explicitly: a model that Khive has not
+verified against its own FANN inference path is treated as a protocol failure, not returned to
+the caller. `training`, `calibration`, and `test_metrics` are read as opaque objects; the adapter
+does not close or interpret their keys, and callers should not assume any particular field is
+present in every Khive version. `content_ref`, `model_fingerprint`, `network_content_ref`, and
+`network_sha256` are each independent 64-character lowercase hex digests; the adapter does not
+assert any relationship between them beyond their format.
+
+### `moodboard.preference`
+
+Request `args`:
+
+```json
+{
+  "preference_model_id": "<uuid, from a prior moodboard.train_preference response>",
+  "board_entity_id": "<uuid>",
+  "board_id": "<64 lowercase hex>",
+  "descriptor": {"model_key": "moodboard_<fingerprint>_<dims>", "descriptor_fingerprint": "<64 lowercase hex>"},
+  "feature_schema_id": "f691fc73bf9a50d72157e21601fa579caa707bf2c448df546c63e915b4e42175",
+  "source_report_sha256": "<64 lowercase hex>",
+  "left": {"state": "scored", "asset_id": "<uuid>", "content_ref": "<64 lowercase hex>", "source_rank": 1, "features": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+  "right": {"state": "scored", "asset_id": "<uuid>", "content_ref": "<64 lowercase hex>", "source_rank": 2, "features": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+  "namespace": "<client namespace>"
+}
+```
+
+`left` and `right` are validated exactly like a `moodboard.serve` candidate (`state: "scored"`,
+distinct asset/content identity, ten finite `[0, 1]` features) and this verb runs an inference
+call, not a training call: it does not record a served presentation or accept a judgment.
+
+Response:
+
+```json
+{
+  "schema_version": "moodboard.preference.v1",
+  "prediction_kind": "learned_pairwise_preference",
+  "conditional_on": "decisive_judgment",
+  "probability_left_given_decisive": 0.75,
+  "probability_right_given_decisive": 0.25,
+  "raw_fann_logit": 0.8,
+  "calibrated_temperature": 1.25,
+  "indifference": {"state": "outside_calibrated_band"},
+  "conformal_evidence": {"state": "not_computed_by_this_verb"},
+  "preference_model_id": "<echoes request>",
+  "model_content_ref": "<64 lowercase hex>",
+  "model_fingerprint": "<64 lowercase hex>",
+  "source_report_sha256": "<echoes request>",
+  "scope": {"namespace": "...", "actor_kind": "actor", "actor_id": "...", "board_entity_id": "...", "board_id": "...", "model_key": "...", "descriptor_fingerprint": "...", "feature_schema_id": "..."},
+  "left": {"asset_id": "<echoes request left>", "content_ref": "<echoes request left>"},
+  "right": {"asset_id": "<echoes request right>", "content_ref": "<echoes request right>"},
+  "experimental": true
+}
+```
+
+`probability_left_given_decisive` and `probability_right_given_decisive` are each in `[0, 1]` and
+must sum to exactly `1.0` within `1e-12`. `raw_fann_logit` is a finite number in
+`[-1e30, 1e30]`; `calibrated_temperature` is a finite number in `(0, 1e30]`. `indifference.state`
+must be `"inside_calibrated_band"` or `"outside_calibrated_band"`, and `conformal_evidence.state`
+must be exactly `"not_computed_by_this_verb"`: this verb deliberately keeps a learned pairwise
+probability separate from the conformal p-value and coherence statistics the rest of Moodboard
+computes, and does not let a Khive response relabel one as the other. Both `indifference` and
+`conformal_evidence` may carry additional Khive-defined fields beyond `state`; the adapter reads
+only `state` and passes the rest through unvalidated. `left` and `right` in the response are the
+narrow `{asset_id, content_ref}` pair, not the full candidate the request sent, and must echo the
+identities that were requested.
+
+### The preference feature artifact hand-off
+
+Before any of the six verbs above run, `moodboard rank --preference-features-output PATH`
+(`khive-lattice` encoder only) writes a `moodboard.preference-feature-artifact.v2` JSON file:
+schema id `"moodboard.preference-feature-artifact.v2"` in its own `schema_version` field. This is
+a file on disk, not a wire message, but it is the one artifact that lets a later process replay
+the pairwise-serving verbs above without recomputing candidate geometry, so its shape is part of
+the same contract:
+
+```json
+{
+  "schema_version": "moodboard.preference-feature-artifact.v2",
+  "board_entity_id": "<uuid, from the create-board response>",
+  "board_id": "<64 lowercase hex>",
+  "model_key": "moodboard_<fingerprint>_<dims>",
+  "descriptor_fingerprint": "<64 lowercase hex>",
+  "source_report_sha256": "<sha256 of the exact bytes write_report already published>",
+  "feature_schema_id": "f691fc73bf9a50d72157e21601fa579caa707bf2c448df546c63e915b4e42175",
+  "producer_revision": "moodboard.preference-producer.v1",
+  "producer_id": "3fd22977f9f3686429cdb6569580b70573396efe0562095f43ed44e0a0ff3f22",
+  "candidate_pool_sha256": "<64 lowercase hex, digest over all candidates>",
+  "scope_sha256": "<64 lowercase hex, digest over the fields above plus candidate_pool_sha256>",
+  "candidates": [
+    {"label": "<non-empty string, at most 512 UTF-8 bytes>", "asset_id": "<uuid>", "content_ref": "<64 lowercase hex>", "source_rank": 1, "features": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}
+  ]
+}
+```
+
+`feature_schema_id` is the SHA-256 of the canonical JSON describing the ten named features, their
+`float32` dtype, their `[0, 1]` bounds, and the `left_minus_right` pair transform; changing any of
+those, even without renaming a feature, requires a new schema id. `producer_id` is a second,
+independent SHA-256 over the frozen prose mapping from each feature name to the geometric
+quantity it measures (for example, `visual_local_max_similarity_01` is defined as
+`max(local_transformed_similarities)`, and the cosine-to-`[0,1]` transform itself is
+`clip((cosine+1)/2, 0, 1)`); this catches a producer that emits the right names and bounds but a
+different formula. `candidate_pool_sha256` is a digest over every candidate's asset id, content
+ref, source rank, and exact `float32` feature bytes, sorted by asset id, so the artifact cannot be
+reordered or edited after the fact without invalidating it. `scope_sha256` is a second,
+domain-separated digest over the board, descriptor, report, producer, and schema identity plus
+`candidate_pool_sha256`, so board identity and candidate-pool identity stay independently
+checkable rather than conflated into one hash. On read, every one of these digests is
+recomputed and compared, not merely stored: a hand-edited artifact fails to load rather than
+loading with silently stale identity. `candidates[].features` are written and read in the
+project's own compact-JSON convention (`sort_keys=True`, `allow_nan=False`), not through Khive at
+all; the artifact only supplies the values that later feed `moodboard.serve` and
+`moodboard.preference` candidates once a board has been published and, for `moodboard.preference`,
+once `moodboard.train_preference` has returned a `preference_model_id`.
+
 ## `axes.py`
 
 ### The distance functions, as the contract names them
