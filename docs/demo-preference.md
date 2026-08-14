@@ -1,15 +1,15 @@
-# Governed preference replay
+# Preference replay
 
 The preference replay demonstrates a narrow, auditable claim: Khive can collect randomized
-pairwise events over Moodboard's governed 10-dimensional feature artifact, refuse training below
+pairwise events over Moodboard's defined 10-dimensional feature artifact, refuse training below
 its support floor, publish immutable FANN model snapshots, and measure how a second disclosed
 **simulated feature policy** changes predictions on a frozen conflict set. A separate disclosed
 feature-margin policy supplies synthetic calibration ties; those ties are never attributed to
 Policy A or to a person.
 
-It is deliberately separate from coherence and conformal evidence. It is also separate
+It is deliberately separate from coherence and conformal measurement. It is also separate
 from Pixel RAG retrieval quality (hubness, MMR, precision, and nDCG). Those are different
-evidence domains and do not become preference evidence merely because the same assets are
+measurement domains and do not become preference data merely because the same assets are
 used.
 
 ## Required input and isolation
@@ -19,7 +19,7 @@ Pass the closed `moodboard.preference-feature-artifact.v2` emitted by `moodboard
 digests before the first Khive operation. The demo pool needs enough distinct SHA-split pairs
 for the allocations below; capacity is preflighted before any event is written.
 
-Generate the governed artifact and its Khive board entity in the namespace that will run
+Generate the feature artifact and its Khive board entity in the namespace that will run
 the replay. Use a fresh `policy-simulated` actor/board scope for every replay; a new namespace
 for the whole rank-and-replay run is the cleanest isolation. The actor must contain
 `policy-simulated`, for example `lambda:showcase-policy-simulated`. This prevents these
@@ -67,7 +67,7 @@ replay_preference_demo(
 ```
 
 Do not rerun this snippet against the same actor/board scope. Create a new isolated state or
-run rank and replay in a new namespace instead; Khive judgments are append-only evidence.
+run rank and replay in a new namespace instead; Khive judgments are an append-only record.
 The output path must differ from the input artifact path, including after path resolution,
 and must not already exist. Publication is atomic and no-clobber, including against a file
 that races into place after preflight.
@@ -123,7 +123,7 @@ rollback.
 
 The output is canonical UTF-8 JSON with no wall-clock field. Its `replay_fingerprint` binds
 the complete realized trace, including Khive's occurrence provenance and immutable model
-identities. Pair selection is deterministic for one governed artifact. A genuinely fresh
+identities. Pair selection is deterministic for one defined artifact. A genuinely fresh
 real Khive run may have new event UUIDs and therefore a different trace fingerprint; that
 is honest event identity, not selection drift.
 
@@ -137,7 +137,7 @@ optimizer identity, calibration, held-out metrics, network hashes, and verified 
 inference.
 
 The unit-test client deliberately checks orchestration, ordering, fail-closed validation, and
-delta arithmetic only. It is not learning evidence. Demo readiness requires a replay against the
+delta arithmetic only. It does not demonstrate learning. Demo readiness requires a replay against the
 real pinned `kkernel`, and its measured `adaptation_direction_observed=true` result must be
 retained as the integration artifact. A false gate is a valid measured outcome, but it cannot be
 presented as adaptation.
@@ -151,10 +151,10 @@ The demo must always be described with all of these non-claims:
 - The replay is not causal personalization and is not a user study.
 - It makes no generalization claim beyond this artifact and frozen probe set.
 - The A-to-B delta is only a frozen policy-conflict probe measurement.
-- Test-double deltas are not demo evidence; only the retained real-Khive replay satisfies the
+- Test-double deltas are not demo proof; only the retained real-Khive replay satisfies the
   integration gate.
 
-The support refusal is itself a governance result: below the declared support, the system
+The support refusal is itself an enforced outcome: below the declared support, the system
 refuses to manufacture a model. A polished demo should show that refusal before showing the
 trained snapshots.
 
@@ -162,7 +162,7 @@ trained snapshots.
 
 The viewer consumes a separate, closed build-time bridge. It never reads preference fields from
 the Pixel RAG fixture and never fetches replay data at runtime. Until a real replay is available,
-the checked-in `fallback` sentinel contains no evidence and the UI shows no probability or
+the checked-in `fallback` sentinel contains no data and the UI shows no probability or
 adaptation claim.
 
 After the real replay is retained, freeze it and rebuild:

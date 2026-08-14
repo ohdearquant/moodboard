@@ -149,7 +149,7 @@ is the honest call.
 **Two of the four cannot run today and this record therefore cannot be accepted today.**
 Content invariance on brand photography has no dataset, and weight reproduction has no
 licensed WikiArt route. Neither is a failing measurement; both are absent ones, and the
-distinction matters because `content_invariance.on_partial_pass` governs an observed brand
+distinction matters because `content_invariance.on_partial_pass` applies to an observed brand
 *failure* and says nothing about an unavailable measurement. `DATASETS.md` now carries
 `weight-reproduction` as an explicit blocked row rather than a sentence, and both rows must
 reach a runnable state before this record can be accepted rather than partially accepted.
@@ -183,7 +183,7 @@ groupings, with the photographer — creator identity — standing for style and
 photograph's own subject standing for content. An earlier version of this paragraph said
 "human-curated collections, with the collection standing for style"; that assumption was
 measured against a real release and refuted (the largest collections are subject buckets),
-and the adopted amendment in `DATASETS.md` under `content-invariance-brand` governs. Creator
+and the adopted amendment in `DATASETS.md` under `content-invariance-brand` applies. Creator
 identity assumes no curation at all: same person, same equipment, same grade, varying
 subject.
 
@@ -245,7 +245,7 @@ duplicate and is withdrawn.
 The strength of this arm is stated here rather than left to be rediscovered: on the synthetic
 population `recolour` ranks palette first in twelve of twelve subject sets but clears the 2.0
 margin in only ten of twelve, over a ratio range of 1.45 to 4.58. So the chroma direction is
-real and is weaker than the composition evidence, which clears at 6.49 and above. A passing
+real and is weaker than the composition result, which clears at 6.49 and above. A passing
 chroma arm is not by itself proof of symmetry.
 
 Both are required. This is recorded because the natural repair, when one direction fails, is to
@@ -270,7 +270,7 @@ because it is reproducible.
 So reproduce the published benchmark before quoting it: WikiArt artist retrieval, mAP@1,
 against the reported 64.56 from arXiv:2404.01292. Acceptance is a deviation of no more than
 2 absolute points **in either direction**. A one-sided shortfall gate accepts an arbitrarily
-higher result, and a score meaningfully above the published number is evidence of a protocol
+higher result, and a score meaningfully above the published number indicates a protocol
 or checkpoint mismatch exactly as a lower one is. On failure the weights are not the paper's,
 and either weights that do reproduce it are found or that published number is struck from
 every claim here. Citing a paper's benchmark while running weights that miss it is the quiet

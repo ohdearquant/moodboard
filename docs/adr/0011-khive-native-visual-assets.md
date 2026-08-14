@@ -81,7 +81,7 @@ validation rather than reappear as an interchangeable implementation detail.
 The v1 pack admits PNG, JPEG, and WebP source bytes. Khive mode rejects another source MIME
 before submitting its batch; the offline classical path retains its broader decoder.
 
-Khive CLI diagnostics and report thumbnails use a separate governed decoded view composited
+Khive CLI diagnostics and report thumbnails use a separate defined decoded view composited
 onto the descriptor's `[128,128,128]` matte with the pack's exact integer rounding. The source
 bytes still go unchanged to ingest. This prevents transparent hidden RGB from being embedded as
 gray-matted pixels while palette/tone/composition explanations and thumbnails show different
@@ -133,8 +133,8 @@ row/content mismatch, malformed response, or process failure stops later groups,
 `last_assets`, and exposes no matrix. Khive operations commit independently, so a successful group
 or a successful prefix inside the failing group can remain as visual assets, blobs, and vector rows.
 Retrying the same namespace and bytes reuses the namespace-plus-ContentRef visual-asset identity and
-reports `created=false`, but inference and indexing run again. A caller that requires an empty
-evidence substrate after failure must use a fresh isolated state path; the adapter does not attempt
+reports `created=false`, but inference and indexing run again. A caller that requires a clean
+state after failure must use a fresh isolated state path; the adapter does not attempt
 unsafe compensating deletion. The extra model cold loads are the accepted cost of retaining Khive's
 bounded cancellation policy instead of raising or disabling its deadline.
 
@@ -213,7 +213,7 @@ report schema in this decision.
 the board artifact scale with source media; a local path is neither portable nor a content
 identity.
 
-**Call Lattice directly from Python.** Rejected for this integration. It bypasses the governed
+**Call Lattice directly from Python.** Rejected for this integration. It bypasses the defined
 model/preprocessing identity and leaves Khive retrieval with no canonical asset or vector.
 
 **Raise or disable Khive's request-read deadline for a large serial ingest.** Rejected. The
@@ -223,7 +223,7 @@ explicit; removing it would trade a deterministic recovery point for an unbounde
 
 **Replace conformal scoring with nearest-neighbour retrieval.** Rejected. Retrieval similarity
 has no conformal meaning, interval, effective-sample-size correction, or abstention semantics.
-It is useful evidence and candidate generation, not a calibrated score.
+It is useful for discovery and candidate generation, not a calibrated score.
 
 **Train a LoRA adapter as part of ingestion.** Deferred. Updating representation geometry
 requires a new model identity, re-embedding, re-indexing, and fresh calibration. Pairwise
@@ -242,7 +242,7 @@ durable external side effect even if a later board fit fails; content addressing
 idempotence make a retry converge on the same asset instead of duplicating it. A CLI
 `content_ref` names the verified source bytes. A programmatic array call names its documented
 canonical PNG rendition; the API does not pretend it can reconstruct source bytes it never saw.
-Visual retrieval is now reachable without raw `kkernel` calls, but it remains an evidence/candidate
+Visual retrieval is now reachable without raw `kkernel` calls, but it remains a discovery/candidate
 generation surface. It does not change the board hash, scoring math, report schema, or abstention.
 
 The server's descriptor object becomes part of the cross-repository contract. Any field that
