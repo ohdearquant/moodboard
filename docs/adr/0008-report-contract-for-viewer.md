@@ -1,4 +1,4 @@
-# ADR-0008: Report version 1.1 carries the evidence the viewer presents
+# ADR-0008: Report version 1.1 carries what the viewer presents
 
 - **Status:** Proposed
 - **Date:** 2026-08-08
@@ -9,7 +9,7 @@
   reason and said so in as many words: `docs/adr/0004-abstention.md:243` ("ADR-0002's schema is not
   yet accepted, so this is an amendment to a proposal rather than a break of a contract") and
   `docs/adr/0005-reference-set.md:199-200`. The immutability rule that makes supersession the right
-  instrument governs records that are *accepted* (`docs/adr/README.md:5-7`), and none is. ADR-0002
+  instrument applies to records that are *accepted* (`docs/adr/README.md:5-7`), and none is. ADR-0002
   therefore stays live and authoritative for everything this record does not change.
 - **Measurable claim:** yes, inherited. Dataset row: `interval-coverage` in
   [`DATASETS.md`](../../DATASETS.md), measured by the pre-registered coverage, width and all-tied
@@ -201,7 +201,7 @@ nested thumbnail uses the existing v1.0 thumbnail field names. Its MIME is one o
 `image/png`, or `image/webp`. Its width and height are positive integers, and `data_base64` strictly
 decodes to that image type and those pixel dimensions. The same thumbnail MIME and decode assertions
 apply to v1.1 reference entries. SVG and other active or generic payloads are not valid thumbnails. The
-report carries separately encoded display bytes and evidence about the original. It does not require
+report carries separately encoded display bytes and information about the original. It does not require
 the original bytes as a second embedded payload, and it does not claim that the thumbnail is smaller
 without a separately registered size rule.
 
@@ -231,7 +231,7 @@ category-local, computed against that category's members only
 so on a multi-category board an asset's exemplars can come from a category the score was never
 computed against. The engine states the split itself at `moodboard/cli.py:572-574`: "Rule 3's
 nonconformity values come from the board-wide augmented bag ... even though the score itself is
-category-local." A viewer must therefore not caption the exemplars as the evidence for the score
+category-local." A viewer must therefore not caption the exemplars as the basis for the score
 without that qualification. Selecting exemplars category-locally instead is a change to
 `moodboard/cli.py:589-594` and belongs in a record that says so.
 
@@ -441,7 +441,7 @@ unmodified generated baseline passes, then applies the named single-purpose muta
 | Provenance records source, one invocation, and schema identity without contradictory copies. | Omit `source_repository` while retaining `source_revision` (a PARTIAL engine-source object, which must fail), use a relative repository value or non-hex revision, omit `argv`, change only `command` so it differs from `shlex.join(argv)`, change the schema hash from the bytes used to validate, or omit an axis method revision. Each case must fail. A report omitting the engine-source object ENTIRELY must PASS, and a consumer given it must render the not-recorded notice — that arm is the one that distinguishes a conditional field from a required one, so it is not optional to test. |
 | Modified source is valid but never presented as reproducible from the revision alone. | Set `source_dirty` to true in an otherwise valid report and suppress the dirty-source warning. Contract validation must pass and the consumer assertion must fail. |
 | A v1.1 consumer's v1.0 path is explicit legacy mode. | Feed the frozen v1.0 scored and abstained fixtures. The reader must show every required unavailable notice, must not create `image` or `axis_definitions` fields, and must not emit a v1.1 report. |
-| Schema-valid v1.0 boundary values degrade visibly rather than becoming invented evidence. | Feed v1.0 fixtures with a generic thumbnail MIME, regex-valid but undecodable thumbnail bytes, null classical axes on an abstained asset, zero, two, four, duplicate, and dangling exemplars. The report remains in legacy mode; affected tiles or values become the exact placeholders above, no unsafe bytes render, and no score or similarity is recomputed. |
+| Schema-valid v1.0 boundary values degrade visibly rather than becoming invented data. | Feed v1.0 fixtures with a generic thumbnail MIME, regex-valid but undecodable thumbnail bytes, null classical axes on an abstained asset, zero, two, four, duplicate, and dangling exemplars. The report remains in legacy mode; affected tiles or values become the exact placeholders above, no unsafe bytes render, and no score or similarity is recomputed. |
 | `source` is never an image transport. | Set every v1.1 `source` to an unreachable HTTPS URI while keeping valid inline thumbnails. Rendering must succeed with zero network requests and must use the inline candidate and reference previews. |
 
 ### Pre-registered conformance gate
@@ -457,7 +457,7 @@ claim. Any relaxation requires a visible contract decision made before rerunning
 ## Verification
 
 This verification writes under `contract-verification/`, not `results/`. `results/<measurement-id>/
-<run-id>/` is [ADR-0009](0009-measurement-and-evaluation-contract.md)'s reserved evidence namespace
+<run-id>/` is [ADR-0009](0009-measurement-and-evaluation-contract.md)'s reserved results namespace
 for entries registered in `eval/measurements.json`, bound to a run identifier, dataset digests and a
 scientific `PASS`/`FAIL`/`INFORMATIONAL` verdict. This record's gate is a deterministic document-shape
 and dispatch conformance check with no dataset row and no scientific verdict, so it does not claim a
@@ -552,12 +552,12 @@ identities, structured invocation, and image identities behind a report.
 
 The engine and viewer remain coupled through one explicit versioned contract. The additional
 cross-field assertions keep the shared definitions and per-asset values coherent. A v1.1 consumer
-can still open historical v1.0 reports without fabricating missing evidence.
+can still open historical v1.0 reports without fabricating missing information.
 
 All path-based engine and viewer readers enforce one shared 128 MiB report-byte ceiling before
 JSON, base64, thumbnail, or schema work. A size preflight avoids opening an already oversized file,
 and a bounded `limit + 1` read catches growth after preflight. The ceiling is deliberately above
-the governed reference/candidate preview envelope; it is an availability/transport limit and does
+the defined reference/candidate preview envelope; it is an availability/transport limit and does
 not alter any measurement, score, or compatibility meaning in this record.
 
 Reports become larger because every candidate has an inline preview. Shared HTML files now contain
@@ -587,7 +587,7 @@ candidate pixels in a shareable report. Either finding removes the primary reaso
 media addition.
 
 Representative payload measurements may show that inline previews make ordinary boards
-unsharable. That evidence would justify a new transport decision, but the payload and visual-quality
+unsharable. That finding would justify a new transport decision, but the payload and visual-quality
 thresholds must be registered before that measurement runs rather than selected from its result.
 
 The axis-detail contract requires amendment if a supported axis cannot be described truthfully as a
@@ -595,8 +595,8 @@ conformal p-value with higher fit or a normalized distance for which lower means
 statistically justified classical-axis interval would also require a named method, a pre-registered
 verification criterion, and a new report decision before `uncertainty: none` can claim an interval.
 
-Finally, evidence that safe partial rendering of an unknown report version is more reliable than
-exact version dispatch would invalidate the compatibility policy. Such evidence must include the
-same malformed-score, abstention, axis-direction, and unknown-field cases in this record. A reader
-that merely appears to render a newer report is not evidence that it interpreted the statistics
-correctly.
+Finally, a demonstration that safe partial rendering of an unknown report version is more reliable
+than exact version dispatch would invalidate the compatibility policy. Such a demonstration must
+include the same malformed-score, abstention, axis-direction, and unknown-field cases in this
+record. A reader that merely appears to render a newer report does not thereby show that it
+interpreted the statistics correctly.

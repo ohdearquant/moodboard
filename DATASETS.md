@@ -58,7 +58,7 @@ data does not travel. A row that is not runnable is `blocked`, whatever its lice
 
 The distinction is load-bearing in both directions. Reading it the old way, PACS is
 `blocked` on an unresolved licence and every acceptance criterion in ADRs 0002 through 0005
-loses its evidence, which is a stronger conclusion than the facts support: nothing about the
+loses its support, which is a stronger conclusion than the facts support: nothing about the
 licence stops a reader fetching the mirror and rebuilding, which is what `runnable` asserts
 and all it asserts.
 
@@ -227,8 +227,8 @@ built from thousands of images and are heavily dependent, so treating pairs as i
 understates the standard error by roughly the square root of the pairs-per-image factor.
 
 **What a green result here can and cannot certify.** PACS domains differ by *medium*, and
-separating a photograph from a sketch is not the property the tool is sold on. A pass here is
-evidence for coarse cross-medium style invariance and nothing more; the same-medium claim
+separating a photograph from a sketch is not the property the tool is sold on. A pass here
+shows coarse cross-medium style invariance and nothing more; the same-medium claim
 rests entirely on the brand row, which has no source. This is stated in the ADR as well, so
 that a reader meeting the number first does not have to come here to learn what it means.
 
@@ -315,7 +315,7 @@ uv run moodboard-eval off-style --dataset pacs --board-size 20 --boards 100 \
 Note what a PACS-only version of this test can and cannot say. Separating photographs from
 sketches is a low bar and passing it is close to uninformative; the test earns its place only
 on a source where the groups differ by treatment rather than by medium. Until the brand row
-has a dataset, a green result here is not evidence the tool works — so this row is marked
+has a dataset, a green result here does not show the tool works — so this row is marked
 informational in `eval/thresholds.json` and ADR-0003 does not gate on it. It was previously
 one of three acceptance measurements while carrying this same caveat, which is a caveat that
 argues for exactly the demotion it did not receive.
@@ -428,8 +428,8 @@ compare against the paper's 64.56. Two things the current criterion gets wrong a
 source, when found, has to carry:
 
 **The tolerance is two-sided.** A one-sided shortfall gate accepts an arbitrarily *higher*
-result, and a result meaningfully above the published number is evidence of a protocol or
-checkpoint mismatch just as a lower one is. `eval/thresholds.json` registers ±2.0 absolute.
+result, and a result meaningfully above the published number points to a protocol or
+checkpoint mismatch just as a lower one does. `eval/thresholds.json` registers ±2.0 absolute.
 
 **Benchmark agreement is necessary, not sufficient, for checkpoint identity.** Several
 checkpoints and protocols can land within two points of one number, so matching it does not

@@ -2,7 +2,7 @@
 
 These are decisions this reconciliation pass identified but did not resolve, because resolving them
 would mean designing new mechanism rather than fixing a contradiction in what ADR-0007 through ADR-0010
-already say. Each entry names the evidence that would settle it. Deep mode was not requested for this
+already say. Each entry names what would settle it. Deep mode was not requested for this
 round, so each is left for a future pass rather than decided here.
 
 ## 1. Gamut-headroom subject-set decision
@@ -33,7 +33,7 @@ None of that is decidable from the four new records or the accepted ones — it 
 design, which is out of scope for a contradiction-reconciliation pass and was explicitly named as
 out of scope for a non-deep-mode round.
 
-**Evidence needed to decide it.** A worked selection rule for "low gamut headroom" against the PACS
+**What's needed to decide it.** A worked selection rule for "low gamut headroom" against the PACS
 population (or a documented reason PACS cannot supply such subjects, forcing a new dataset row),
 a pilot measurement of clipping rate under the existing `luminance_shift`/`recolour` interventions
 restricted to that population, and a proposed threshold with the same "fixed before measurement"
@@ -65,7 +65,7 @@ now live in ADR-0010, which owns the corpus and carries the `frontend-verificati
 ADR-0007 keeps the invariants it decides and points at ADR-0010 for how they are checked, with a
 stated rule that an invariant and its row change in the same commit.
 
-**Why it did not need the evidence this entry originally asked for.** The entry said the decision
+**Why it did not need what this entry originally asked for.** The entry said the decision
 needed a comparison of the two generators' scenario coverage once both were implemented, and that
 until then there was no code to compare. That framing was wrong in a way worth recording: it treated
 the question as empirical when it is structural. Whatever the coverage comparison had returned, two
@@ -73,7 +73,7 @@ generators at one seed agree only until someone edits one of them, and the first
 as a frontend test failure whose cause lives in a file the failing test does not name. Waiting for
 implementation would have meant writing both scripts before learning that one had to be deleted.
 
-## 3. Mapping `frontend-verification`'s artifacts onto ADR-0009's evidence envelope
+## 3. Mapping `frontend-verification`'s artifacts onto ADR-0009's results envelope
 
 **Status:** ADR-0010 registers `frontend-verification` as an ADR-0009 measurement and names its
 canonical entry point, but the exact fit is incomplete.
@@ -86,9 +86,9 @@ lockfile digest, or pinned-browser revision field — all of which ADR-0007's
 `11.17.0`, Chromium/Firefox/WebKit at exact revisions). ADR-0009's `raw/` directory is defined as
 carrying "the measurement-specific observations sufficient to recompute every value in `summary.json`"
 (`0009:234-238`), but does not say whether Playwright screenshots, diff PNGs, and browser traces count
-as `raw/` evidence or as the separately-named "regenerated and never serve as evidence" category
+as `raw/` data or as the separately-named "regenerated and never serve as evidence" category
 (`0009:261-265`) that dataset archives and model caches fall into. Screenshots are exactly the primary
-evidence for ADR-0010's zero-differing-pixel gate, so treating them as non-evidence would be wrong, but
+basis for ADR-0010's zero-differing-pixel gate, so placing them in that category would be wrong, but
 committing every baseline screenshot into an append-only `results/` tree has a real storage-growth cost
 ADR-0009 does not weigh for this case.
 
@@ -97,7 +97,7 @@ ADR-0009 does not weigh for this case.
 decision for ADR-0009 (or a further superseding record), not something inferable from the current text
 of either record without inventing the answer.
 
-**Evidence needed to decide it.** A concrete `run.json` shape for `frontend-verification` showing which
+**What's needed to decide it.** A concrete `run.json` shape for `frontend-verification` showing which
 fields it adds beyond ADR-0009's generic envelope, and a storage-cost estimate for committing visual
 baselines under `results/frontend-verification/<run-id>/raw/` versus keeping them in ADR-0010's
 existing `viewer/test-results/` location with only a content hash recorded in the `results/` bundle.

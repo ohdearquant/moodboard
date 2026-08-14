@@ -6,7 +6,7 @@
   record's schema-compatibility tests track whichever report-contract record is authoritative for the
   implemented engine), ADR-0004, and [ADR-0007](0007-viewer-architecture.md), whose components this
   record's test layers exercise. Depends on [ADR-0009](0009-measurement-and-evaluation-contract.md) for
-  the evaluation entry point and evidence envelope its `frontend-verification` measurable claim is
+  the evaluation entry point and results envelope its `frontend-verification` measurable claim is
   registered under; see "Verification" below.
 - **Measurable claim:** yes. A viewer conforming to this record preserves the report's
   statistical states under unit and property tests, and its pinned-browser screenshots have
@@ -238,7 +238,7 @@ fixture of its own.
 | `thumbnail-preflight-ownership` | `LoadingView` remains visible, with no report values, until every safe selected thumbnail probe settles. On legacy input, a rejected image is an immutable diagnostic and labelled slot on the first `ready` render; probe-mechanism failure enters `failed` with no partial model. | Include unresolved, invalid-base64, and unsupported-MIME exemplars beside one delayed safe source and one rejected safe source. Probing any unsafe case, an early or invisible loading state, a diagnostic added after `ready`, or a partially rendered fatal case is a failure. |
 | `thumbnail-post-ready-fallback` | If an image element fails after its source passed preflight, only that cell switches to the exact labelled fallback while identifier, position label, similarity, and immutable model diagnostics remain unchanged. | Dispatch an `error` event on one rendered preflighted image. A blank image, changed shared diagnostic, or affected sibling cell is a failure. |
 | `version-policy-in-both-modes` | The production consumer contract names exactly `1.0` and `1.1`. Each version passes its own exact schema and typed decoder through local-file loading and `moodboard report REPORT_JSON --html OUTPUT_HTML`; v1.0 remains visibly legacy and is never relabelled. Reports `1.2`, `2.0`, malformed, or missing a version are refused before asset content is interpreted. Unknown structural fields in either named version fail its closed schema rather than being projected away. | Give an unknown-version report a malformed first score and require `unsupported_schema_version`, not a score error or partial output. Add one unknown root field to v1.1 and require schema refusal. Any projection, relabelling, rendered value, or written HTML output for either mutation is a failure. |
-| `minor-axis-extension-is-versioned` | Report v1.1 accepts only the governed style/palette/tone/composition definitions and exact matching asset key sets. A new `texture` axis requires a later named report minor with its own method definition; it cannot be smuggled into v1.1's open scalar map. | Add `texture` to `board.representation.axes`, every asset's axes, and `axis_definitions` without changing `schema_version`. Both loading modes must refuse the v1.1 document rather than render or silently omit texture. |
+| `minor-axis-extension-is-versioned` | Report v1.1 accepts only the defined style/palette/tone/composition definitions and exact matching asset key sets. A new `texture` axis requires a later named report minor with its own method definition; it cannot be smuggled into v1.1's open scalar map. | Add `texture` to `board.representation.axes`, every asset's axes, and `axis_definitions` without changing `schema_version`. Both loading modes must refuse the v1.1 document rather than render or silently omit texture. |
 | `branch-exhaustiveness` | A scored asset renders its score, interval, and rank. An abstained asset renders its reason, explanation, and measurement with no numeric score region. | Add `score: 0`, `interval`, or `rank` to an abstained asset, and separately remove `interval` from a scored asset. Every mutated report must fail decoding. |
 | `identity-integrity` | Asset and reference indexes contain unique identifiers, and each asset contains unique exemplar identifiers. | Duplicate an `asset_id`, duplicate a `reference_id`, and repeat one exemplar identifier within an asset in three independent mutations. Each must fail with the duplicate's JSON path. |
 | `score-axis-equality` | Every scored asset has `score === axes.style`, while every abstained asset has `axes.style === null`. | Change only `axes.style` on a scored asset and change only `axes.style` from null on an abstained asset. Both reports must fail before rendering. |
@@ -296,7 +296,7 @@ couples CI to the engine. All four decided behavior surfaces, intervals, abstent
 compatibility, and simultaneous images, have deterministic automated assertions, so the
 testability ratio is `4 / 4 = 1.0`.
 
-The verification sequence makes the two kinds of evidence explicit.
+The verification sequence makes the two kinds of results explicit.
 
 ```mermaid
 sequenceDiagram
@@ -361,7 +361,7 @@ engine release that introduces the triggering schema version is also blocked unt
 compatible viewer exists or the release explicitly declares that viewer unsupported.
 
 **Property failure means there is a concrete counterexample to an invariant.** The minimized
-input and replay seed are release evidence, even when all named examples remain green. The
+input and replay seed are part of the release record, even when all named examples remain green. The
 viewer release is blocked until the counterexample is fixed or an accepted decision changes
 the invariant. Re-running with a different seed, increasing retries, or discarding the
 counterexample cannot turn this class into a pass.
@@ -391,10 +391,10 @@ commands below are. The wrapper cannot be specified until the envelope mapping i
 `OPEN_QUESTIONS.md` records it as open on two points that bear directly on this measurement:
 ADR-0009's `run.json` names no Node version, npm lockfile digest, or pinned-browser revision field,
 and its `raw/` boundary does not say whether Playwright screenshots, diff PNGs, and browser traces
-are `raw/` evidence or fall in the separately-named regenerated-and-never-evidence category.
-Screenshots are the entire evidence for this record's zero-differing-pixel gate, so a measurement
-whose primary evidence has no declared home in its envelope has a name for a reproducible command
-rather than the command itself. When that mapping lands, this section states the wrapper as the
+are `raw/` data or fall in the separately-named category of regenerated artifacts that never serve
+as proof. Screenshots are the entire basis for this record's zero-differing-pixel gate, so a
+measurement whose primary data has no declared home in its envelope has a name for a reproducible
+command rather than the command itself. When that mapping lands, this section states the wrapper as the
 canonical entry point and the two npm commands become its implementation.
 
 They are shown directly here because they are this record's acceptance criteria and ADR-0009 does
@@ -460,7 +460,7 @@ single named mutation its row states, applied in memory. A derived document is a
 counterexample and is never committed. A verification run may materialise working copies, standalone
 HTML, isolated build trees, and screenshots under `viewer/test-artifacts/`, which is ignored
 (`.gitignore:49-57`); those are outputs of a run rather than fixtures, and nothing reads them as
-evidence of what the engine produces.
+a record of what the engine produces.
 
 Two generators at one seed would have been the worst of the available arrangements. They agree for
 exactly as long as nobody edits either one, and the first divergence surfaces as a frontend test
@@ -474,7 +474,7 @@ the public `build` and `rank` commands, including `--exemplars 3`, whose current
 contracts are at `moodboard/cli.py:1085-1148`.
 
 **Artifacts.** The generator writes temporary source images, board files, and regenerated
-reports during `--check`. The committed evidence is
+reports during `--check`. The committed record is
 `viewer/tests/fixtures/*.json`, its provenance manifest, and the reviewed screenshot
 baselines. The frontend command writes a machine-readable summary and JUnit results under
 `viewer/test-results/`. A failed visual case additionally writes expected, actual, and
@@ -533,7 +533,7 @@ invariant.
 
 **Unit and property tests with no visual baselines.** Rejected. DOM nodes can be correct while
 CSS hides an interval, stacks three images, or gives a score more visual weight than an
-abstention. Those are browser layout failures and require browser evidence.
+abstention. Those are browser layout failures and require checking in a real browser.
 
 **A nonzero perceptual-difference allowance.** Rejected for the first implementation. It is
 useful when the rendering environment cannot be made deterministic, but choosing it before
@@ -549,7 +549,7 @@ therefore has one visible regeneration point instead of several unrelated mocks.
 
 Failures become diagnostic. Unit failures identify meaning, property failures provide a
 minimized boundary case, visual failures provide pixels and geometry, and fixture failures
-identify producer drift. Reviewers do not have to infer which kind of evidence a red CI job
+identify producer drift. Reviewers do not have to infer which kind of information a red CI job
 represents.
 
 The cost is two toolchains plus a pinned browser image in CI. Fixture generation runs the real
@@ -565,7 +565,7 @@ with the engine's pre-registered evaluation rows and user research.
 The real-engine rule makes legitimate report changes more expensive because fixture reports,
 their manifest, and affected screenshots move together. That cost is accepted because the
 report file is the only integration boundary. A cheap fixture update that bypasses the engine
-would remove the evidence this record exists to provide.
+would remove the assurance this record exists to provide.
 
 ## Invalidation conditions
 
