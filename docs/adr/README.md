@@ -43,7 +43,7 @@ validation claim.
 | [0005](0005-reference-set.md) | The reference set is an input with properties, not a folder of images | Proposed |
 | [0006](0006-standalone.md) | Standalone tool, no design-application SDK dependency | Proposed |
 | [0007](0007-viewer-architecture.md) | The viewer has one report model, explicit outcome components, and one offline build | Proposed |
-| [0008](0008-report-contract-for-viewer.md) | Report version 1.1 carries the evidence the viewer presents | Proposed |
+| [0008](0008-report-contract-for-viewer.md) | Report version 1.1 carries what the viewer presents | Proposed |
 | [0009](0009-measurement-and-evaluation-contract.md) | Every published measurement is an immutable, revision-bound result | Proposed |
 | [0010](0010-frontend-verification.md) | Frontend verification uses engine-generated fixtures and layered tests | Proposed |
 | [0011](0011-khive-native-visual-assets.md) | Khive owns visual assets and Lattice descriptor inference | Proposed |

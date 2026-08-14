@@ -62,8 +62,8 @@ uncertainty. The interval is the visible expression of that, and its coverage is
 checked in `interval-coverage` rather than being asserted from theory.
 
 **Whether the ranking matches what a person would do.** Agreement with human style grouping
-is approximated using curated collections, which is a proxy. A curated collection is
-evidence that a person put those images together, not that a person would have ranked a new
+is approximated using curated collections, which is a proxy. A curated collection shows
+that a person put those images together, not that a person would have ranked a new
 candidate the same way. The proxy is stated as a proxy.
 
 ## The strongest argument against building it
@@ -77,6 +77,6 @@ measures the target's motion as much as the asset's fit. And the volume argument
 bottleneck is aesthetic selection, when for many teams the slow step is legal or stakeholder
 review instead, in which case a faster aesthetic triage saves nothing.
 
-Each of those is answerable with evidence rather than argument, and the answers change the
+Each of those is answerable with measurement rather than argument, and the answers change the
 product rather than merely defending it. They are open questions in this repository, not
 settled ones.
