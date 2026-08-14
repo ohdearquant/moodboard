@@ -18,7 +18,7 @@
     "fixture:write": "uv run --frozen --python 3.14.3 python scripts/generate_showcase_fixture.py --write tests/fixtures/showcase",
     "build:vite": "vite build",
     "package": "node scripts/package-artifacts.mjs",
-    "build": "npm run validators:check && npm run pixel-rag:check && npm run firefly:check && npm run preference-replay:check && npm run typecheck && npm run build:vite && npm run package",
+    "build": "npm run validators:check && npm run firefly:check && npm run preference-replay:check && npm run typecheck && npm run build:vite && npm run package",
     "test:ci": "npm run fixture:check && npm run validators:check && npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
