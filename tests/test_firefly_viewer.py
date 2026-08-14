@@ -312,6 +312,10 @@ def test_firefly_bridge_is_canonical_and_contains_no_local_paths() -> None:
     assert b"local_file" not in raw
 
 
+@pytest.mark.skipif(
+    not FIREFLY.is_dir() or not KHIVE.is_dir(),
+    reason="requires the local measured-run caches under .cache/; not present in a fresh checkout",
+)
 def test_firefly_projector_fails_closed_when_exact_source_bytes_are_unavailable(
     tmp_path: Path,
 ) -> None:
