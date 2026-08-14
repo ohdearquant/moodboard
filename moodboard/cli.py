@@ -120,9 +120,16 @@ from .encoders import (
     KHIVE_VISUAL_MATTE_RGB,
     ClassicalEncoder,
     Encoder,
+    KhiveAsset,
     KhiveLatticeEncoder,
 )
 from .khive import KhiveClient
+from .preference import (
+    PreferenceCandidate,
+    PreferenceFeatureArtifact,
+    build_preference_features,
+    write_preference_feature_artifact,
+)
 from .report import (
     AXIS_ORDER,
     SCHEMA_PATH_V1_1,
@@ -1108,7 +1115,81 @@ def _board_categories(
     return categories, assignment, varies
 
 
+def _preflight_preference_export(args: argparse.Namespace) -> None:
+    """Reject invalid opt-in combinations before image ingest or durable Khive writes."""
+
+    destination = args.preference_features_output
+    if destination is None:
+        return
+    if args.encoder != "khive-lattice":
+        raise ValueError(
+            "--preference-features-output requires --encoder khive-lattice so every row "
+            "has a durable Khive visual_asset identity"
+        )
+    destination = destination.resolve(strict=False)
+    report_output = args.output.resolve(strict=False)
+    if destination == report_output:
+        raise ValueError("preference feature output must differ from the report output")
+    if destination == args.board.resolve(strict=False):
+        raise ValueError("preference feature output must differ from the brand.mb input")
+    if destination.exists() and not destination.is_file():
+        raise ValueError("preference feature output must be a file path, not a directory")
+    ancestor = destination.parent
+    while not ancestor.exists() and ancestor != ancestor.parent:
+        ancestor = ancestor.parent
+    if not ancestor.is_dir():
+        raise ValueError("preference feature output has no directory ancestor")
+
+
+def _build_rank_preference_candidates(
+    *,
+    candidates: Sequence[_Candidate],
+    candidate_assets: Sequence[KhiveAsset],
+    reference_embeddings: np.ndarray,
+    board_groups: Sequence[Sequence[int]],
+    scores: Mapping[str, float],
+    intervals: Mapping[str, Interval],
+    ranks: Mapping[str, int],
+) -> tuple[PreferenceCandidate, ...]:
+    """Freeze ADR-149 rows while complete rank-time geometry is still in memory."""
+
+    if len(candidate_assets) != len(candidates):
+        raise ValueError("Khive candidate asset locations do not align with ranked candidates")
+    rows: list[PreferenceCandidate] = []
+    for candidate, asset in zip(candidates, candidate_assets, strict=True):
+        asset_id = candidate.image.item_id
+        if candidate.verdict is not None:
+            continue
+        interval = intervals[asset_id]
+        features = build_preference_features(
+            candidate_embedding=candidate.embedding,
+            reference_embeddings=reference_embeddings,
+            local_member_indices=candidate.partition.candidate_category_members,
+            style_conformal_p=scores[asset_id],
+            style_interval=(interval.low, interval.high),
+            local_effective_size=category_n_eff(candidate.partition, board_groups),
+            palette_distance=candidate.classical_axes["palette"],
+            tone_distance=candidate.classical_axes["tone"],
+            composition_distance=candidate.classical_axes["composition"],
+        )
+        rows.append(
+            PreferenceCandidate(
+                label=asset_id,
+                asset_id=asset.asset_id,
+                content_ref=asset.content_ref,
+                source_rank=ranks[asset_id],
+                features=features,
+            )
+        )
+    if len(rows) < 2:
+        raise ValueError(
+            "preference feature export needs at least two scored candidates after abstention"
+        )
+    return tuple(rows)
+
+
 def _cmd_rank(args: argparse.Namespace, out, err) -> int:
+    _preflight_preference_export(args)
     if args.exemplars != 3:
         raise ValueError(
             "report 1.1 requires --exemplars 3 so every asset carries exactly "
@@ -1145,6 +1226,27 @@ def _cmd_rank(args: argparse.Namespace, out, err) -> int:
     references = _load_all([args.references], err, khive_visual=args.encoder == "khive-lattice")
     _verify_references(board, references)
 
+    preference_candidates_loaded: list[LoadedImage] | None = None
+    if args.preference_features_output is not None:
+        preference_candidate_paths = _collect_image_paths(list(args.candidates), err)
+        if len(preference_candidate_paths) < 2:
+            raise ValueError("preference feature export needs at least two candidate image inputs")
+        destination = args.preference_features_output.resolve(strict=False)
+        source_paths = [image.path.resolve(strict=False) for image in references] + [
+            path.resolve(strict=False) for path in preference_candidate_paths
+        ]
+        if destination in source_paths:
+            raise ValueError("preference feature output must not replace an input image")
+        preference_candidates_loaded = _load_all(preference_candidate_paths, err, khive_visual=True)
+        if any(
+            len(candidate.item_id.encode("utf-8")) > 512
+            for candidate in preference_candidates_loaded
+        ):
+            raise ValueError("preference feature candidate labels must be at most 512 UTF-8 bytes")
+        candidate_hashes = [candidate.content_sha256 for candidate in preference_candidates_loaded]
+        if len(set(candidate_hashes)) != len(candidate_hashes):
+            raise ValueError("preference feature candidate inputs must have unique source bytes")
+
     encoder = _make_encoder(args)
     if (encoder.name, encoder.revision) != (board.model_repo, board.model_revision):
         raise ValueError(
@@ -1163,8 +1265,10 @@ def _cmd_rank(args: argparse.Namespace, out, err) -> int:
             f"{recomputed_n_eff!r}; the artifact is inconsistent with itself"
         )
 
-    candidates_loaded = _load_all(
-        list(args.candidates), err, khive_visual=args.encoder == "khive-lattice"
+    candidates_loaded = (
+        _load_all(list(args.candidates), err, khive_visual=args.encoder == "khive-lattice")
+        if preference_candidates_loaded is None
+        else preference_candidates_loaded
     )
     candidate_embeddings = _embed_loaded(encoder, candidates_loaded)
 
@@ -1313,6 +1417,20 @@ def _cmd_rank(args: argparse.Namespace, out, err) -> int:
         ),
     )
 
+    preference_candidates: tuple[PreferenceCandidate, ...] | None = None
+    if args.preference_features_output is not None:
+        if not isinstance(encoder, KhiveLatticeEncoder):
+            raise ValueError("preference feature export requires a Khive Lattice encoder")
+        preference_candidates = _build_rank_preference_candidates(
+            candidates=candidates,
+            candidate_assets=encoder.last_assets,
+            reference_embeddings=reference_embeddings,
+            board_groups=board_groups,
+            scores=scores,
+            intervals=intervals,
+            ranks=ranks,
+        )
+
     write_report(
         report,
         args.output,
@@ -1328,6 +1446,27 @@ def _cmd_rank(args: argparse.Namespace, out, err) -> int:
         ),
     )
 
+    if preference_candidates is not None:
+        assert isinstance(encoder, KhiveLatticeEncoder)
+        source_report_sha256 = hashlib.sha256(args.output.read_bytes()).hexdigest()
+        descriptor = encoder.descriptor
+        published_board = _make_khive_client(args).publish_board(
+            name=f"Moodboard preference scope {board.board_id[:12]}",
+            board_id=board.board_id,
+            model_key=descriptor.model_key,
+            descriptor_fingerprint=descriptor.fingerprint,
+            source_report_sha256=source_report_sha256,
+        )
+        preference_artifact = PreferenceFeatureArtifact.build(
+            board_entity_id=published_board.entity_id,
+            board_id=board.board_id,
+            model_key=descriptor.model_key,
+            descriptor_fingerprint=descriptor.fingerprint,
+            source_report_sha256=source_report_sha256,
+            candidates=preference_candidates,
+        )
+        write_preference_feature_artifact(preference_artifact, args.preference_features_output)
+
     _print_board_fit(board, out)
     abstained = len(candidates) - len(scores)
     print(f"board {board.board_id}", file=out)
@@ -1338,6 +1477,9 @@ def _cmd_rank(args: argparse.Namespace, out, err) -> int:
     print(f"  abstained      {abstained}", file=out)
     print(f"  ties           {len(ties)} of {len(pairs)} pairs compared", file=out)
     print(f"  written to     {args.output}", file=out)
+    if args.preference_features_output is not None:
+        print(f"  preference features {args.preference_features_output}", file=out)
+        print(f"  preference board    {published_board.entity_id}", file=out)
     return 0
 
 
@@ -1519,6 +1661,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rank.add_argument(
         "-o", "--output", type=Path, required=True, help="path to write the JSON report to"
+    )
+    rank.add_argument(
+        "--preference-features-output",
+        type=Path,
+        default=None,
+        help=(
+            "opt in to an atomic ADR-149 feature artifact and artifact/moodboard scope; "
+            "requires --encoder khive-lattice"
+        ),
     )
     rank.add_argument(
         "--alpha",

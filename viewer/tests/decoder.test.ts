@@ -4,17 +4,56 @@ import { acceptingProbe, encodeReport, fixtureBytes, fixtureObject, toLegacy } f
 
 const origin = { kind: "embedded", label: "test fixture" } as const;
 
+async function sha256(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 describe("versioned report decoder", () => {
   it("accepts the real-engine v1.1 showcase with strict triptychs", async () => {
     const result = await createReportDecoder(acceptingProbe).decode(fixtureBytes(), origin);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.model.report.schema_version).toBe("1.1");
+    expect(result.model.documentSha256).toBe(await sha256(fixtureBytes()));
     expect(result.model.report.assets).toHaveLength(6);
     expect(result.model.report.assets.every((asset) => asset.exemplars.length === 3)).toBe(true);
     expect(result.model.referenceSources.size).toBeGreaterThanOrEqual(3);
     expect(result.model.candidateSources.size).toBe(6);
     expect(result.model.diagnostics).toEqual([]);
+  });
+
+  it("reports real validation phases and decoded-image progress in order", async () => {
+    const progress: Array<{ phase: string; completed?: number; total?: number }> = [];
+    const result = await createReportDecoder(acceptingProbe).decode(
+      fixtureBytes(),
+      origin,
+      (event) => progress.push(event),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(progress.slice(0, 2).map((event) => event.phase)).toEqual(["schema", "hash"]);
+    expect(progress.at(-1)?.phase).toBe("bindings");
+    const imageProgress = progress.filter((event) => event.phase === "images");
+    const total = imageProgress[0]?.total;
+    expect(total).toBeGreaterThan(0);
+    expect(imageProgress[0]).toEqual({ phase: "images", completed: 0, total });
+    expect(imageProgress.at(-1)).toEqual({ phase: "images", completed: total, total });
+    expect(imageProgress.map((event) => event.completed)).toEqual(
+      Array.from({ length: (total ?? 0) + 1 }, (_, index) => index),
+    );
+  });
+
+  it("binds the model to exact source bytes, not merely the decoded projection", async () => {
+    const canonical = fixtureBytes();
+    const alternate = new TextEncoder().encode(`${new TextDecoder().decode(canonical)}\n`);
+    const first = await createReportDecoder(acceptingProbe).decode(canonical, origin);
+    const second = await createReportDecoder(acceptingProbe).decode(alternate, origin);
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+    expect(first.model.report).toEqual(second.model.report);
+    expect(first.model.documentSha256).not.toBe(second.model.documentSha256);
   });
 
   it("refuses an unsupported version before interpreting poisoned content", () => {

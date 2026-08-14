@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/demo_manifest_v1.schema.json",
+  "title": "Moodboard public-domain demo acquisition manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "asset_count",
+    "assets",
+    "catalog_sha256",
+    "dataset_id",
+    "retrieved_at",
+    "schema_version"
+  ],
+  "properties": {
+    "asset_count": { "type": "integer", "minimum": 1 },
+    "assets": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/asset" }
+    },
+    "catalog_sha256": { "$ref": "#/$defs/digest" },
+    "dataset_id": { "const": "showcase-public-domain-v1" },
+    "retrieved_at": { "$ref": "#/$defs/timestamp" },
+    "schema_version": { "const": "moodboard.demo-manifest.v1" }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nullableString": {
+      "type": ["string", "null"]
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+Z$"
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artist",
+        "asset_id",
+        "byte_size",
+        "collection",
+        "download_url",
+        "http",
+        "image",
+        "khive_content_ref",
+        "license",
+        "local_path",
+        "metadata",
+        "object_id",
+        "provider",
+        "retrieved_at",
+        "sha256",
+        "source_page_url",
+        "title"
+      ],
+      "properties": {
+        "artist": { "type": "string", "minLength": 1 },
+        "asset_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$" },
+        "byte_size": { "type": "integer", "minimum": 1, "maximum": 25165824 },
+        "collection": {
+          "enum": [
+            "fruit-apple",
+            "fruit-lemon",
+            "style-claude-lorrain",
+            "style-vincent-van-gogh"
+          ]
+        },
+        "download_url": { "type": "string", "pattern": "^https://" },
+        "http": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["content_type", "etag", "final_url", "last_modified"],
+          "properties": {
+            "content_type": { "enum": ["image/jpeg", "image/png", "image/webp"] },
+            "etag": { "$ref": "#/$defs/nullableString" },
+            "final_url": { "type": "string", "pattern": "^https://" },
+            "last_modified": { "$ref": "#/$defs/nullableString" }
+          }
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format", "height", "width"],
+          "properties": {
+            "format": { "enum": ["JPEG", "PNG", "WEBP"] },
+            "height": { "type": "integer", "minimum": 1, "maximum": 8192 },
+            "width": { "type": "integer", "minimum": 1, "maximum": 8192 }
+          }
+        },
+        "khive_content_ref": { "$ref": "#/$defs/digest" },
+        "license": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "public_domain", "short_name", "source_url", "url"],
+          "properties": {
+            "id": { "enum": ["CC0-1.0", "PDM-1.0"] },
+            "public_domain": { "const": true },
+            "short_name": { "type": "string", "minLength": 1 },
+            "source_url": { "$ref": "#/$defs/nullableString" },
+            "url": { "type": "string", "pattern": "^https://creativecommons\\.org/" }
+          }
+        },
+        "local_path": {
+          "type": "string",
+          "pattern": "^assets/[a-z0-9][a-z0-9_-]{1,63}\\.(jpg|png|webp)$"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["etag", "evidence_sha256", "url"],
+          "properties": {
+            "etag": { "$ref": "#/$defs/nullableString" },
+            "evidence_sha256": { "$ref": "#/$defs/digest" },
+            "url": { "type": "string", "pattern": "^https://" }
+          }
+        },
+        "object_id": { "type": ["integer", "null"], "minimum": 1 },
+        "provider": { "enum": ["met", "wikimedia_commons"] },
+        "retrieved_at": { "$ref": "#/$defs/timestamp" },
+        "sha256": { "$ref": "#/$defs/digest" },
+        "source_page_url": { "type": "string", "pattern": "^https://" },
+        "title": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

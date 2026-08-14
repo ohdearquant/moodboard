@@ -210,6 +210,7 @@ export type SafeThumbnailSource = string & { readonly [safeThumbnailSource]: tru
 
 export interface ReportModel {
   readonly report: ReportProjection;
+  readonly documentSha256: string;
   readonly origin: ReportOrigin;
   readonly diagnostics: readonly ReportIssue[];
   readonly referencesById: ReadonlyMap<string, ReferenceEntry>;
@@ -230,6 +231,12 @@ export type DecodeResult =
   | { readonly ok: true; readonly model: ReportModel }
   | { readonly ok: false; readonly issues: readonly ReportIssue[] };
 
+export type DecodeProgress =
+  | { readonly phase: "schema" }
+  | { readonly phase: "hash" }
+  | { readonly phase: "images"; readonly completed: number; readonly total: number }
+  | { readonly phase: "bindings" };
+
 export interface ThumbnailProbe {
   decode(
     source: SafeThumbnailSource,
@@ -240,5 +247,9 @@ export interface ThumbnailProbe {
 
 export interface ReportDecoder {
   validateStructure(bytes: Uint8Array): StructuralDecodeResult;
-  decode(bytes: Uint8Array, origin: ReportOrigin): Promise<DecodeResult>;
+  decode(
+    bytes: Uint8Array,
+    origin: ReportOrigin,
+    onProgress?: ((progress: DecodeProgress) => void) | undefined,
+  ): Promise<DecodeResult>;
 }
