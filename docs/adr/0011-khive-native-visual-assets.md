@@ -251,3 +251,11 @@ pooling, prompt, preprocessing revision, and dimension. Tests use a fake `kkerne
 to exercise the complete file protocol and corrupt-output cases; real-model quality and
 retrieval measurements belong in the registered evaluation pipeline before this record can
 support a quality claim.
+
+## Cross-reference
+
+The Khive side of this decision, the pack invoked by `kkernel exec` and referred to above as
+the Moodboard pack, is implemented in a separate repository: github.com/ohdearquant/khive. Its
+asset-ownership half (BlobStore storage, the Moodboard pack's `model`, `ingest`, and `search`
+verbs, and the Lattice descriptor identity this record binds against) lives there as the
+`khive-pack-moodboard` pack, not in this repository.
