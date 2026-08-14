@@ -4,11 +4,18 @@ Point it at a moodboard, meaning ten to fifty reference images that define a loo
 scores how well any other image fits that look. The score comes with a decomposition of why
 and with the nearest reference images as the explanation.
 
-**Status: design stage.** The architecture decisions are written down in `docs/adr/` and the
-datasets that will be used to test them are specified in `DATASETS.md`. The engine is not
-built yet. Nothing in this README claims a measured result, because no measurement has been
-committed yet. That rule holds for the whole project: a claim lands here only after the
-artifact that reproduces it lands in the repository.
+A complete worked run is published at
+[ohdearquant.github.io/moodboard](https://ohdearquant.github.io/moodboard/): a short
+measurement overview, and a [technical report](https://ohdearquant.github.io/moodboard/report.html)
+carrying every recorded value, interval, and content hash from the same run.
+
+**Status: working engine, unaccepted representation claim.** The offline classical pipeline,
+exact conformal scoring, board artifact, report validation, and CLI are implemented and tested.
+The learned visual representation is an explicit experimental opt-in through Khive and Lattice.
+No quality measurement has been committed yet, so this README does not claim that either
+representation has passed the aesthetic/style acceptance criteria. That rule holds for the
+whole project: a claim lands here only after the artifact that reproduces it lands in the
+repository.
 
 ## The problem
 
@@ -30,17 +37,132 @@ So the survey supports "not publicly specified" and does not support "does not e
 those are different claims. What this repository offers is a method written down in enough
 detail to be checked and refuted, which is a claim about transparency rather than priority.
 
-## What it will do
+## Run it
 
-```
-moodboard build   <reference_dir> -o brand.mb    # embed references, fit the distribution, calibrate
-moodboard score   <asset ...> -b brand.mb        # calibrated score, per-axis decomposition, exemplars
-moodboard rank    <candidate_dir> -b brand.mb    # order many candidates, which is the main use
-moodboard report  ... --html out.html            # a single self-contained file
+```bash
+uv run moodboard build references/ -o brand.mb
+uv run moodboard rank candidates/ -b brand.mb -r references/ -o report.json
+uv run moodboard report report.json
 ```
 
-The output is a JSON report before it is anything else. The schema is specified in
-[ADR-0002](docs/adr/0002-report-contract.md) and is the boundary the viewer is built against.
+The output is a JSON report before it is anything else. Rank writes the closed report schema v1.1
+specified by [ADR-0008](docs/adr/0008-report-contract-for-viewer.md), which amends the v1.0 contract
+in [ADR-0002](docs/adr/0002-report-contract.md). Readers keep an exact v1.0 compatibility path;
+unknown minor or major versions are refused before report content is interpreted.
+`moodboard report report.json --html report.html` verifies the installed viewer manifest and report
+contract, then atomically writes one self-contained offline HTML file. It never recomputes a score
+or fetches a runtime asset. Source checkouts stage the optional viewer package with
+`npm --prefix viewer run build`; ordinary engine-only source and wheel builds remain valid when that
+generated directory is absent. Both validation and HTML inlining apply the same 128 MiB report-file
+ceiling before JSON, base64, or image decoding; the limit is a resource bound, not a score rule.
+
+`build` freezes the complete numeric scoring policy into the verified `brand.mb` and its hash.
+`rank` consumes that stored policy; later edits to `eval/thresholds.json` cannot move an existing
+board's scores. Passing `rank --thresholds PATH` is optional and asserts that the file still
+matches the board—it never overrides it. Report v1.1 discloses that complete numeric policy,
+including configured and effective neighbourhood size, category and distance cuts, interval level,
+and far-outlier multiplier plus its recorded source. It also carries candidate thumbnails and
+content metadata, the frozen axis-definition table, structured invocation and schema provenance, and
+exactly `min(3, reference_count)` distinct closest references per asset. The accepted CLI setting is
+therefore `--exemplars 3`; another value is refused rather than written into a weaker report.
+
+The default above is fully offline and uses `ClassicalEncoder`. To publish the exact reference
+bytes to Khive BlobStore and obtain Lattice visual embeddings from the Khive Moodboard pack,
+opt in explicitly on both build and rank:
+
+```bash
+uv run moodboard build references/ -o brand.mb \
+  --encoder khive-lattice \
+  --khive-executable kkernel \
+  --khive-config /absolute/path/to/khive.toml \
+  --khive-actor lambda:moodboard \
+  --khive-namespace local
+
+uv run moodboard rank candidates/ -b brand.mb -r references/ -o report.json \
+  --encoder khive-lattice \
+  --khive-executable kkernel \
+  --khive-config /absolute/path/to/khive.toml \
+  --khive-actor lambda:moodboard \
+  --khive-namespace local
+
+uv run moodboard retrieve 01234567-89ab-cdef-0123-456789abcdef \
+  --top-k 20 \
+  --khive-executable kkernel \
+  --khive-config /absolute/path/to/khive.toml \
+  --khive-actor lambda:moodboard \
+  --khive-namespace local
+```
+
+Khive mode is experimental and fail-closed. The active descriptor fingerprint plus the pinned
+Moodboard adapter revision must match the board's model revision; malformed, partial, drifting, non-finite, wrongly
+dimensioned, or non-unit embedding results stop the run. See
+[ADR-0011](docs/adr/0011-khive-native-visual-assets.md).
+`retrieve` reports Khive's self-excluded exact-cosine neighbours, asset UUIDs, BlobStore
+content references, and names. Its cosine is a retrieval similarity in `[-1,1]`; it is not
+the conformal moodboard score, an aesthetic/coherence measurement, or a replacement for `rank`.
+
+Exact source-byte ingest in this v1 pack accepts PNG, JPEG, and WebP. The offline classical
+encoder retains the CLI's broader image-format support.
+
+### Bootstrap the Khive/Lattice backend
+
+Stock Khive builds do not load the opt-in Moodboard pack. Build a `kkernel` from a Khive
+checkout that includes `khive-pack-moodboard` and supports the ordered
+`--ops-file ... --save-file ...` transport, then point `--khive-executable` at that binary.
+Configure the pack and a durable local BlobStore explicitly:
+
+```toml
+# /absolute/path/to/khive.toml
+[runtime]
+packs = ["kg", "moodboard"]
+
+[storage.blob]
+backend = "fs"
+root = "/absolute/path/to/khive-blobs"
+```
+
+The equivalent pack selection is `KHIVE_PACKS=kg,moodboard`; omitting `--khive-config` keeps
+Khive's usual `KHIVE_CONFIG` and project-discovery fallback. Configure the Qwen3.5 checkpoint
+before invoking Moodboard:
+
+```bash
+export KHIVE_MOODBOARD_MODEL_DIR=/absolute/path/to/qwen3.5-0.8b
+export KHIVE_MOODBOARD_MODEL_REVISION=your-immutable-deployment-revision
+
+# Optional deployment attestation. If present it must equal the pack's framed tree digest.
+export KHIVE_MOODBOARD_CHECKPOINT_SHA256=64-lowercase-hex
+```
+
+The pack always computes the canonical checkpoint-tree SHA-256. When the optional expected
+digest is omitted, call `moodboard.model()` once and pin its returned `checkpoint_sha256` for
+subsequent deployment attestation. Actor and namespace remain explicit Moodboard CLI options;
+they are not inferred from the storage root.
+
+One Moodboard request is bounded to 64 total asset occurrences and 32 MiB of decoded bytes
+across those occurrences, before content deduplication. Admission is rolling: a source file is
+read only to the remaining budget plus one byte, and an array's exact canonical-PNG size is
+checked before encoding it. The client streams its ops JSONL, but `kkernel` currently retains
+batch JSON in process; the conservative aggregate limit prevents multi-gigabyte base64 amplification.
+Larger corpora must be deliberately partitioned into audited calls rather than being silently
+split into repeated cold model loads.
+
+Khive-mode CLI loading applies the same source count/byte limits before Pillow decoding, rejects
+either source side above 8192 pixels, and retains at most 256 MiB of matte-composited RGB arrays
+for diagnostics and thumbnails. The offline classical path keeps its existing loading behavior.
+
+Ordinary tests use a fake executable and never load a model. The opt-in real-process smoke is
+gated by `MOODBOARD_REAL_KKERNEL`; set `MOODBOARD_REAL_KHIVE_CONFIG` when that binary needs the
+explicit config above. The descriptor smoke additionally requires
+`MOODBOARD_REAL_KHIVE_MODEL=1` plus the model environment and is intentionally outside the
+offline test gate.
+
+```bash
+MOODBOARD_REAL_KKERNEL=/absolute/path/to/kkernel \
+MOODBOARD_REAL_KHIVE_CONFIG=/absolute/path/to/khive.toml \
+uv run pytest tests/test_khive_real.py -q
+
+# Add MOODBOARD_REAL_KHIVE_MODEL=1 to include moodboard.model descriptor validation.
+```
 
 ## Design in one page
 
@@ -65,12 +187,11 @@ acceptance test attached: see [ADR-0003](docs/adr/0003-style-representation.md).
 
 ## Scope for the first version
 
-**A standalone tool: the CLI, the library, and a self-contained HTML report.** It depends on
-nothing a contributor cannot get for free — clone the repository, fetch the datasets, and
-every measurement reproduces. No design-application SDK is a dependency of anything here,
-for any host ([ADR-0006](docs/adr/0006-standalone.md)). Integrations are possible precisely
-because they are not needed: the JSON report is the boundary, and anything that wants to
-display a score consumes the report file on its own side of it.
+**A standalone default with an explicit Khive integration.** The classical CLI and library
+depend on no external service. No design-application SDK is a dependency
+([ADR-0006](docs/adr/0006-standalone.md)); the Khive path is a small process adapter selected
+by the operator, not a required SDK or an import-time service dependency. The JSON report
+remains the display boundary.
 
 Aesthetic quality scoring, meaning "is this a good photograph", is a different axis and is
 deliberately out of scope. Coherence with a reference set is not quality, and mixing them
@@ -80,8 +201,9 @@ would make both numbers harder to interpret.
 
 ```
 docs/adr/         architecture decision records, one file per decision
-docs/design/      the longer design write-up
 DATASETS.md       one row per validation claim, with source, license and prepare command
+moodboard/        Python engine, Khive adapter, artifact and report contracts
+tests/            deterministic offline unit, property, CLI and wire-protocol tests
 ```
 
 ## Branch policy
