@@ -61,6 +61,11 @@
     gives the record in full &mdash; every identity, score, interval, probability, and content
     hash. Nothing on this page was computed for display; it is all read from the run&rsquo;s
     artifacts.</p>
+    <p class="lede">Read the five sections as one system rather than five exhibits:
+    the board defines the look, scoring measures fit against it, the region edit is
+    generation held to its promise, preference replay is taste that moves only when
+    retrained, and intent routing is the retrieval step that decides what the generator
+    consults. References go out; judgments come back.</p>
     <p class="toc"><a href="#board">1&nbsp;The board</a> &nbsp;·&nbsp;
     <a href="#scoring">2&nbsp;Scoring</a> &nbsp;·&nbsp;
     <a href="#region">3&nbsp;Region edit</a> &nbsp;·&nbsp;
@@ -72,7 +77,7 @@
   <section id="board">
     <p class="label">1 · The board</p>
     <div class="prose">
-      <p>A board is the set of reference images that defines a look. This one holds eight
+      <p>Everything in this report is relative to one anchor, and this is it. A board is the set of reference images that defines a look. This one holds eight
       public-domain paintings: four Claude Lorrain harbor landscapes and four van Gogh. Every
       score in this report is relative to these eight images and to nothing else.</p>
       <p class="reading"><strong>What to look for</strong> The board reports an effective size
@@ -100,7 +105,7 @@
   <section id="scoring">
     <p class="label">2 · Scoring all twenty-four</p>
     <div class="prose">
-      <p>Twenty-four candidates: the eight references themselves, plus a mirrored and a
+      <p>The score is the instrument every later section relies on, so before it is trusted on new work it is pointed at material whose answer is known. Twenty-four candidates: the eight references themselves, plus a mirrored and a
       center-cropped variant of each. The score answers one question &mdash; how hard is this
       image to tell apart from the board&rsquo;s own members? Technically it is a
       board-relative conformal p-value: a score of 1.00, like the top row, means
@@ -159,7 +164,7 @@
     <p class="label">3 · The region edit</p>
     <div class="prose">
       <blockquote>Replace only the selected apple tree with a mature lemon tree. Preserve the scene outside the confirmed rectangle, camera geometry, and lighting.</blockquote>
-      <p>The edit was allowed to change one rectangle
+      <p>Here the loop reaches a real generator, and the contract is locality. The edit was allowed to change one rectangle
       (x&nbsp;230&ndash;1152,
       y&nbsp;48&ndash;912 of
       1280 × 960) and nothing else. Locality is
@@ -219,7 +224,7 @@
   <section id="preference">
     <p class="label">4 · Preference replay</p>
     <div class="prose">
-      <p>The question here: can the system&rsquo;s taste move, and only when it is
+      <p>This is the learning half of the loop: taste moves only through explicit, recorded judgments, never as a side effect of use. The question here: can the system&rsquo;s taste move, and only when it is
       deliberately retrained? The model is a pairwise ranker over 10 frozen visual
       features &mdash; given two images, it returns the probability that one is preferred.
       Two disclosed rule-sets, policy A and policy B, disagree about what &ldquo;better&rdquo;
@@ -309,7 +314,7 @@
   <section id="routing">
     <p class="label">5 · Intent routing</p>
     <div class="prose">
-      <p>Two edit intents on the same photograph &mdash; replace one lemon, restyle the whole
+      <p>This is the retrieval step that starts the loop: before any pixels move, the stated intent picks the evidence. Two edit intents on the same photograph &mdash; replace one lemon, restyle the whole
       frame &mdash; both retrieve their references from the same library. The question: does
       the stated intent actually change what an edit consults?</p>
       <p class="reading"><strong>What to look for</strong> The two top-three retrieved sets
