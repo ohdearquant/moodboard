@@ -2,6 +2,8 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-07
+- **Amended by:** [ADR-0013](0013-studio-viewer-trust-boundary.md), which keeps the standalone
+  CLI/library/report and no-design-SDK decisions but adds Studio as a separate connected surface.
 - **Measurable claim:** no, and it says so explicitly per the convention in
   [`README.md`](README.md). This is a scope decision.
 
