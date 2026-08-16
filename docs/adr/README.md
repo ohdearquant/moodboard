@@ -47,3 +47,8 @@ validation claim.
 | [0009](0009-measurement-and-evaluation-contract.md) | Every published measurement is an immutable, revision-bound result | Proposed |
 | [0010](0010-frontend-verification.md) | Frontend verification uses engine-generated fixtures and layered tests | Proposed |
 | [0011](0011-khive-native-visual-assets.md) | Khive owns visual assets and Lattice descriptor inference | Proposed |
+| [0012](0012-aesthetic-judgment-vocabulary.md) | Typed Aesthetic Judgment Vocabulary and Decision Order | Proposed |
+| [0013](0013-studio-viewer-trust-boundary.md) | Studio and Immutable Viewer Trust Boundary | Proposed |
+| [0014](0014-intent-packet-generation-run-provider.md) | Frozen Intent Packet, Generation Run, and Provider Boundary | Proposed |
+| [0015](0015-human-comparison-preference-snapshots.md) | Human Comparison and Preference Snapshot Lifecycle | Proposed |
+| [0016](0016-region-mask-locality-verification.md) | Region, Mask, and Locality Verification | Proposed |

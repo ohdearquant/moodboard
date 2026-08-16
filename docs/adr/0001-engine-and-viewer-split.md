@@ -2,6 +2,9 @@
 
 - **Status:** Proposed
 - **Date:** 2026-08-07
+- **Amended by:** [ADR-0013](0013-studio-viewer-trust-boundary.md), which preserves this
+  engine-to-report-to-offline-viewer boundary while adding Studio as a separate connected product
+  surface.
 - **Measurable claim:** none. This record decides a boundary, not a behaviour, so no dataset
   row is owed. See `docs/adr/README.md` for why that sentence is written down instead of
   left out.
