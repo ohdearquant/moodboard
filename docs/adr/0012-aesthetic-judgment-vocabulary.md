@@ -97,8 +97,10 @@ results. The term does not collapse a raw provider output and a source-backed co
 occurrence.
 
 For computed kinds, `evidence_id` is
-`sha256("moodboard.evidence.v1\0" || RFC8785(document-without-evidence_id))`. A human comparison
-uses the immutable judgment-event UUID issued by its serve authority. An implementation must not
+`sha256("moodboard.judgment.v1\0" || RFC8785(document-without-evidence_id))`. The domain tag is
+intentionally identical to the envelope's `schema_version`; changing either string is a schema and
+identity revision, never a compatible cleanup. A human comparison uses the immutable
+judgment-event UUID issued by its serve authority. An implementation must not
 choose between those identity rules heuristically. Kind-specific contracts extend the envelope
 without changing another kind's fields. A consumer rejects an unknown schema major, kind,
 subject kind, result state, choice, or authority revision rather than treating it as the nearest
@@ -254,7 +256,8 @@ comparison; ADR-0016 owns locality verification.
 This record remains Proposed until:
 
 1. the six kind/subject/result combinations and selectable-output occurrence are represented by
-   closed versioned schemas or types;
+   closed versioned schemas or types, and computed evidence-id tests pin the exact schema-version
+   domain tag;
 2. deterministic tests prove that a failed required gate cannot be overridden by board score or
    preference and that an empty route has no fallback;
 3. presentation tests pin the canonical meanings and distinguish fail, abstain, and not-run;
