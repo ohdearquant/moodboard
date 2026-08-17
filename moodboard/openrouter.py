@@ -1462,32 +1462,43 @@ def _canonical_attempt(value: GenerationAttempt | Mapping[str, Any]) -> Generati
     return artifact
 
 
-def _decimal_cost(value: Any) -> dict[str, Any]:
+def _unavailable_cost(provenance: str) -> dict[str, Any]:
+    return {"state": "unavailable", "amount": None, "currency": None, "provenance": provenance}
+
+
+def _decimal_cost(value: Any, currency: Any = None) -> dict[str, Any]:
+    """Certify cost telemetry into the receipt, or state explicit unavailability.
+
+    Cost is post-hoc telemetry: a shape this function cannot certify degrades to the
+    schema's unavailable state and must never reject the paid response carrying it.
+    ``not_reported`` states no cost value was legibly reported; ``reported_uncertifiable``
+    states a cost value was present and this adapter could not certify it, so the receipt
+    never inverts what the provider did in either direction. The raw response bytes retain
+    whatever was actually reported.
+    """
     if value is None:
-        return {
-            "state": "unavailable",
-            "amount": None,
-            "currency": None,
-            "provenance": "not_reported",
-        }
+        return _unavailable_cost("not_reported")
+    uncertifiable = _unavailable_cost("reported_uncertifiable")
+    measured_currency = "USD" if currency is None else currency
+    if (
+        not isinstance(measured_currency, str)
+        or re.fullmatch(r"[A-Z]{3}", measured_currency) is None
+    ):
+        return uncertifiable
     if isinstance(value, bool) or not isinstance(value, (int, Decimal)):
-        raise OpenRouterAdapterError("invalid_provider_response", "provider response is invalid")
+        return uncertifiable
     try:
         measured = Decimal(value)
     except (InvalidOperation, ValueError, TypeError):
-        raise OpenRouterAdapterError(
-            "invalid_provider_response", "provider response is invalid"
-        ) from None
+        return uncertifiable
     if not measured.is_finite() or measured < 0:
-        raise OpenRouterAdapterError("invalid_provider_response", "provider response is invalid")
+        return uncertifiable
     if measured.is_zero():
         amount = "0"
     else:
         _, digits, exponent = measured.as_tuple()
         if not isinstance(exponent, int):
-            raise OpenRouterAdapterError(
-                "invalid_provider_response", "provider response is invalid"
-            )
+            return uncertifiable
         trailing_zeroes = 0
         for digit in reversed(digits):
             if digit != 0:
@@ -1498,9 +1509,7 @@ def _decimal_cost(value: Any) -> dict[str, Any]:
         integer_digits = max(1, effective_digits + effective_exponent)
         fractional_digits = max(0, -effective_exponent)
         if integer_digits > 21 or fractional_digits > 18:
-            raise OpenRouterAdapterError(
-                "invalid_provider_response", "provider response is invalid"
-            )
+            return uncertifiable
         amount = format(measured, "f")
     if "." in amount:
         amount = amount.rstrip("0").rstrip(".")
@@ -1508,11 +1517,11 @@ def _decimal_cost(value: Any) -> dict[str, Any]:
         amount = "0"
     integer, _, fraction = amount.partition(".")
     if len(integer) > 21 or len(fraction) > 18:
-        raise OpenRouterAdapterError("invalid_provider_response", "provider response is invalid")
+        return uncertifiable
     return {
         "state": "reported",
         "amount": amount,
-        "currency": "USD",
+        "currency": measured_currency,
         "provenance": "provider_receipt",
     }
 
@@ -1635,9 +1644,12 @@ def decode_openrouter_response(
             }
         )
     usage = document.get("usage")
-    if usage is not None and not isinstance(usage, dict):
-        raise OpenRouterAdapterError("invalid_provider_response", "provider response is invalid")
-    cost = _decimal_cost(None if usage is None else usage.get("cost"))
+    if not isinstance(usage, dict):
+        # A non-object usage carries no legible cost, so no cost was reported in the
+        # contract's terms; claiming one was would invert the fact the other way.
+        cost = _unavailable_cost("not_reported")
+    else:
+        cost = _decimal_cost(usage.get("cost"), usage.get("currency"))
     draft = {
         "schema_version": RECEIPT_VERSION,
         "attempt_id": descriptor.attempt_id,

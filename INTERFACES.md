@@ -689,7 +689,8 @@ A 200 response is strict, bounded UTF-8 JSON with only `created`, `data`, and op
 exactly one `data` item. Base64 is decoded strictly and bounded to the registered 16 MiB
 encoded-image limit. The receipt
 records exact raw-response and output BLAKE3/SHA-256/count identities, optional provider media-type
-claim, reported finite nonnegative USD cost when present, and measured adapter latency. The Image
+claim, cost telemetry when it conforms to the receipt contract (explicit unavailability otherwise,
+never response rejection), and measured adapter latency. The Image
 response does not attest the actual model or upstream provider, so receipts honestly record
 `actual_model:undisclosed` and `upstream_route:unknown`; a request pin is not rewritten as response
 provenance.
@@ -718,6 +719,49 @@ redirects so the bearer cannot cross origins, bounds the buffered response, veri
 Content-Length before treating an envelope as complete, and returns no headers. The token, prompt,
 data URLs, request bytes, response headers/body, and decoded output
 bytes are excluded from adapter representations and stable errors.
+
+## `eval/openrouter_real_e2e.py`: confirmation-bound one-call evaluation
+
+The real-provider evaluation is deliberately outside the reusable adapter. Its first phase,
+`prepare_openrouter_real_e2e`, is credential-free and dispatch-free. It freezes exact discovery,
+source, authority, mask, visible overlay, compact-summary, packet projection, and wire identities
+in an owner-only directory. Challenge and compact-summary versions are evaluation-local artifact
+indexes; they do not expand the provider schema registry or claim a reusable Studio authority.
+
+`execute_openrouter_real_e2e` accepts that directory plus a separate closed confirmation context.
+It validates the exact challenge/summary identities, canonical principal/session/time fields,
+artifact SHA-256/counts, path/device/inode binding, expiry, reconstructed packet and wire, and a
+fresh byte-identical discovery response before credential access. The self-hash on the context is
+integrity, not authorization: a caller must also supply a trusted Studio confirmation consumer
+that atomically verifies and durably spends that exact authorization, and the production default
+rejects execution. The retired Boolean one-shot function cannot reach
+I/O, and the evaluation CLI only reports the missing trusted-authority prerequisite.
+
+After validation, the caller-supplied confirmation consumer must atomically and durably spend the
+authorization; this repository has no production Studio ledger. The local `O_EXCL` record proves
+only same-directory concurrency behavior in the injected offline harness. The adapter journal
+remains the authoritative non-idempotent send and provider-evidence boundary. `$0.05` is only an
+exact discovery-quote admission limit, never a provider-side hard spend cap. Post-response cost is
+non-gating telemetry. A terminal provider occurrence is not an aesthetic judgment; the sanitized
+result separately reports media admission, raw structure/locality, localized-edit gate status,
+workflow acceptance `not_recorded`, semantic/aesthetic `not_run`, and compositor `not_run`.
+
+The offline authority helper reads explicitly supplied board and Pixel-RAG artifacts through public validators
+and derives content-bound collection-gate identities. It never repairs stale bytes. The current
+local evidence belongs to a retired projection and fails when explicitly supplied to the current
+reader. Evidence republication, trusted authority-to-session integration, a durable Studio
+confirmation boundary, and a credential-free idempotent post-response finalizer are explicit
+prerequisites to any paid run; this slice performs no provider call and makes no real-run claim.
+
+The helper's identity domains are evaluation-local. `eligible_corpus_sha256` hashes RFC 8785 of
+`{schema_version, source_manifest:{catalog_sha256,dataset_id,manifest_sha256}, field, operator,
+value, assets:[{asset_id,content_ref}]}` under
+`moodboard.openrouter-real-e2e.eligible-corpus.v1`; `assets` is sorted by
+`(asset_id, content_ref)`. `route_policy_id` hashes RFC 8785 of
+`{schema_version, eligible_corpus_sha256, namespace, field, operator, value,
+empty_result_policy, interpretation}` under `moodboard.openrouter-real-e2e.route-policy.v1`.
+These hashes provide integrity only. A future trusted Studio integration must cross-bind them to
+the exact validated board/Pixel bytes and enrolled creative session.
 
 ## `report.py`
 

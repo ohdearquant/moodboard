@@ -266,7 +266,12 @@
         "amount": { "type": "null" },
         "currency": { "type": "null" },
         "provenance": {
-          "enum": ["not_reported", "redacted_by_provider", "not_applicable"]
+          "enum": [
+            "not_reported",
+            "reported_uncertifiable",
+            "redacted_by_provider",
+            "not_applicable"
+          ]
         }
       },
       "additionalProperties": false
