@@ -28,7 +28,7 @@ import pytest
 import eval.openrouter_real_e2e as real_e2e
 from moodboard.attempt_journal import AttemptJournal
 from moodboard.openrouter import OpenRouterHttpResponse
-from tests.test_openrouter_real_e2e import _TOKEN
+from tests.test_openrouter_real_e2e import _TOKEN, _http_response
 from tests.test_openrouter_real_e2e_confirmation import (
     _assert_error_code,
     _execute,
@@ -1062,3 +1062,52 @@ def test_a_staging_io_failure_reports_its_own_code_not_a_conflict(
         _REAL_E2E._write_compatible_private_artifact(private_dir / "result.json", b"{}\n")
     _assert_error_code(raised, "finalization_artifact_io_failed")
     assert not (private_dir / "result.json").exists()
+
+
+def test_a_conflict_exit_still_scans_the_private_artifacts(tmp_path: Path) -> None:
+    """The scan verdict outranks the conflict diagnostic; a leak is never masked by it."""
+    challenge_dir = tmp_path / "planted-divergent-and-leak"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+    planted = challenge_dir / "result.json"
+    planted.write_bytes(b'{"forged": true}')
+    planted.chmod(0o600)
+    leak = challenge_dir / "leak.bin"
+    leak.write_bytes(_TOKEN.encode("utf-8"))
+    leak.chmod(0o600)
+
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _execute(challenge_dir, context_path)
+    _assert_error_code(raised, "credential_material_persisted")
+
+
+def test_an_unreadable_challenge_dir_never_reports_a_conflict(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An enumeration failure is an I/O condition, never a divergent-bytes claim.
+
+    The terminal scan enumerates the same directory, so when enumeration is broken the
+    honest outcome is the scan's own failure code — never finalization_artifact_conflict,
+    which asserts divergent bytes were found and preserved.
+    """
+    challenge_dir = tmp_path / "unreadable-enumeration"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+    resolved = challenge_dir.resolve()
+    posted = {"value": False}
+
+    real_iterdir = Path.iterdir
+
+    def failing_iterdir(self: Path) -> Any:
+        if self == resolved and posted["value"]:
+            raise PermissionError("challenge directory became unreadable")
+        return real_iterdir(self)
+
+    def marking_transport(**kwargs: Any) -> OpenRouterHttpResponse:
+        posted["value"] = True
+        return _http_response()
+
+    monkeypatch.setattr(Path, "iterdir", failing_iterdir)
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _execute(challenge_dir, context_path, transport=marking_transport)
+    _assert_error_code(raised, "artifact_secret_scan_failed")

@@ -1453,7 +1453,7 @@ def _materialize_finalized_evidence(
             path for path in target.iterdir() if path.name.startswith("provider-output-0.")
         )
     except OSError:
-        _fail("finalization_artifact_conflict")
+        _fail("finalization_artifact_io_failed")
     if any(path.name != expected_output_name for path in observed_outputs):
         _fail("finalization_artifact_conflict")
 
@@ -2984,17 +2984,19 @@ def _execute_with_token(
         _scan_private_artifacts(target, token)
         return "ok", result
     except OpenRouterRealE2EError as error:
-        # The clock diagnostic, the secret-scan verdicts, and the artifact-materialization
-        # conflict are built to be unambiguous; every other failure still collapses to the
-        # generic code so no detail can carry a secret. All four are static literal strings.
-        if error.code in {
-            "clock_invalid",
-            "credential_material_persisted",
-            "artifact_secret_scan_failed",
-            "finalization_artifact_conflict",
-        }:
+        # The secret-scan verdicts are produced by the scan itself, so returning them without
+        # rescanning is sound. Every other exit runs the terminal scan first and its verdict
+        # outranks the collapse; only when the scan is clean may an unambiguous diagnostic
+        # (the clock regression or the artifact-materialization conflict) survive verbatim.
+        # All codes are static literal strings, so no detail can carry a secret.
+        if error.code in {"credential_material_persisted", "artifact_secret_scan_failed"}:
             return error.code, None
-        return _terminal_scan_status(target, token), None
+        status = _terminal_scan_status(target, token)
+        if status != "execution_failed":
+            return status, None
+        if error.code in {"clock_invalid", "finalization_artifact_conflict"}:
+            return error.code, None
+        return "execution_failed", None
     except BaseException:
         return _terminal_scan_status(target, token), None
     finally:
@@ -3296,7 +3298,7 @@ def _finalize_openrouter_real_e2e_local_scope(
                         if path.name.startswith("provider-output-0.")
                     )
                 except OSError:
-                    _fail("finalization_artifact_conflict")
+                    _fail("finalization_artifact_io_failed")
                 if observed_outputs:
                     refreshed = journal.read_state(inputs.attempt.attempt_id)
                     if refreshed.state == "succeeded":

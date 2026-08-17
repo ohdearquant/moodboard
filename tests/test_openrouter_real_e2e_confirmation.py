@@ -1738,3 +1738,72 @@ def test_concurrent_executors_atomically_admit_only_one_credential_and_send(
     assert len(successful) == 1
     assert successful[0].states[-1] == "succeeded"
     assert credential_calls == sends == 1
+
+
+def _post_pot_regressing_clock() -> tuple[dict[str, Any], Any]:
+    """Canonical increasing samples; the second sample after the POST regresses."""
+    state: dict[str, Any] = {"posted": False, "tick": 0, "post_samples": 0}
+
+    def clock() -> str:
+        if state["posted"]:
+            state["post_samples"] += 1
+            if state["post_samples"] >= 2:
+                return "2026-08-17T03:00:01Z"
+        state["tick"] += 1
+        minute, second = divmod(state["tick"], 60)
+        return f"2026-08-17T03:{17 + minute:02d}:{second:02d}Z"
+
+    return state, clock
+
+
+def test_a_post_response_clock_regression_still_scans_the_private_artifacts(
+    tmp_path: Path,
+) -> None:
+    """A clock diagnostic raised after the paid POST must not mask a persisted credential."""
+    challenge_dir = tmp_path / "post-response-clock-leak"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+    ledger = _ledger_for(challenge_dir)
+    leak = challenge_dir / "leak.bin"
+    leak.write_bytes(_TOKEN.encode("utf-8"))
+    leak.chmod(0o600)
+    state, clock = _post_pot_regressing_clock()
+
+    def marked_transport(**kwargs: Any) -> OpenRouterHttpResponse:
+        state["posted"] = True
+        return _http_response()
+
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _execute(
+            challenge_dir,
+            context_path,
+            confirmation_ledger=ledger,
+            transport=marked_transport,
+            clock=clock,
+        )
+    assert state["posted"] is True
+    _assert_error_code(raised, "credential_material_persisted")
+
+
+def test_a_clean_post_response_clock_regression_keeps_its_own_code(tmp_path: Path) -> None:
+    """After a clean terminal scan the clock diagnostic survives the collapse verbatim."""
+    challenge_dir = tmp_path / "post-response-clock-clean"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+    ledger = _ledger_for(challenge_dir)
+    state, clock = _post_pot_regressing_clock()
+
+    def marked_transport(**kwargs: Any) -> OpenRouterHttpResponse:
+        state["posted"] = True
+        return _http_response()
+
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _execute(
+            challenge_dir,
+            context_path,
+            confirmation_ledger=ledger,
+            transport=marked_transport,
+            clock=clock,
+        )
+    assert state["posted"] is True
+    _assert_error_code(raised, "clock_invalid")
