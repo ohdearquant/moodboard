@@ -19,6 +19,12 @@ dependencies = [
     # a JSON Schema validator duplicates a well-tested library rather than depending on one.
     # See INTERFACES.md for the full rationale.
     "jsonschema>=4.20",
+    # Artifact identities in ADR-0012 through ADR-0016 use RFC 8785/JCS.  Python's
+    # json.dumps(sort_keys=True) is not an interoperable substitute for its ECMAScript
+    # number and UTF-16 property-ordering rules.
+    # Pin exactly: these bytes mint permanent protocol identities.  A serializer
+    # upgrade is an identity-compatibility event, not a routine dependency refresh.
+    "rfc8785==0.1.4",
 ]
 
 [dependency-groups]
