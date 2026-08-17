@@ -313,6 +313,29 @@ def test_prepare_requires_exactly_one_authority_source_before_external_io(tmp_pa
     assert calls == []
 
 
+def test_prepare_rejects_a_reference_missing_its_occurrence_id(tmp_path: Path) -> None:
+    """A wrong-key reference fails at the stable boundary, not as a KeyError in packet build."""
+    document = json.loads(_AUTHORITY_BYTES.decode("utf-8"))
+    del document["references"][0]["reference_occurrence_id"]
+    document["authority_id"] = "0" * 64
+    document["authority_id"] = compute_document_identity(
+        document,
+        schema_version="moodboard.openrouter-real-e2e-authority.v1",
+        identity_field="authority_id",
+    )
+    prepare = _REAL_E2E.prepare_openrouter_real_e2e
+
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        prepare(
+            tmp_path / "wrong-key-reference",
+            _discovery_fetcher=lambda: _DISCOVERY_BODY,
+            _source_fetcher=lambda: _SOURCE_BYTES,
+            _authority_bundle=_json_bytes(document),
+            _clock=lambda: _PREPARED_AT,
+        )
+    _assert_error_code(raised, "authority_invalid")
+
+
 def test_default_direct_transport_preflight_fails_before_authorization_or_key(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -689,7 +689,8 @@ A 200 response is strict, bounded UTF-8 JSON with only `created`, `data`, and op
 exactly one `data` item. Base64 is decoded strictly and bounded to the registered 16 MiB
 encoded-image limit. The receipt
 records exact raw-response and output BLAKE3/SHA-256/count identities, optional provider media-type
-claim, reported finite nonnegative USD cost when present, and measured adapter latency. The Image
+claim, cost telemetry when it conforms to the receipt contract (explicit unavailability otherwise,
+never response rejection), and measured adapter latency. The Image
 response does not attest the actual model or upstream provider, so receipts honestly record
 `actual_model:undisclosed` and `upstream_route:unknown`; a request pin is not rewritten as response
 provenance.

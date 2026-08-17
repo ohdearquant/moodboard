@@ -128,5 +128,6 @@ The executable acceptance map for this slice is:
 | One injected in-process consumption winner can reach one fake POST | replay, ambiguity, and concurrent-executor tests |
 | Quote arithmetic is exact and `$0.05` is pre-dispatch only | ambient-Decimal and over-quote tests |
 | Missing post-paid cost telemetry does not strand valid media evidence | `test_missing_reported_cost_remains_terminal_success_after_paid_response` |
+| Non-conforming cost telemetry degrades to explicit unavailability, never rejection | `test_nonconforming_cost_telemetry_degrades_to_unavailable_without_stranding` |
 | Credentials cannot survive public exceptions or local artifacts | real-E2E transport exception-graph tests |
 | Real board/retrieval identities are derived, never label hashes | `test_openrouter_real_e2e_authority.py` |

@@ -1347,8 +1347,13 @@ def _validate_authority_document(document: Mapping[str, Any]) -> JsonObject:
     ):
         _fail("authority_invalid")
     # IntentPacket validation remains the authority for the closed per-reference shape.  Here we
-    # only reject values that could make projection or copying unsafe before that validation.
-    if any(not isinstance(reference, dict) for reference in references):
+    # only reject values that could make projection or copying unsafe before that validation,
+    # including the one key _build_packet indexes before IntentPacket validation runs.
+    if any(
+        not isinstance(reference, dict)
+        or not isinstance(reference.get("reference_occurrence_id"), str)
+        for reference in references
+    ):
         _fail("authority_invalid")
     return copy.deepcopy(dict(document))
 
