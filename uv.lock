@@ -189,7 +189,7 @@ requires-dist = [
     { name = "blake3", specifier = ">=1.0" },
     { name = "jsonschema", specifier = ">=4.20" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "pillow", specifier = ">=12.3.0" },
+    { name = "pillow", specifier = "==12.3.0" },
     { name = "rfc8785", specifier = "==0.1.4" },
     { name = "scikit-image", specifier = ">=0.22" },
     { name = "scipy", specifier = ">=1.11" },

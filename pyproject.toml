@@ -13,7 +13,9 @@ dependencies = [
     "numpy>=1.26",
     "scipy>=1.11",
     "scikit-image>=0.22",
-    "Pillow>=12.3.0",
+    # Canonical raster bytes are permanent protocol identity.  A decoder upgrade is an
+    # explicit compiler-revision event, never an unconstrained dependency refresh.
+    "Pillow==12.3.0",
     # Not in the module's own axis or encoder math: report.py needs a validator for the
     # committed JSON Schema file it validates its own output against, and hand-rolling
     # a JSON Schema validator duplicates a well-tested library rather than depending on one.
