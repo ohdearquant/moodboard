@@ -116,7 +116,7 @@ digest algorithm a bare 64-character string meant.
 | `intent_eligibility` | one asset id, ContentRef, and route-query occurrence | `eligible`, `excluded`, `not_computed` | `moodboard.intent-route.collection-gate.v1` |
 | `source_similarity` | query occurrence and ordered-result artifact | `computed`, `empty`, `not_computed`, `refused` | `moodboard.source-similarity.v1` |
 | `board_compatibility` | selectable-output occurrence id | `scored`, `abstained`, `not_computed` | `moodboard.board-compatibility.v1` |
-| `constraint_verification` | selectable-output occurrence id | `pass`, `fail`, `not_run` | `moodboard.verifier.raster-structure.v1` or `moodboard.verifier.outside-mask-rgb-exact.v1` |
+| `constraint_verification` | selectable-output occurrence id, or retained provider payload for invalid-payload structural failure/blocked evidence | `pass`, `fail`, `not_run` | `moodboard.verifier.raster-structure.v1` or `moodboard.verifier.outside-mask-rgb-exact.v1` |
 | `human_comparison` | serve plus exact left/right Moodboard and Khive occurrences | `recorded` with `left`, `right`, `tie`, or `abstain` | `moodboard.preference-judgment.v1` |
 | `preference_prediction` | declared pair plus exact left/right output occurrences | `predicted`, `unavailable` | `moodboard.preference.v1` or `moodboard.preference-availability.v1` |
 
@@ -151,15 +151,57 @@ blocking structural evidence id instead of inventing an output-raster id. The st
 verifier is a separate registered authority: it binds the source raster, original provider-output
 bytes, and decoder revision. `container_decoded` means bounded inspection succeeded; it does not
 claim that a canonical raster exists. `canonical_raster_compiled` and `output_raster_sha256` are
-present together only for a passing source-sized RGB output or an otherwise eligible RGB output
-whose sole structural mismatch is dimensions. Non-opaque, multi-frame, unsupported-color,
-unsafe-decoder, over-limit, and undecodable failures never invent a canonical output-raster id.
-An observed `RGB` channel mode does not prove that an embedded ICC/profile contract is supported;
+present together only for a passing source-sized canonical RGB raster or an otherwise eligible
+canonical RGB raster whose sole structural mismatch is dimensions. The recorded `output_mode` is
+the decoded-container mode before canonical compilation: opaque `L`, `LA`, `RGB`, and `RGBA` may
+compile to the canonical RGB raster, while `P`, `CMYK`, and `other` may not. An observed `RGB`
+channel mode does not prove that an embedded ICC/profile contract is supported;
 `unsupported_color_contract` may therefore report `output_mode:"RGB"` while canonical compilation
-remains false.
+remains false. Malformed orientation and unsupported format have their own failure reasons rather
+than being relabelled as decode or color failures.
+
+Undecodable, over-limit, unsupported, or otherwise invalid provider bytes are not selectable
+output occurrences. Structural failure and its paired locality `not_run` may therefore use the
+closed `provider_output_payload` subject, which binds attempt, output index, receipt, ContentRef,
+and exact byte SHA-256. Structural pass, repairable `dimension_mismatch`, and measured exact
+locality still require a selectable output occurrence.
 Typed structural failures remain distinct from the locality result. A cross-receipt validator
-requires the structural failure and blocked locality result to name the same output occurrence,
-source raster, and structural evidence id.
+requires the structural failure and blocked locality result to name the same provider payload or
+output occurrence, source raster, and structural evidence id.
+
+The judgment validator is deliberately offline and does not hydrate artifact references. Before
+issuing a provider-payload judgment, the locality runtime must validate the immutable provider
+receipt and cross-bind `provider_receipt_id`, `attempt_id`, `output_index`, `content_ref`, and
+`content_sha256` to its exact output row. A caller-fabricated tuple that merely satisfies the JSON
+shape is not provider evidence. That receipt join belongs to the runtime verifier slice, not this
+descriptor/identity layer.
+
+## `locality_contracts.py`: raster, mask, and verifier-input identities
+
+`moodboard.raster.srgb-u8.v1` and `moodboard.mask.u8.v1` are standalone closed Draft 2020-12
+schemas. The localized-operation schema references them by their registered `$id`, and both the
+intent-packet and provider-artifact validators resolve those references from packaged local files;
+validation never fetches a schema over the network.
+
+Raster identity is SHA-256 over the domain string `moodboard.raster.srgb-u8.v1`, NUL, RFC 8785 of
+exactly `{compiler_revision,width,height,mode,byte_count,source_content_sha256}`, NUL, and the
+row-major RGB bytes. Mask identity uses the same construction under `moodboard.mask.u8.v1` with
+exactly `{compiler_revision,width,height,byte_count,editable_count,protected_count,
+source_raster_sha256}` and the row-major `0|1` mask bytes. Validation checks byte length, raster
+shape, binary mask values, both non-empty pixel sets, recorded counts, and the published digest
+before returning frozen artifacts.
+
+Verifier input identities are separate from judgment evidence ids. Structural input uses domain
+`moodboard.verifier.raster-structure.inputs.v1` over
+`{source_raster_sha256,output_content_sha256}`. Measured exact locality uses domain
+`moodboard.verifier.outside-mask-rgb-exact.inputs.v1` over
+`{source_raster_sha256,output_raster_sha256,mask_sha256}`; its `not_run` form uses the same domain
+over `{source_raster_sha256,mask_sha256,blocking_structural_evidence_id}`. The complete typed
+judgment still receives its own `moodboard.judgment.v1` evidence identity.
+
+This contract layer does not decode images, compile rectangle bytes, compare pixels, or compose an
+edit. Those runtime operations remain separate implementation concerns with their own golden
+fixtures; a valid descriptor is not evidence that any one decoder or verifier ran.
 
 Human comparison is blind in v1: the authority must bind both
 `preference_probability_shown:false` and `source_rank_shown:false`, the enrolled principal, and

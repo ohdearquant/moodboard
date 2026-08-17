@@ -41,6 +41,8 @@ INTENT_PACKET_SCHEMAS = {
         "intent_packet_v1.schema.json",
         "operation_localized_edit_v1.schema.json",
         "verification_policy_v1.schema.json",
+        "raster_srgb_u8_v1.schema.json",
+        "mask_u8_v1.schema.json",
     )
 }
 PROVIDER_ARTIFACT_SCHEMAS = {
@@ -211,15 +213,49 @@ def test_installed_provider_artifact_validator_resolves_its_registry_offline(tmp
         f"sys.path.insert(0, {str(installed)!r})\n"
         "import moodboard.attempt_state\n"
         "import moodboard.attempt_journal\n"
+        "import moodboard.locality_contracts\n"
         "from moodboard.provider_artifacts import validate_provider_artifact\n"
         f"document = json.loads({json.dumps(json.dumps(document))})\n"
         "validate_provider_artifact(document)\n"
+        "raster_bytes = bytes([1, 2, 3])\n"
+        "raster_projection = {\n"
+        "    'compiler_revision': 'packaging-probe.v1',\n"
+        "    'width': 1, 'height': 1, 'mode': 'RGB', 'byte_count': 3,\n"
+        "    'source_content_sha256': '3' * 64,\n"
+        "}\n"
+        "raster_document = {\n"
+        "    'schema_version': moodboard.locality_contracts.RASTER_SCHEMA_VERSION,\n"
+        "    **raster_projection,\n"
+        "    'raster_sha256': moodboard.locality_contracts.compute_raster_sha256(\n"
+        "        raster_projection, raster_bytes\n"
+        "    ),\n"
+        "}\n"
+        "moodboard.locality_contracts.validate_raster_artifact(\n"
+        "    raster_document, raster_bytes\n"
+        ")\n"
+        "mask_bytes = bytes([0, 1])\n"
+        "mask_projection = {\n"
+        "    'compiler_revision': 'packaging-mask-probe.v1',\n"
+        "    'width': 2, 'height': 1, 'byte_count': 2,\n"
+        "    'editable_count': 1, 'protected_count': 1,\n"
+        "    'source_raster_sha256': raster_document['raster_sha256'],\n"
+        "}\n"
+        "mask_document = {\n"
+        "    'schema_version': moodboard.locality_contracts.MASK_SCHEMA_VERSION,\n"
+        "    **mask_projection,\n"
+        "    'mask_sha256': moodboard.locality_contracts.compute_mask_sha256(\n"
+        "        mask_projection, mask_bytes\n"
+        "    ),\n"
+        "}\n"
+        "moodboard.locality_contracts.validate_mask_artifact(mask_document, mask_bytes)\n"
         "module_path = pathlib.Path(sys.modules['moodboard.provider_artifacts'].__file__)\n"
         f"assert module_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
         "state_path = pathlib.Path(sys.modules['moodboard.attempt_state'].__file__)\n"
         f"assert state_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
         "journal_path = pathlib.Path(sys.modules['moodboard.attempt_journal'].__file__)\n"
         f"assert journal_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
+        "locality_path = pathlib.Path(sys.modules['moodboard.locality_contracts'].__file__)\n"
+        f"assert locality_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
     )
     completed = subprocess.run(
         [sys.executable, "-c", script],

@@ -22,6 +22,11 @@ from moodboard.judgment import (
     validate_judgment,
     validate_locality_blocking_pair,
 )
+from moodboard.locality_contracts import (
+    compute_exact_locality_input_digest,
+    compute_exact_locality_not_run_input_digest,
+    compute_structural_input_digest,
+)
 
 JsonObject = dict[str, Any]
 JsonPath = tuple[str | int, ...]
@@ -46,6 +51,7 @@ _RIGHT_RESULT_ID = "00000000-0000-4000-8000-000000000005"
 _JUDGMENT_ID = "00000000-0000-4000-8000-000000000006"
 _PREFERENCE_MODEL_ID = "00000000-0000-4000-8000-000000000007"
 _BOARD_ENTITY_ID = "00000000-0000-4000-8000-000000000008"
+_ATTEMPT_ID = "00000000-0000-4000-8000-00000000000a"
 
 
 def _digest(character: str) -> str:
@@ -59,6 +65,17 @@ def _artifact_ref(character: str) -> JsonObject:
 
 def _content_ref(character: str) -> JsonObject:
     return {"kind": "content_ref", "content_ref": _digest(character)}
+
+
+def _provider_output_payload_subject() -> JsonObject:
+    return {
+        "kind": "provider_output_payload",
+        "attempt_id": _ATTEMPT_ID,
+        "output_index": 0,
+        "provider_receipt_id": _digest("7"),
+        "content_ref": _digest("9"),
+        "content_sha256": _digest("8"),
+    }
 
 
 def _with_computed_identity(document: JsonObject) -> JsonObject:
@@ -190,7 +207,11 @@ def _valid_documents() -> dict[str, JsonObject]:
             },
             "authority": {
                 "schema_version": "moodboard.verifier.outside-mask-rgb-exact.v1",
-                "input_digest": _digest("2"),
+                "input_digest": compute_exact_locality_input_digest(
+                    source_raster_sha256=_digest("4"),
+                    output_raster_sha256=_digest("5"),
+                    mask_sha256=_digest("6"),
+                ),
                 "source_raster_sha256": _digest("4"),
                 "output_raster_sha256": _digest("5"),
                 "mask_sha256": _digest("6"),
@@ -390,7 +411,10 @@ def _valid_state_documents() -> dict[str, JsonObject]:
     }
     structural_pass["authority"] = {
         "schema_version": "moodboard.verifier.raster-structure.v1",
-        "input_digest": _digest("2"),
+        "input_digest": compute_structural_input_digest(
+            source_raster_sha256=_digest("4"),
+            output_content_sha256=_digest("8"),
+        ),
         "source_raster_sha256": _digest("4"),
         "output_content_sha256": _digest("8"),
         "output_raster_sha256": _digest("9"),
@@ -421,6 +445,8 @@ def _valid_state_documents() -> dict[str, JsonObject]:
     structural_failures = {
         "decode_failed": (False, None, None, None, None, None),
         "decode_limit_exceeded": (False, None, None, None, None, None),
+        "malformed_orientation": (True, 1, 1280, 960, "RGB", True),
+        "unsupported_format": (True, 1, 1280, 960, "RGB", True),
         "unsafe_decoder_warning": (True, 1, 1280, 960, "RGB", True),
         "unsupported_frame_count": (True, 2, 1280, 960, "RGB", True),
         "non_opaque": (True, 1, 1280, 960, "RGBA", False),
@@ -436,6 +462,7 @@ def _valid_state_documents() -> dict[str, JsonObject]:
         opaque,
     ) in structural_failures.items():
         document = copy.deepcopy(structural_pass)
+        document["subject"] = _provider_output_payload_subject()
         document["authority"]["output_raster_sha256"] = None
         document["result"] = {
             "state": "fail",
@@ -462,7 +489,11 @@ def _valid_state_documents() -> dict[str, JsonObject]:
     }
     not_run["authority"] = {
         "schema_version": "moodboard.verifier.outside-mask-rgb-exact.v1",
-        "input_digest": _digest("2"),
+        "input_digest": compute_exact_locality_not_run_input_digest(
+            source_raster_sha256=_digest("4"),
+            mask_sha256=_digest("6"),
+            blocking_structural_evidence_id=structural_fail["evidence_id"],
+        ),
         "source_raster_sha256": _digest("4"),
         "mask_sha256": _digest("6"),
         "blocking_structural_evidence_id": structural_fail["evidence_id"],
@@ -660,9 +691,7 @@ def test_human_judgment_uses_its_canonical_authority_uuid_not_a_document_digest(
         if field == "evidence_id":
             tampered["evidence_id"] = "00000000-0000-4000-8000-000000000009"
         else:
-            tampered["authority"]["judgment_id"] = (
-                "00000000-0000-4000-8000-000000000009"
-            )
+            tampered["authority"]["judgment_id"] = "00000000-0000-4000-8000-000000000009"
         with pytest.raises(JudgmentError):
             validate_judgment(tampered)
 
@@ -820,16 +849,130 @@ def test_exact_locality_rejects_impossible_measurement_triples(
         validate_judgment(document)
 
 
-def test_structural_failure_is_the_exact_authority_for_locality_not_run() -> None:
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("blocking_evidence", "exact structural-failure evidence id"),
+        ("subject", "same output payload or occurrence"),
+        ("source_raster", "same source raster"),
+    ),
+)
+def test_structural_failure_is_the_exact_authority_for_locality_not_run(
+    mutation: str, message: str
+) -> None:
     documents = _valid_state_documents()
     structural = documents["constraint_structural_fail"]
     locality = documents["constraint_not_run"]
 
     validate_locality_blocking_pair(structural, locality)
-    locality["authority"]["blocking_structural_evidence_id"] = _digest("0")
+    if mutation == "blocking_evidence":
+        locality["authority"]["blocking_structural_evidence_id"] = _digest("0")
+    elif mutation == "subject":
+        locality["subject"]["output_occurrence_id"] = _digest("d")
+    else:
+        locality["authority"]["source_raster_sha256"] = _digest("e")
+    locality["authority"]["input_digest"] = compute_exact_locality_not_run_input_digest(
+        source_raster_sha256=locality["authority"]["source_raster_sha256"],
+        mask_sha256=locality["authority"]["mask_sha256"],
+        blocking_structural_evidence_id=locality["authority"]["blocking_structural_evidence_id"],
+    )
     _refresh_machine_identity(locality)
-    with pytest.raises(JudgmentError):
+    with pytest.raises(JudgmentError, match=message):
         validate_locality_blocking_pair(structural, locality)
+
+
+def test_structurally_invalid_bytes_name_the_retained_provider_payload() -> None:
+    document = _valid_state_documents()["constraint_structural_unsupported_format"]
+
+    validate_judgment(document)
+    assert document["subject"]["kind"] == "provider_output_payload"
+
+
+@pytest.mark.parametrize("case", ("constraint_structural_pass", "constraint_structural_fail"))
+def test_structural_pass_and_dimension_mismatch_require_a_selectable_occurrence(
+    case: str,
+) -> None:
+    document = _valid_state_documents()[case]
+    document["subject"] = _provider_output_payload_subject()
+    _refresh_machine_identity(document)
+
+    with pytest.raises(JudgmentError):
+        validate_judgment(document)
+
+
+def test_structural_provider_payload_subject_binds_the_verified_content_digest() -> None:
+    document = _valid_state_documents()["constraint_structural_unsupported_format"]
+    document["authority"]["output_content_sha256"] = _digest("a")
+    document["authority"]["input_digest"] = compute_structural_input_digest(
+        source_raster_sha256=document["authority"]["source_raster_sha256"],
+        output_content_sha256=_digest("a"),
+    )
+    _refresh_machine_identity(document)
+
+    assert _schema_validator().is_valid(document)
+    with pytest.raises(JudgmentError, match="provider payload content"):
+        validate_judgment(document)
+
+
+def test_structural_failure_and_not_run_may_name_the_same_retained_provider_payload() -> None:
+    documents = _valid_state_documents()
+    structural = documents["constraint_structural_unsupported_format"]
+    structural["subject"] = _provider_output_payload_subject()
+    _refresh_machine_identity(structural)
+    locality = documents["constraint_not_run"]
+    locality["subject"] = copy.deepcopy(structural["subject"])
+    locality["authority"]["blocking_structural_evidence_id"] = structural["evidence_id"]
+    locality["authority"]["input_digest"] = compute_exact_locality_not_run_input_digest(
+        source_raster_sha256=locality["authority"]["source_raster_sha256"],
+        mask_sha256=locality["authority"]["mask_sha256"],
+        blocking_structural_evidence_id=structural["evidence_id"],
+    )
+    _refresh_machine_identity(locality)
+
+    validate_locality_blocking_pair(structural, locality)
+
+
+def test_measured_exact_locality_requires_a_selectable_output_occurrence() -> None:
+    document = _valid_documents()["constraint_verification"]
+    document["subject"] = _provider_output_payload_subject()
+    _refresh_machine_identity(document)
+
+    with pytest.raises(JudgmentError):
+        validate_judgment(document)
+
+
+@pytest.mark.parametrize("decoded_mode", ("L", "LA", "RGB", "RGBA"))
+def test_structural_pass_records_supported_decoded_mode_before_rgb_compilation(
+    decoded_mode: str,
+) -> None:
+    document = _valid_state_documents()["constraint_structural_pass"]
+    document["result"]["measurements"]["output_mode"] = decoded_mode
+    _refresh_machine_identity(document)
+
+    validate_judgment(document)
+
+
+@pytest.mark.parametrize("decoded_mode", ("P", "CMYK", "other"))
+def test_structural_pass_rejects_a_mode_outside_the_canonical_compiler_contract(
+    decoded_mode: str,
+) -> None:
+    document = _valid_state_documents()["constraint_structural_pass"]
+    document["result"]["measurements"]["output_mode"] = decoded_mode
+    _refresh_machine_identity(document)
+
+    with pytest.raises(JudgmentError):
+        validate_judgment(document)
+
+
+@pytest.mark.parametrize("decoded_mode", ("P", "CMYK", "other"))
+def test_unsupported_decoded_mode_remains_recordable_as_a_structural_failure(
+    decoded_mode: str,
+) -> None:
+    document = _valid_state_documents()["constraint_structural_unsupported_color_contract"]
+    document["result"]["measurements"]["output_mode"] = decoded_mode
+    _refresh_machine_identity(document)
+
+    validate_judgment(document)
 
 
 def test_structural_verifier_state_matches_its_measured_raster() -> None:
@@ -850,6 +993,8 @@ def test_structural_verifier_state_matches_its_measured_raster() -> None:
 @pytest.mark.parametrize(
     "case",
     (
+        "constraint_structural_malformed_orientation",
+        "constraint_structural_unsupported_format",
         "constraint_structural_unsafe_decoder_warning",
         "constraint_structural_unsupported_frame_count",
         "constraint_structural_non_opaque",
@@ -954,9 +1099,7 @@ def test_board_judgment_accepts_exact_measurements_from_both_real_abstention_pro
         validate_judgment(document)
 
 
-@pytest.mark.parametrize(
-    "kind", ("source_similarity", "human_comparison", "preference_prediction")
-)
+@pytest.mark.parametrize("kind", ("source_similarity", "human_comparison", "preference_prediction"))
 def test_descriptor_model_key_must_bind_the_exact_fingerprint(kind: str) -> None:
     document = _valid_documents()[kind]
     scope = document["authority"] if kind == "source_similarity" else document["authority"]["scope"]
@@ -999,9 +1142,9 @@ def test_source_board_and_prediction_cross_field_invariants_fail_closed() -> Non
         validate_judgment(intent)
 
     duplicate_source = _valid_documents()["source_similarity"]
-    duplicate_source["result"]["rows"][1]["content_ref"] = duplicate_source["result"][
-        "rows"
-    ][0]["content_ref"]
+    duplicate_source["result"]["rows"][1]["content_ref"] = duplicate_source["result"]["rows"][0][
+        "content_ref"
+    ]
     _refresh_machine_identity(duplicate_source)
     with pytest.raises(JudgmentError):
         validate_judgment(duplicate_source)
@@ -1034,9 +1177,7 @@ def test_source_similarity_rejects_score_inversion_but_accepts_ties() -> None:
         validate_judgment(inverted)
 
     tied = _valid_documents()["source_similarity"]
-    tied["result"]["rows"][1]["source_similarity"] = tied["result"]["rows"][0][
-        "source_similarity"
-    ]
+    tied["result"]["rows"][1]["source_similarity"] = tied["result"]["rows"][0]["source_similarity"]
     _refresh_machine_identity(tied)
     validate_judgment(tied)
 

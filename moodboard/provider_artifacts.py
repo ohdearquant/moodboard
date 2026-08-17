@@ -90,6 +90,8 @@ _REGISTRY_PATHS = (
     _SCHEMA_DIR / "intent_packet_v1.schema.json",
     _SCHEMA_DIR / "operation_localized_edit_v1.schema.json",
     _SCHEMA_DIR / "verification_policy_v1.schema.json",
+    _SCHEMA_DIR / "raster_srgb_u8_v1.schema.json",
+    _SCHEMA_DIR / "mask_u8_v1.schema.json",
 )
 _IDENTITY_FIELDS = {
     EVENT_VERSION: "attempt_event_id",

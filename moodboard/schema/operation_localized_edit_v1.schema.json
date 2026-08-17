@@ -33,30 +33,6 @@
       "maxLength": 256,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
     },
-    "sourceRaster": {
-      "type": "object",
-      "required": [
-        "schema_version",
-        "compiler_revision",
-        "width",
-        "height",
-        "mode",
-        "byte_count",
-        "source_content_sha256",
-        "raster_sha256"
-      ],
-      "properties": {
-        "schema_version": { "const": "moodboard.raster.srgb-u8.v1" },
-        "compiler_revision": { "$ref": "#/$defs/versionToken" },
-        "width": { "$ref": "#/$defs/dimension" },
-        "height": { "$ref": "#/$defs/dimension" },
-        "mode": { "const": "RGB" },
-        "byte_count": { "$ref": "#/$defs/safeCount" },
-        "source_content_sha256": { "$ref": "#/$defs/digest" },
-        "raster_sha256": { "$ref": "#/$defs/digest" }
-      },
-      "additionalProperties": false
-    },
     "normalizedCoordinateStrings": {
       "type": "object",
       "required": ["left", "top", "right", "bottom"],
@@ -87,40 +63,6 @@
       },
       "additionalProperties": false
     },
-    "mask": {
-      "type": "object",
-      "required": [
-        "schema_version",
-        "compiler_revision",
-        "width",
-        "height",
-        "byte_count",
-        "editable_count",
-        "protected_count",
-        "source_raster_sha256",
-        "mask_sha256"
-      ],
-      "properties": {
-        "schema_version": { "const": "moodboard.mask.u8.v1" },
-        "compiler_revision": { "$ref": "#/$defs/versionToken" },
-        "width": { "$ref": "#/$defs/dimension" },
-        "height": { "$ref": "#/$defs/dimension" },
-        "byte_count": { "$ref": "#/$defs/safeCount" },
-        "editable_count": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 9007199254740991
-        },
-        "protected_count": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 9007199254740991
-        },
-        "source_raster_sha256": { "$ref": "#/$defs/digest" },
-        "mask_sha256": { "$ref": "#/$defs/digest" }
-      },
-      "additionalProperties": false
-    },
     "payload": {
       "type": "object",
       "required": [
@@ -132,9 +74,13 @@
         "compositor_policy"
       ],
       "properties": {
-        "source_raster": { "$ref": "#/$defs/sourceRaster" },
+        "source_raster": {
+          "$ref": "https://github.com/ohdearquant/moodboard/schema/raster_srgb_u8_v1.schema.json"
+        },
         "region": { "$ref": "#/$defs/region" },
-        "mask": { "$ref": "#/$defs/mask" },
+        "mask": {
+          "$ref": "https://github.com/ohdearquant/moodboard/schema/mask_u8_v1.schema.json"
+        },
         "raw_diagnostic_verifiers": {
           "type": "array",
           "maxItems": 0,
