@@ -210,6 +210,9 @@ surface is deliberately pixel-only:
 
 ```python
 compile_canonical_raster(payload, *, source_content_sha256, compiler_manifest=...)
+compile_provider_output_media(
+    provider_receipt, *, output_index, output_bytes, compiler_manifest=...
+)
 compile_rectangle_mask(source_raster, *, left, top, right, bottom)
 verify_output_structure(
     source_raster,
@@ -256,7 +259,9 @@ explicit orientation 1..8 are checked along with effective opacity. The observed
 animation/multi-picture data,
 trailing data, malformed orientation, and decoder warnings fail closed. No XMP orientation
 fallback is consulted. Post-scan JPEG application metadata and unregistered PNG color/HDR chunks
-are rejected rather than delegated to a decoder's first/last-chunk policy.
+are rejected rather than delegated to a decoder's first/last-chunk policy. PNG `tEXt`, `zTXt`,
+and `iTXt` chunks are outside the profile so compressed metadata cannot inflate beyond the
+decoder's explicit work bounds.
 
 The one accepted embedded profile is a 588-byte sRGB profile produced by LittleCMS 2.19's
 built-in sRGB constructor and normalized only by setting its ICC creation date to
@@ -274,6 +279,16 @@ structural failure and a paired exact-locality `not_run`. A compiled pass or rep
 mismatch requires the complete eligible `generator_raw` output occurrence and cross-binds its
 receipt, original media, measured media, decoder revision, and occurrence identity. A bare
 occurrence id is never enough.
+
+`compile_provider_output_media` is the non-circular receipt-bound seam used before an occurrence
+exists. It accepts exact built-in bytes only, rechecks the receipt row's BLAKE3 ContentRef,
+SHA-256, byte count, index, and optional MIME claim, then returns frozen detected MIME,
+post-orientation dimensions, observed source mode, frame/active/bounded facts, and the canonical
+RGB raster. It never accepts caller-supplied measurements. `verify_output_structure` reuses this
+same seam after the durable occurrence exists.
+The frozen result fields are `decoder_revision`, `content_ref`, `content_sha256`, `byte_count`,
+`detected_mime`, `oriented_width`, `oriented_height`, `observed_mode`, `frame_count`,
+`active_content`, `bounded`, and a repr-hidden `canonical_raster`.
 
 `verify_outside_mask_rgb_exact` additionally requires the structural pass for the same eligible
 occurrence and the same source/output raster identities. It scans the complete protected set,
@@ -609,16 +624,22 @@ storage boundary.
 
 Generic append deliberately rejects `submitted`, `response_received`, and `succeeded`. Only the
 atomic claim operation may create `submitted`, and only `publish_provider_response` may create
-`response_received`. `succeeded` remains unavailable until the separate media/verifier terminal
-gate can prove admission, lineage, MIME, dimensions, and every output occurrence in the same
-terminal transaction. A topologically legal reducer event is not enough. Journal schema v2 is a
-pre-release exact schema with no v1 migration; callers recreate a fresh owner-only journal. Its
+`response_received`. Only `publish_provider_success` may create `succeeded`; it loads stored
+response bytes and the claim-owned capability itself, compiles outputs sequentially outside the
+writer transaction, caps cumulative decoded RGB work, and derives eligible `generator_raw`
+occurrences. It persists canonical packet and normalized-request bytes so restart-time integrity
+can rerun both byte-derived media admission and the complete relational bundle validator. The
+ordered occurrence set, success-gate row, and derived terminal event commit in one
+`BEGIN IMMEDIATE`; any missing, extra, reordered, or drifted member is corruption. Exact replay is
+checked before CAS and returns the stored event timestamp. A topologically legal reducer event is
+not enough. Journal schema v3 is a pre-release exact schema with no migration; callers recreate a
+fresh owner-only journal. Its
 64 MiB database cap and 40 MiB per-response retained-payload ceiling (24 MiB raw response plus
 16 MiB aggregate outputs, excluding receipt/event/SQLite overhead) intentionally support the
-registered single-output P0 route, not arbitrary multi-output retention. This change closes the
-durable CAS and response-publication portions of ADR-0014 acceptance condition 3 and the
-non-idempotent local authorization portion of condition 4; reconciliation, retry/fallback
-attempts, media admission, and evidence-gated success remain open single-concern changes.
+registered single-output P0 route, not arbitrary multi-output retention. The journal closes the
+durable CAS/response-publication portions of ADR-0014 condition 3, the non-idempotent local
+authorization portion of condition 4, and the byte/provenance/lineage-before-success requirement
+in condition 7. Reconciliation and retry/fallback attempts remain open single-concern changes.
 
 The 64 MiB logical database page cap is hard; SQLite's `journal_size_limit` is not a hard physical
 WAL cap while an external reader pins the checkpoint horizon. Journal-owned reads are short-lived,
@@ -685,10 +706,10 @@ That single transaction no-clobber stores the private raw response when retentio
 every output payload, the canonical receipt, and the derived `response_received` event. There is
 no caller-supplied publisher that can authorize the state transition, and no separate event append
 window. The adapter never appends `succeeded` and never mints an output occurrence. Media admission
-still needs a non-circular output-occurrence constructor plus the atomic terminal evidence gate.
-Consequently this slice advances ADR-0014 conditions 1, 3, 4, 6, and 8 but does not claim condition
-7, completed provider lifecycle, retry/fallback, or repository-wide secret scanning. Khive and
-Lattice are unchanged.
+and terminal publication are owned by `provider_media.py` plus
+`AttemptJournal.publish_provider_success` after response evidence is durable. Consequently the
+adapter itself still advances conditions 1, 3, 4, 6, and 8 without claiming completed provider
+lifecycle, retry/fallback, or repository-wide secret scanning. Khive and Lattice are unchanged.
 
 `openrouter_https_transport` is the production fixed-origin helper for
 `https://openrouter.ai/api/v1/images`. It sets only the application-controlled Authorization,

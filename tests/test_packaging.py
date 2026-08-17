@@ -216,7 +216,7 @@ def test_the_compositor_schema_registry_ships_byte_for_byte(tmp_path):
 
 
 def test_installed_artifact_validators_resolve_their_registries_offline(tmp_path):
-    """Import and execute provider, locality, and compositor code from wheel bytes."""
+    """Import and execute provider, media, locality, and compositor code from wheel bytes."""
 
     wheel = _build_wheel(tmp_path / "dist")
     installed = tmp_path / "installed"
@@ -248,6 +248,7 @@ def test_installed_artifact_validators_resolve_their_registries_offline(tmp_path
         "import moodboard.locality\n"
         "import moodboard.locality_contracts\n"
         "import moodboard.openrouter\n"
+        "import moodboard.provider_media\n"
         "from moodboard.provider_artifacts import validate_provider_artifact\n"
         f"document = json.loads({json.dumps(json.dumps(document))})\n"
         "validate_provider_artifact(document)\n"
@@ -317,6 +318,8 @@ def test_installed_artifact_validators_resolve_their_registries_offline(tmp_path
         f"assert compositor_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
         "openrouter_path = pathlib.Path(sys.modules['moodboard.openrouter'].__file__)\n"
         f"assert openrouter_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
+        "provider_media_path = pathlib.Path(sys.modules['moodboard.provider_media'].__file__)\n"
+        f"assert provider_media_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
     )
     completed = subprocess.run(
         [sys.executable, "-c", script],

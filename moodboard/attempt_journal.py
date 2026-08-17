@@ -5,8 +5,8 @@ attempt.  It does not perform provider I/O and does not claim provider execution
 billing, or delivery exactly once.  A dispatch claim and its ``submitted`` event
 are committed in one SQLite transaction before the caller may touch the network.
 
-Terminal ``succeeded`` events are deliberately rejected here until the separate
-media/evidence gate can durably prove every referenced output occurrence.
+Terminal ``succeeded`` events are admitted only through the media/evidence gate,
+which proves and stores every referenced output occurrence in the same transaction.
 """
 
 from __future__ import annotations
@@ -33,15 +33,19 @@ from blake3 import blake3
 
 from moodboard.attempt_state import AttemptState, AttemptStateError, reduce_attempt_events
 from moodboard.contracts import (
-    ContractIdentityError,
     canonical_json_bytes,
     is_canonical_utc_timestamp,
 )
+from moodboard.intent_packet import IntentPacket
+from moodboard.intent_packet import from_json_dict as intent_packet_from_json
+from moodboard.intent_packet import to_json_dict as intent_packet_to_json
 from moodboard.provider_artifacts import (
     EVENT_VERSION,
     GenerationAttempt,
     GenerationAttemptEvent,
     GenerationRun,
+    NormalizedProviderRequest,
+    OutputOccurrence,
     ProviderArtifact,
     ProviderArtifactError,
     ProviderCapabilitySnapshot,
@@ -49,6 +53,11 @@ from moodboard.provider_artifacts import (
     from_json_dict,
     seal_provider_artifact,
     to_json_dict,
+    validate_artifact_bundle,
+)
+from moodboard.provider_media import (
+    ProviderMediaAdmissionError,
+    build_provider_success_candidates,
 )
 
 __all__ = [
@@ -64,15 +73,18 @@ __all__ = [
     "JournalVersionError",
     "ProviderEvidenceConflictError",
     "ProviderResponsePublishResult",
+    "ProviderSuccessConflictError",
+    "ProviderSuccessPublishResult",
     "RegistrationResult",
     "StaleAttemptHeadError",
     "StoredProviderResponse",
+    "StoredProviderSuccess",
 ]
 
 ArtifactInput: TypeAlias = ProviderArtifact | Mapping[str, Any]
 
 _APPLICATION_ID: Final = 0x4D424A31
-_USER_VERSION: Final = 2
+_USER_VERSION: Final = 3
 _MAX_DATABASE_BYTES: Final = 64 * 1024 * 1024
 _MAX_DOCUMENT_BYTES: Final = 2 * 1024 * 1024
 _MAX_WIRE_REQUEST_BYTES: Final = 32 * 1024 * 1024
@@ -100,6 +112,8 @@ _TABLES: Final = {
     "non_idempotent_dispatch_claims",
     "provider_responses",
     "provider_response_outputs",
+    "provider_successes",
+    "provider_output_occurrences",
 }
 _TRIGGERS: Final = {
     f"{table}_{operation}_immutable" for table in _TABLES for operation in ("update", "delete")
@@ -159,6 +173,26 @@ _EXPECTED_COLUMNS: Final = {
         ("byte_count", "INTEGER"),
         ("payload_bytes", "BLOB"),
     ),
+    "provider_successes": (
+        ("attempt_id", "TEXT"),
+        ("provider_receipt_id", "TEXT"),
+        ("succeeded_event_id", "TEXT"),
+        ("intent_packet_id", "TEXT"),
+        ("normalized_request_id", "TEXT"),
+        ("output_count", "INTEGER"),
+        ("intent_packet_sha256", "TEXT"),
+        ("intent_packet_json", "BLOB"),
+        ("normalized_request_sha256", "TEXT"),
+        ("normalized_request_json", "BLOB"),
+    ),
+    "provider_output_occurrences": (
+        ("attempt_id", "TEXT"),
+        ("output_index", "INTEGER"),
+        ("provider_receipt_id", "TEXT"),
+        ("output_occurrence_id", "TEXT"),
+        ("canonical_sha256", "TEXT"),
+        ("document_json", "BLOB"),
+    ),
 }
 _CLAIM_KEYS: Final = frozenset(
     {
@@ -214,6 +248,10 @@ class ProviderEvidenceConflictError(AttemptJournalError):
     """An attempt already has different immutable provider-response evidence."""
 
 
+class ProviderSuccessConflictError(AttemptJournalError):
+    """An attempt cannot commit or replay the requested terminal success evidence."""
+
+
 @dataclass(frozen=True, slots=True)
 class RegistrationResult:
     created: bool
@@ -254,6 +292,47 @@ class ProviderResponsePublishResult:
     receipt: ProviderReceipt
     event: GenerationAttemptEvent
     state: AttemptState
+
+
+@dataclass(frozen=True, slots=True)
+class StoredProviderSuccess:
+    """One fully revalidated terminal success package."""
+
+    occurrences: tuple[OutputOccurrence, ...]
+    event: GenerationAttemptEvent
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderSuccessPublishResult:
+    """Outcome of an atomic terminal-success publication or exact replay."""
+
+    created: bool
+    occurrences: tuple[OutputOccurrence, ...]
+    event: GenerationAttemptEvent
+    state: AttemptState
+
+
+@dataclass(frozen=True, slots=True)
+class _LoadedProviderSuccess:
+    stored: StoredProviderSuccess
+    packet: IntentPacket = field(repr=False)
+    normalized_request: NormalizedProviderRequest = field(repr=False)
+    run: GenerationRun
+    attempt: GenerationAttempt
+    capability: ProviderCapabilitySnapshot
+    response: StoredProviderResponse
+    prior_events: tuple[GenerationAttemptEvent, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderSuccessSnapshot:
+    run: GenerationRun
+    attempt: GenerationAttempt
+    capability: ProviderCapabilitySnapshot
+    response: StoredProviderResponse
+    events: tuple[GenerationAttemptEvent, ...]
+    state: AttemptState
+    success: _LoadedProviderSuccess | None
 
 
 def _reject_json_constant(value: str) -> None:
@@ -304,16 +383,19 @@ def _tree_depth_and_nodes(value: Any) -> tuple[int, int]:
 class _SecretScanner:
     def __init__(self, forbidden_secrets: Iterable[str]) -> None:
         variants: set[bytes] = set()
+        values: tuple[str, ...] | None = None
         try:
             values = tuple(forbidden_secrets)
-        except (RecursionError, TypeError) as error:
-            raise JournalSecurityError(
-                "forbidden_secrets must be a bounded string iterable"
-            ) from error
+        except Exception:
+            # Raise outside the handler so hostile iterators cannot survive as exception
+            # context and leak their values through telemetry.
+            values = None
+        if values is None:
+            raise JournalSecurityError("forbidden_secrets must be a bounded string iterable")
         if len(values) > 32:
             raise JournalSecurityError("too many active secret sentinels")
         for value in values:
-            if not isinstance(value, str) or not 8 <= len(value) <= 8192:
+            if type(value) is not str or not 8 <= len(value) <= 8192:
                 raise JournalSecurityError("active secret sentinels must be bounded strings")
             raw = value.encode("utf-8")
             standard_base64 = base64.b64encode(raw)
@@ -341,10 +423,14 @@ class _SecretScanner:
                 stack.extend(current.values())
             elif isinstance(current, (list, tuple)):
                 stack.extend(current)
-            elif isinstance(current, str):
+            elif type(current) is str:
                 self.scan_bytes(current.encode("utf-8", errors="strict"))
-            elif isinstance(current, bytes):
+            elif isinstance(current, str):
+                raise JournalSecurityError("journal string values must use the exact built-in type")
+            elif type(current) is bytes:
                 self.scan_bytes(current)
+            elif isinstance(current, bytes):
+                raise JournalSecurityError("journal byte values must use the exact built-in type")
 
     def scan_bytes(self, raw: bytes) -> None:
         if type(raw) is not bytes or len(raw) > _MAX_DOCUMENT_BYTES:
@@ -362,6 +448,16 @@ class _SecretScanner:
         text = raw.decode("utf-8", errors="ignore")
         if any(pattern.search(text) for pattern in _HIGH_CONFIDENCE_SECRET_PATTERNS):
             raise JournalSecurityError("journal input contains a credential-like value")
+
+
+def _scan_value_safely(scanner: _SecretScanner, value: Any, message: str) -> None:
+    failed = False
+    try:
+        scanner.scan(value)
+    except Exception:
+        failed = True
+    if failed:
+        raise JournalSecurityError(message)
 
 
 def _validate_uuid(value: str, field: str) -> None:
@@ -405,22 +501,30 @@ def _canonical_artifact(
     | type[GenerationAttempt]
     | type[GenerationAttemptEvent]
     | type[ProviderCapabilitySnapshot]
+    | type[NormalizedProviderRequest]
     | type[ProviderReceipt],
     scanner: _SecretScanner,
 ) -> tuple[ProviderArtifact, bytes, str]:
-    if isinstance(
-        value,
-        (
-            GenerationRun,
-            GenerationAttempt,
-            GenerationAttemptEvent,
-            ProviderCapabilitySnapshot,
-            ProviderReceipt,
-        ),
-    ):
-        scanner.scan({field.name: getattr(value, field.name) for field in fields(value)})
-    else:
-        scanner.scan(value)
+    scan_failed = False
+    try:
+        if isinstance(
+            value,
+            (
+                GenerationRun,
+                GenerationAttempt,
+                GenerationAttemptEvent,
+                ProviderCapabilitySnapshot,
+                NormalizedProviderRequest,
+                ProviderReceipt,
+            ),
+        ):
+            scanner.scan({field.name: getattr(value, field.name) for field in fields(value)})
+        else:
+            scanner.scan(value)
+    except Exception:
+        scan_failed = True
+    if scan_failed:
+        raise JournalSecurityError("journal artifact could not be safely scanned")
     artifact: ProviderArtifact | None = None
     canonical: bytes | None = None
     try:
@@ -436,13 +540,7 @@ def _canonical_artifact(
             raise TypeError("wrong provider-artifact branch")
         _validate_artifact_timestamp(artifact)
         canonical = canonical_json_bytes(to_json_dict(artifact))
-    except (
-        ContractIdentityError,
-        ProviderArtifactError,
-        RecursionError,
-        TypeError,
-        ValueError,
-    ):
+    except Exception:
         # Raise only after the caught validator exception leaves scope.  Some third-party
         # validation errors quote rejected values; retaining them as __cause__/__context__ would
         # defeat the journal's secret-safe public failure surface.
@@ -454,6 +552,41 @@ def _canonical_artifact(
     if len(canonical) > _MAX_DOCUMENT_BYTES:
         raise JournalSecurityError("journal artifact exceeds the persistence bound")
     return artifact, canonical, hashlib.sha256(canonical).hexdigest()
+
+
+def _canonical_intent_packet(
+    value: IntentPacket | Mapping[str, Any], scanner: _SecretScanner
+) -> tuple[IntentPacket, bytes, str]:
+    scan_failed = False
+    try:
+        if isinstance(value, IntentPacket):
+            scanner.scan({field.name: getattr(value, field.name) for field in fields(value)})
+        else:
+            scanner.scan(value)
+    except Exception:
+        scan_failed = True
+    if scan_failed:
+        raise JournalSecurityError("intent packet could not be safely scanned")
+    packet: IntentPacket | None = None
+    canonical: bytes | None = None
+    try:
+        if isinstance(value, IntentPacket):
+            packet = intent_packet_from_json(intent_packet_to_json(value))
+        elif isinstance(value, Mapping):
+            packet = intent_packet_from_json(copy.deepcopy(dict(value)))
+        if packet is not None:
+            canonical = canonical_json_bytes(intent_packet_to_json(packet))
+    except Exception:
+        packet = None
+        canonical = None
+    if packet is None or canonical is None:
+        raise ProviderSuccessConflictError(
+            "intent packet is invalid for terminal provider success"
+        ) from None
+    scanner.scan_bytes(canonical)
+    if len(canonical) > _MAX_DOCUMENT_BYTES:
+        raise JournalSecurityError("intent packet exceeds the persistence bound")
+    return packet, canonical, hashlib.sha256(canonical).hexdigest()
 
 
 def _path_components(path: Path) -> Iterable[Path]:
@@ -585,6 +718,36 @@ CREATE TABLE provider_response_outputs (
     UNIQUE (provider_receipt_id, output_index),
     FOREIGN KEY (attempt_id, provider_receipt_id)
       REFERENCES provider_responses(attempt_id, provider_receipt_id)
+);
+CREATE TABLE provider_successes (
+    attempt_id TEXT PRIMARY KEY,
+    provider_receipt_id TEXT NOT NULL UNIQUE,
+    succeeded_event_id TEXT NOT NULL UNIQUE,
+    intent_packet_id TEXT NOT NULL,
+    normalized_request_id TEXT NOT NULL,
+    output_count INTEGER NOT NULL CHECK (output_count BETWEEN 1 AND 8),
+    intent_packet_sha256 TEXT NOT NULL,
+    intent_packet_json BLOB NOT NULL,
+    normalized_request_sha256 TEXT NOT NULL,
+    normalized_request_json BLOB NOT NULL,
+    UNIQUE (attempt_id, provider_receipt_id),
+    FOREIGN KEY (attempt_id, provider_receipt_id)
+      REFERENCES provider_responses(attempt_id, provider_receipt_id),
+    FOREIGN KEY (attempt_id, succeeded_event_id)
+      REFERENCES attempt_events(attempt_id, attempt_event_id)
+);
+CREATE TABLE provider_output_occurrences (
+    attempt_id TEXT NOT NULL,
+    output_index INTEGER NOT NULL CHECK (output_index BETWEEN 0 AND 7),
+    provider_receipt_id TEXT NOT NULL,
+    output_occurrence_id TEXT NOT NULL UNIQUE,
+    canonical_sha256 TEXT NOT NULL,
+    document_json BLOB NOT NULL,
+    PRIMARY KEY (attempt_id, output_index),
+    FOREIGN KEY (attempt_id, provider_receipt_id)
+      REFERENCES provider_successes(attempt_id, provider_receipt_id),
+    FOREIGN KEY (attempt_id, output_index)
+      REFERENCES provider_response_outputs(attempt_id, output_index)
 );
 """
 
@@ -788,7 +951,7 @@ class AttemptJournal:
         tables = {row["name"] for row in objects if row["type"] == "table"}
         triggers = {row["name"] for row in objects if row["type"] == "trigger"}
         if tables != _TABLES or triggers != _TRIGGERS:
-            raise JournalCorruptionError("attempt journal schema does not match version two")
+            raise JournalCorruptionError("attempt journal schema does not match version three")
         actual_schema = {(row["type"], row["name"]): row["sql"] for row in objects}
         if actual_schema != _expected_schema_objects():
             raise JournalCorruptionError("attempt journal schema SQL fingerprint drifted")
@@ -798,7 +961,7 @@ class AttemptJournal:
                 for row in connection.execute(f'PRAGMA table_info("{table}")').fetchall()
             )
             if actual != expected:
-                raise JournalCorruptionError("attempt journal columns do not match version two")
+                raise JournalCorruptionError("attempt journal columns do not match version three")
 
     def _begin(self) -> sqlite3.Connection:
         with self._bootstrap_lock():
@@ -881,9 +1044,11 @@ class AttemptJournal:
         | type[GenerationAttempt]
         | type[GenerationAttemptEvent]
         | type[ProviderCapabilitySnapshot]
-        | type[ProviderReceipt],
+        | type[NormalizedProviderRequest]
+        | type[ProviderReceipt]
+        | type[OutputOccurrence],
     ) -> ProviderArtifact:
-        if not isinstance(raw, bytes) or len(raw) > _MAX_DOCUMENT_BYTES:
+        if type(raw) is not bytes or len(raw) > _MAX_DOCUMENT_BYTES:
             raise JournalCorruptionError("stored artifact exceeds its byte bound")
         if hashlib.sha256(raw).hexdigest() != expected_sha256:
             raise JournalCorruptionError("stored artifact digest does not match")
@@ -1046,10 +1211,6 @@ class AttemptJournal:
                 or artifact.state != row["state"]
             ):
                 raise JournalCorruptionError("attempt event row identity drifted")
-            if artifact.state == "succeeded":
-                raise JournalCorruptionError(
-                    "stored succeeded event has no durable evidence-gate record"
-                )
             events.append(artifact)
         return events
 
@@ -1391,6 +1552,224 @@ class AttemptJournal:
             )
         return self._load_provider_response(connection, attempt, events, row)
 
+    def _decode_intent_packet(self, raw: bytes, expected_sha256: str) -> IntentPacket:
+        if type(raw) is not bytes or not 1 <= len(raw) <= _MAX_DOCUMENT_BYTES:
+            raise JournalCorruptionError("stored intent packet exceeds its byte bound")
+        if hashlib.sha256(raw).hexdigest() != expected_sha256:
+            raise JournalCorruptionError("stored intent packet digest does not match")
+        try:
+            packet = intent_packet_from_json(self._decode_canonical_json(raw))
+        except Exception:
+            raise JournalCorruptionError("stored intent packet does not revalidate") from None
+        return packet
+
+    def _load_provider_success(
+        self,
+        connection: sqlite3.Connection,
+        attempt: GenerationAttempt,
+        events: list[GenerationAttemptEvent],
+        response: StoredProviderResponse,
+        row: sqlite3.Row,
+    ) -> _LoadedProviderSuccess:
+        packet = self._decode_intent_packet(
+            self._row_blob(row, "intent_packet_json"), row["intent_packet_sha256"]
+        )
+        normalized_artifact = self._decode_artifact(
+            self._row_blob(row, "normalized_request_json"),
+            row["normalized_request_sha256"],
+            NormalizedProviderRequest,
+        )
+        assert isinstance(normalized_artifact, NormalizedProviderRequest)
+        normalized = normalized_artifact
+        if (
+            row["attempt_id"] != attempt.attempt_id
+            or row["provider_receipt_id"] != response.receipt.provider_receipt_id
+            or row["intent_packet_id"] != packet.intent_packet_id
+            or row["normalized_request_id"] != normalized.normalized_request_id
+            or row["normalized_request_id"] != attempt.normalized_request_id
+        ):
+            raise JournalCorruptionError("provider success authority row identity drifted")
+
+        succeeded = [event for event in events if event.state == "succeeded"]
+        if len(succeeded) != 1 or row["succeeded_event_id"] != succeeded[0].attempt_event_id:
+            raise JournalCorruptionError("provider success evidence and event do not coexist")
+        event = succeeded[0]
+        occurrence_rows = connection.execute(
+            "SELECT attempt_id, output_index, provider_receipt_id, output_occurrence_id, "
+            "canonical_sha256, document_json FROM provider_output_occurrences "
+            "WHERE attempt_id=? ORDER BY output_index LIMIT 9",
+            (attempt.attempt_id,),
+        ).fetchall()
+        if (
+            not isinstance(row["output_count"], int)
+            or row["output_count"] != len(occurrence_rows)
+            or len(occurrence_rows) != len(response.output_bytes)
+            or not 1 <= len(occurrence_rows) <= _MAX_PROVIDER_OUTPUTS
+        ):
+            raise JournalCorruptionError("provider success occurrence count drifted")
+        occurrences: list[OutputOccurrence] = []
+        for index, occurrence_row in enumerate(occurrence_rows):
+            artifact = self._decode_artifact(
+                self._row_blob(occurrence_row, "document_json"),
+                occurrence_row["canonical_sha256"],
+                OutputOccurrence,
+            )
+            assert isinstance(artifact, OutputOccurrence)
+            if (
+                occurrence_row["attempt_id"] != attempt.attempt_id
+                or occurrence_row["output_index"] != index
+                or occurrence_row["provider_receipt_id"] != response.receipt.provider_receipt_id
+                or occurrence_row["output_occurrence_id"] != artifact.output_occurrence_id
+                or artifact.attempt_id != attempt.attempt_id
+                or artifact.output_index != index
+            ):
+                raise JournalCorruptionError("provider output occurrence row identity drifted")
+            occurrences.append(artifact)
+
+        claim_row = self._verify_claim_for_attempt(connection, attempt, events)
+        if claim_row is None:
+            raise JournalCorruptionError("provider success has no immutable dispatch capability")
+        capability_artifact = self._decode_artifact(
+            self._row_blob(claim_row, "capability_json"),
+            claim_row["capability_sha256"],
+            ProviderCapabilitySnapshot,
+        )
+        assert isinstance(capability_artifact, ProviderCapabilitySnapshot)
+        run = self._load_run(connection, attempt.generation_run_id)
+        prior_events = events[: event.sequence - 1]
+        try:
+            validate_artifact_bundle(
+                [
+                    run,
+                    capability_artifact,
+                    normalized,
+                    attempt,
+                    *prior_events,
+                    event,
+                    response.receipt,
+                    *occurrences,
+                ],
+                intent_packet=packet,
+            )
+        except ProviderArtifactError:
+            raise JournalCorruptionError(
+                "stored provider success no longer satisfies its authority chain"
+            ) from None
+        stored = StoredProviderSuccess(tuple(occurrences), event)
+        return _LoadedProviderSuccess(
+            stored,
+            packet,
+            normalized,
+            run,
+            attempt,
+            capability_artifact,
+            response,
+            tuple(prior_events),
+        )
+
+    @staticmethod
+    def _deep_verify_provider_success(
+        loaded: _LoadedProviderSuccess,
+    ) -> StoredProviderSuccess:
+        """Re-derive byte-level media facts without holding any SQLite transaction."""
+
+        try:
+            derived = build_provider_success_candidates(
+                intent_packet=loaded.packet,
+                generation_run=loaded.run,
+                attempt=loaded.attempt,
+                capability=loaded.capability,
+                normalized_request=loaded.normalized_request,
+                receipt=loaded.response.receipt,
+                prior_events=loaded.prior_events,
+                output_bytes=loaded.response.output_bytes,
+                succeeded_at=loaded.stored.event.recorded_at,
+            )
+        except ProviderMediaAdmissionError:
+            raise JournalCorruptionError(
+                "stored provider success no longer satisfies media admission"
+            ) from None
+        if derived.event != loaded.stored.event or derived.occurrences != loaded.stored.occurrences:
+            raise JournalCorruptionError("stored provider success bytes do not rederive exactly")
+        return loaded.stored
+
+    def _verify_provider_success_for_attempt(
+        self,
+        connection: sqlite3.Connection,
+        attempt: GenerationAttempt,
+        events: list[GenerationAttemptEvent],
+        response: StoredProviderResponse | None,
+    ) -> _LoadedProviderSuccess | None:
+        row = connection.execute(
+            "SELECT * FROM provider_successes WHERE attempt_id=?",
+            (attempt.attempt_id,),
+        ).fetchone()
+        succeeded = [event for event in events if event.state == "succeeded"]
+        if row is None:
+            orphan = connection.execute(
+                "SELECT 1 FROM provider_output_occurrences WHERE attempt_id=? LIMIT 1",
+                (attempt.attempt_id,),
+            ).fetchone()
+            if succeeded or orphan is not None:
+                raise JournalCorruptionError(
+                    "succeeded event and complete provider success evidence must coexist"
+                )
+            return None
+        if response is None or len(succeeded) != 1:
+            raise JournalCorruptionError(
+                "provider success requires response evidence and one succeeded event"
+            )
+        return self._load_provider_success(connection, attempt, events, response, row)
+
+    def _provider_success_snapshot(
+        self, connection: sqlite3.Connection, attempt_id: str
+    ) -> _ProviderSuccessSnapshot:
+        attempt = self._load_bound_attempt(connection, attempt_id)
+        run = self._load_run(connection, attempt.generation_run_id)
+        events = self._load_events(connection, attempt_id)
+        state = self._reduce_stored(attempt, events)
+        claim_row = self._verify_claim_for_attempt(connection, attempt, events)
+        if claim_row is None:
+            raise JournalNotFoundError("provider success requires a dispatch claim")
+        capability_artifact = self._decode_artifact(
+            self._row_blob(claim_row, "capability_json"),
+            claim_row["capability_sha256"],
+            ProviderCapabilitySnapshot,
+        )
+        assert isinstance(capability_artifact, ProviderCapabilitySnapshot)
+        response = self._verify_provider_response_for_attempt(connection, attempt, events)
+        if response is None:
+            raise JournalNotFoundError("provider success requires stored response evidence")
+        success = self._verify_provider_success_for_attempt(connection, attempt, events, response)
+        return _ProviderSuccessSnapshot(
+            run,
+            attempt,
+            capability_artifact,
+            response,
+            tuple(events),
+            state,
+            success,
+        )
+
+    def _success_authorities_match(
+        self,
+        connection: sqlite3.Connection,
+        attempt_id: str,
+        packet_bytes: bytes,
+        normalized_bytes: bytes,
+    ) -> bool:
+        row = connection.execute(
+            "SELECT intent_packet_json, normalized_request_json FROM provider_successes "
+            "WHERE attempt_id=?",
+            (attempt_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        return (
+            self._row_blob(row, "intent_packet_json") == packet_bytes
+            and self._row_blob(row, "normalized_request_json") == normalized_bytes
+        )
+
     @staticmethod
     def _reduce_stored(
         attempt: GenerationAttempt, events: list[GenerationAttemptEvent]
@@ -1519,10 +1898,11 @@ class AttemptJournal:
             events = self._load_events(connection, attempt_id)
             self._reduce_stored(attempt, events)
             self._verify_claim_for_attempt(connection, attempt, events)
-            self._verify_provider_response_for_attempt(connection, attempt, events)
+            response = self._verify_provider_response_for_attempt(connection, attempt, events)
+            success = self._verify_provider_success_for_attempt(
+                connection, attempt, events, response
+            )
             result = tuple(events)
-            self._commit(connection)
-            return result
         except AttemptJournalError:
             self._rollback(connection)
             raise
@@ -1532,6 +1912,10 @@ class AttemptJournal:
         except BaseException:
             self._rollback(connection)
             raise
+        self._rollback(connection)
+        if success is not None:
+            self._deep_verify_provider_success(success)
+        return result
 
     def read_state(self, attempt_id: str) -> AttemptState:
         _validate_uuid(attempt_id, "attempt_id")
@@ -1541,9 +1925,10 @@ class AttemptJournal:
             events = self._load_events(connection, attempt_id)
             state = self._reduce_stored(attempt, events)
             self._verify_claim_for_attempt(connection, attempt, events)
-            self._verify_provider_response_for_attempt(connection, attempt, events)
-            self._commit(connection)
-            return state
+            response = self._verify_provider_response_for_attempt(connection, attempt, events)
+            success = self._verify_provider_success_for_attempt(
+                connection, attempt, events, response
+            )
         except AttemptJournalError:
             self._rollback(connection)
             raise
@@ -1553,6 +1938,10 @@ class AttemptJournal:
         except BaseException:
             self._rollback(connection)
             raise
+        self._rollback(connection)
+        if success is not None:
+            self._deep_verify_provider_success(success)
+        return state
 
     @staticmethod
     def _check_head(
@@ -1594,14 +1983,15 @@ class AttemptJournal:
                 "response_received requires the atomic provider-evidence transaction"
             )
         if artifact.state == "succeeded":
-            raise AttemptJournalError("succeeded requires the later durable terminal gate")
+            raise AttemptJournalError("succeeded requires the atomic provider-success transaction")
         connection = self._begin()
         try:
             attempt = self._load_bound_attempt(connection, artifact.attempt_id)
             events = self._load_events(connection, artifact.attempt_id)
             state = self._reduce_stored(attempt, events)
             self._verify_claim_for_attempt(connection, attempt, events)
-            self._verify_provider_response_for_attempt(connection, attempt, events)
+            response = self._verify_provider_response_for_attempt(connection, attempt, events)
+            self._verify_provider_success_for_attempt(connection, attempt, events, response)
             occupied = connection.execute(
                 "SELECT canonical_sha256, document_json FROM attempt_events "
                 "WHERE attempt_id=? AND sequence=?",
@@ -1683,14 +2073,16 @@ class AttemptJournal:
         wire_request_byte_count: int,
     ) -> DispatchClaimResult:
         # Scan and validate every caller-controlled value before lazy database creation.
-        self._scanner.scan(
+        _scan_value_safely(
+            self._scanner,
             {
                 "attempt_id": attempt_id,
                 "expected_head_event_id": expected_head_event_id,
                 "dispatch_claim_id": dispatch_claim_id,
                 "claimed_at": claimed_at,
                 "wire_request_sha256": wire_request_sha256,
-            }
+            },
+            "dispatch claim values could not be safely scanned",
         )
         _validate_uuid(attempt_id, "attempt_id")
         _validate_uuid(dispatch_claim_id, "dispatch_claim_id")
@@ -1753,14 +2145,19 @@ class AttemptJournal:
             self._capability_binding(attempt, capability)
             claim_document["request_key_sha256"] = attempt.request_key_sha256
             claim_document["normalized_request_id"] = attempt.normalized_request_id
-            self._scanner.scan(claim_document)
+            _scan_value_safely(
+                self._scanner,
+                claim_document,
+                "dispatch claim could not be safely scanned",
+            )
             claim_bytes = canonical_json_bytes(claim_document)
             self._scanner.scan_bytes(claim_bytes)
             claim_sha = hashlib.sha256(claim_bytes).hexdigest()
             events = self._load_events(connection, attempt_id)
             state = self._reduce_stored(attempt, events)
             existing = self._verify_claim_for_attempt(connection, attempt, events)
-            self._verify_provider_response_for_attempt(connection, attempt, events)
+            response = self._verify_provider_response_for_attempt(connection, attempt, events)
+            self._verify_provider_success_for_attempt(connection, attempt, events, response)
             if existing is not None:
                 if self._row_blob(existing, "claim_json") != claim_bytes:
                     raise DispatchClaimConflictError(
@@ -1848,8 +2245,7 @@ class AttemptJournal:
             stored = self._verify_provider_response_for_attempt(connection, attempt, events)
             if stored is None:
                 raise JournalNotFoundError("provider response evidence is not stored")
-            self._commit(connection)
-            return stored
+            success = self._verify_provider_success_for_attempt(connection, attempt, events, stored)
         except AttemptJournalError:
             self._rollback(connection)
             raise
@@ -1859,6 +2255,10 @@ class AttemptJournal:
         except BaseException:
             self._rollback(connection)
             raise
+        self._rollback(connection)
+        if success is not None:
+            self._deep_verify_provider_success(success)
+        return stored
 
     def publish_provider_response(
         self,
@@ -1871,11 +2271,13 @@ class AttemptJournal:
     ) -> ProviderResponsePublishResult:
         """Atomically store a receipt, exact private bytes, and ``response_received``."""
 
-        self._scanner.scan(
+        _scan_value_safely(
+            self._scanner,
             {
                 "expected_head_event_id": expected_head_event_id,
                 "expected_next_sequence": expected_next_sequence,
-            }
+            },
+            "provider response values could not be safely scanned",
         )
         _validate_digest(expected_head_event_id, "expected_head_event_id")
         if (
@@ -1898,6 +2300,7 @@ class AttemptJournal:
             state = self._reduce_stored(attempt, events)
             self._verify_claim_for_attempt(connection, attempt, events)
             stored = self._verify_provider_response_for_attempt(connection, attempt, events)
+            self._verify_provider_success_for_attempt(connection, attempt, events, stored)
 
             # Lost acknowledgements and concurrent exact publishers must recover from the
             # immutable row before a now-stale compare-and-append token is considered.
@@ -2015,22 +2418,294 @@ class AttemptJournal:
             self._rollback(connection)
             raise
 
+    def read_provider_success(self, attempt_id: str) -> StoredProviderSuccess:
+        """Read and fully rederive one attempt's terminal provider success."""
+
+        _validate_uuid(attempt_id, "attempt_id")
+        connection = self._begin_read()
+        try:
+            snapshot = self._provider_success_snapshot(connection, attempt_id)
+            if snapshot.success is None:
+                raise JournalNotFoundError("provider success evidence is not stored")
+            loaded = snapshot.success
+        except AttemptJournalError:
+            self._rollback(connection)
+            raise
+        except sqlite3.Error as error:
+            self._rollback(connection)
+            raise JournalCorruptionError("provider success evidence could not be read") from error
+        except BaseException:
+            self._rollback(connection)
+            raise
+        self._rollback(connection)
+        return self._deep_verify_provider_success(loaded)
+
+    def publish_provider_success(
+        self,
+        attempt_id: str,
+        intent_packet: IntentPacket | Mapping[str, Any],
+        normalized_request: NormalizedProviderRequest | Mapping[str, Any],
+        *,
+        succeeded_at: str,
+        expected_head_event_id: str,
+        expected_next_sequence: int,
+    ) -> ProviderSuccessPublishResult:
+        """Atomically store eligible output occurrences and the derived ``succeeded`` event."""
+
+        _scan_value_safely(
+            self._scanner,
+            {
+                "attempt_id": attempt_id,
+                "succeeded_at": succeeded_at,
+                "expected_head_event_id": expected_head_event_id,
+                "expected_next_sequence": expected_next_sequence,
+            },
+            "provider success values could not be safely scanned",
+        )
+        _validate_uuid(attempt_id, "attempt_id")
+        _validate_timestamp(succeeded_at, "succeeded_at")
+        _validate_digest(expected_head_event_id, "expected_head_event_id")
+        if type(expected_next_sequence) is not int or not 1 <= expected_next_sequence <= 5:
+            raise ProviderSuccessConflictError("expected_next_sequence must be a bounded integer")
+        packet, packet_bytes, packet_sha = _canonical_intent_packet(intent_packet, self._scanner)
+        try:
+            normalized_artifact, normalized_bytes, normalized_sha = _canonical_artifact(
+                normalized_request, NormalizedProviderRequest, self._scanner
+            )
+        except JournalSecurityError:
+            raise
+        except AttemptJournalError:
+            raise ProviderSuccessConflictError(
+                "normalized request is invalid for terminal provider success"
+            ) from None
+        assert isinstance(normalized_artifact, NormalizedProviderRequest)
+
+        # Take and release one immutable read snapshot. Pillow work always happens after
+        # this transaction closes and before any writer lock is acquired.
+        read_connection = self._begin_read()
+        try:
+            snapshot = self._provider_success_snapshot(read_connection, attempt_id)
+            if snapshot.success is not None:
+                if not self._success_authorities_match(
+                    read_connection, attempt_id, packet_bytes, normalized_bytes
+                ):
+                    raise ProviderSuccessConflictError(
+                        "attempt already has success under different immutable authorities"
+                    )
+                replay_success = snapshot.success
+                self._rollback(read_connection)
+            else:
+                replay_success = None
+                self._rollback(read_connection)
+        except AttemptJournalError:
+            self._rollback(read_connection)
+            raise
+        except sqlite3.Error as error:
+            self._rollback(read_connection)
+            raise JournalCorruptionError("provider success snapshot could not be read") from error
+        except BaseException:
+            self._rollback(read_connection)
+            raise
+
+        if replay_success is not None:
+            stored = self._deep_verify_provider_success(replay_success)
+            return ProviderSuccessPublishResult(
+                False,
+                stored.occurrences,
+                stored.event,
+                snapshot.state,
+            )
+
+        if snapshot.attempt.attempt_id != attempt_id:
+            raise ProviderSuccessConflictError("success attempt identity drifted")
+        if snapshot.state.state != "response_received":
+            raise ProviderSuccessConflictError(
+                "provider success requires a response_received attempt"
+            )
+        if snapshot.state.last_recorded_at is not None and _timestamp_key(
+            succeeded_at
+        ) < _timestamp_key(snapshot.state.last_recorded_at):
+            raise ProviderSuccessConflictError(
+                "provider success timestamp regresses behind response evidence"
+            )
+        candidates = build_provider_success_candidates(
+            intent_packet=packet,
+            generation_run=snapshot.run,
+            attempt=snapshot.attempt,
+            capability=snapshot.capability,
+            normalized_request=normalized_artifact,
+            receipt=snapshot.response.receipt,
+            prior_events=snapshot.events,
+            output_bytes=snapshot.response.output_bytes,
+            succeeded_at=succeeded_at,
+        )
+        event_bytes = canonical_json_bytes(to_json_dict(candidates.event))
+        self._scanner.scan_bytes(event_bytes)
+        event_sha = hashlib.sha256(event_bytes).hexdigest()
+        occurrence_rows: list[tuple[OutputOccurrence, bytes, str]] = []
+        for occurrence in candidates.occurrences:
+            encoded = canonical_json_bytes(to_json_dict(occurrence))
+            self._scanner.scan_bytes(encoded)
+            occurrence_rows.append((occurrence, encoded, hashlib.sha256(encoded).hexdigest()))
+
+        connection = self._begin()
+        try:
+            if (
+                connection.execute(
+                    "SELECT 1 FROM provider_successes WHERE attempt_id=?", (attempt_id,)
+                ).fetchone()
+                is not None
+            ):
+                # A concurrent exact publisher won after our read snapshot.  Release the
+                # writer lock before re-running the byte decoder on its durable package.
+                self._rollback(connection)
+                replay_connection = self._begin_read()
+                try:
+                    replay = self._provider_success_snapshot(replay_connection, attempt_id)
+                    if replay.success is None or not self._success_authorities_match(
+                        replay_connection, attempt_id, packet_bytes, normalized_bytes
+                    ):
+                        raise ProviderSuccessConflictError(
+                            "attempt already has success under different immutable authorities"
+                        )
+                    loaded_replay = replay.success
+                    self._rollback(replay_connection)
+                except AttemptJournalError:
+                    self._rollback(replay_connection)
+                    raise
+                except sqlite3.Error as error:
+                    self._rollback(replay_connection)
+                    raise JournalCorruptionError(
+                        "provider success replay could not be read"
+                    ) from error
+                except BaseException:
+                    self._rollback(replay_connection)
+                    raise
+                stored_replay = self._deep_verify_provider_success(loaded_replay)
+                return ProviderSuccessPublishResult(
+                    False,
+                    stored_replay.occurrences,
+                    stored_replay.event,
+                    replay.state,
+                )
+            fresh = self._provider_success_snapshot(connection, attempt_id)
+            if fresh.success is not None:
+                raise JournalCorruptionError("provider success appeared without its immutable slot")
+            if (
+                fresh.run != snapshot.run
+                or fresh.attempt != snapshot.attempt
+                or fresh.capability != snapshot.capability
+                or fresh.response != snapshot.response
+                or fresh.events != snapshot.events
+            ):
+                raise StaleAttemptHeadError(
+                    "attempt authorities changed while provider media was decoded"
+                )
+            self._check_head(fresh.state, expected_head_event_id, expected_next_sequence)
+            if fresh.state.state != "response_received":
+                raise ProviderSuccessConflictError(
+                    "provider success requires a response_received attempt"
+                )
+            if candidates.event.sequence != expected_next_sequence:
+                raise ProviderSuccessConflictError(
+                    "derived succeeded event does not occupy the expected sequence"
+                )
+            try:
+                validate_artifact_bundle(
+                    [
+                        fresh.run,
+                        fresh.capability,
+                        normalized_artifact,
+                        fresh.attempt,
+                        *fresh.events,
+                        candidates.event,
+                        fresh.response.receipt,
+                        *candidates.occurrences,
+                    ],
+                    intent_packet=packet,
+                )
+                next_state = reduce_attempt_events(fresh.attempt, [*fresh.events, candidates.event])
+            except (ProviderArtifactError, AttemptStateError):
+                raise ProviderSuccessConflictError(
+                    "provider success does not satisfy the complete authority chain"
+                ) from None
+            connection.execute(
+                "INSERT INTO attempt_events VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    attempt_id,
+                    candidates.event.sequence,
+                    candidates.event.attempt_event_id,
+                    candidates.event.state,
+                    event_sha,
+                    event_bytes,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO provider_successes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    attempt_id,
+                    fresh.response.receipt.provider_receipt_id,
+                    candidates.event.attempt_event_id,
+                    packet.intent_packet_id,
+                    normalized_artifact.normalized_request_id,
+                    len(candidates.occurrences),
+                    packet_sha,
+                    packet_bytes,
+                    normalized_sha,
+                    normalized_bytes,
+                ),
+            )
+            for occurrence, encoded, digest in occurrence_rows:
+                connection.execute(
+                    "INSERT INTO provider_output_occurrences VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        attempt_id,
+                        occurrence.output_index,
+                        fresh.response.receipt.provider_receipt_id,
+                        occurrence.output_occurrence_id,
+                        digest,
+                        encoded,
+                    ),
+                )
+            self._commit(connection)
+            return ProviderSuccessPublishResult(
+                True,
+                candidates.occurrences,
+                candidates.event,
+                next_state,
+            )
+        except ProviderMediaAdmissionError:
+            self._rollback(connection)
+            raise
+        except AttemptJournalError:
+            self._rollback(connection)
+            raise
+        except sqlite3.IntegrityError as error:
+            self._rollback(connection)
+            raise ProviderSuccessConflictError(
+                "provider-success identity or immutable slot is already occupied"
+            ) from error
+        except sqlite3.Error as error:
+            self._rollback(connection)
+            raise AttemptJournalError("provider success transaction failed") from error
+        except BaseException:
+            self._rollback(connection)
+            raise
+
     def verify_integrity(self) -> None:
         connection = self._begin_read()
         try:
             if connection.execute("PRAGMA quick_check(1)").fetchone()[0] != "ok":
                 raise JournalCorruptionError("SQLite quick_check failed")
             if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
-                raise JournalCorruptionError("SQLite foreign-key integrity failed")
+                raise JournalCorruptionError("SQLite foreign-key evidence integrity failed")
             for row in connection.execute("SELECT generation_run_id FROM generation_runs"):
                 self._load_run(connection, row["generation_run_id"])
-            for row in connection.execute("SELECT attempt_id FROM generation_attempts"):
-                attempt = self._load_bound_attempt(connection, row["attempt_id"])
-                events = self._load_events(connection, attempt.attempt_id)
-                self._reduce_stored(attempt, events)
-                self._verify_claim_for_attempt(connection, attempt, events)
-                self._verify_provider_response_for_attempt(connection, attempt, events)
-            self._commit(connection)
+            attempt_ids = tuple(
+                row["attempt_id"]
+                for row in connection.execute("SELECT attempt_id FROM generation_attempts")
+            )
+            self._rollback(connection)
         except AttemptJournalError:
             self._rollback(connection)
             raise
@@ -2040,3 +2715,29 @@ class AttemptJournal:
         except BaseException:
             self._rollback(connection)
             raise
+
+        for attempt_id in attempt_ids:
+            attempt_connection = self._begin_read()
+            try:
+                attempt = self._load_bound_attempt(attempt_connection, attempt_id)
+                events = self._load_events(attempt_connection, attempt.attempt_id)
+                self._reduce_stored(attempt, events)
+                self._verify_claim_for_attempt(attempt_connection, attempt, events)
+                response = self._verify_provider_response_for_attempt(
+                    attempt_connection, attempt, events
+                )
+                success = self._verify_provider_success_for_attempt(
+                    attempt_connection, attempt, events, response
+                )
+                self._rollback(attempt_connection)
+            except AttemptJournalError:
+                self._rollback(attempt_connection)
+                raise
+            except sqlite3.Error as error:
+                self._rollback(attempt_connection)
+                raise JournalCorruptionError("attempt journal integrity scan failed") from error
+            except BaseException:
+                self._rollback(attempt_connection)
+                raise
+            if success is not None:
+                self._deep_verify_provider_success(success)
