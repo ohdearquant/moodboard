@@ -367,6 +367,57 @@ This change supplies the pure transition and terminal-immutability portion of AD
 condition 3. Durable append-only storage, reconciliation I/O, dispatch idempotency, retry/fallback
 policy, and crash/race tests remain separate concerns.
 
+## `attempt_journal.py`: durable local attempt CAS and dispatch claim
+
+`AttemptJournal` is the file-backed SQLite boundary for immutable generation runs, attempts, and
+attempt events. It stores each validated artifact as its exact RFC 8785 bytes plus a SHA-256
+corruption check. Registration is no-clobber: an exact replay returns the existing frozen value,
+while the same UUID or run ordinal with different bytes is a protocol conflict. Event append uses
+the reducer's `(attempt_id, head_event_id, next_sequence)` tuple as a compare-and-append
+precondition under `BEGIN IMMEDIATE`; it checks an occupied event slot for exact replay before it
+checks staleness, so recovery after a lost commit acknowledgement is idempotent.
+
+The registered OpenRouter Image API route declares no provider idempotency key or safe ambiguous
+retransmission. `claim_non_idempotent_dispatch` therefore accepts only a capability snapshot whose
+`provider_accepts_key` and `ambiguous_transport_retransmit_safe` fields are both false and whose
+provider, model, adapter, and snapshot identity bind the registered attempt. In one SQLite
+transaction it permanently inserts both:
+
+- a claim binding the exact request key, normalized-request identity, capability bytes, wire-body
+  SHA-256 and byte count; and
+- the derived `submitted(provider_handle:null)` event.
+
+Only the first committed claim returns `send_authorized:true`. An exact replay returns the stored
+claim with `send_authorized:false`; a changed claim conflicts. There is no expiry, release, lease,
+takeover, or same-attempt resend path. A crash after commit but before the socket call is therefore
+conservatively ambiguous and cannot regain authorization. A deliberate retry or fallback must be
+a separately recorded attempt.
+
+This is an **at-most-one local send authorization**, not provider exactly-once execution or
+billing. The journal never performs network I/O and it cannot prove whether the provider observed
+the call. SQLite runs in verified WAL mode with `synchronous=FULL`, foreign keys enabled, trusted
+schema disabled, bounded resources, owner-only files, append-only triggers, and a fresh connection
+per operation. The journal path must be an absolute normalized path in an existing owner-only
+directory; symlinks, hardlinks, SQLite URI names, non-regular files, and insecure modes fail
+closed. Active credential sentinels and high-confidence key signatures are rejected before lazy
+database creation or any write.
+
+Owner-only filesystem access is the trust boundary, not a tamper-proof signature. The open path
+is checked before and after SQLite connects, including device/inode stability, but this stdlib
+implementation does not claim resistance to a malicious same-UID process that can race a rename,
+rewrite canonical rows and hashes, or replace both the file and its path between those checks.
+Such a process already holds the authority that protects the journal directory; stronger
+cross-principal tamper resistance would require a separately designed signing or privileged
+storage boundary.
+
+Generic append deliberately rejects `submitted` and `succeeded`. Only the atomic claim operation
+may create `submitted`. `succeeded` remains unavailable until the separate media/verifier evidence
+store can durably prove the receipt, output bytes, admission, lineage, MIME, dimensions, and every
+output occurrence in the same terminal transaction. A topologically legal reducer event is not
+enough. This change closes the durable CAS portion of ADR-0014 acceptance condition 3 and the
+non-idempotent local authorization portion of condition 4; provider I/O, reconciliation,
+retry/fallback attempts, and evidence-gated success remain open single-concern changes.
+
 ## `report.py`
 
 ### The axis vocabulary

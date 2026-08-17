@@ -210,6 +210,7 @@ def test_installed_provider_artifact_validator_resolves_its_registry_offline(tmp
         "import json, pathlib, sys\n"
         f"sys.path.insert(0, {str(installed)!r})\n"
         "import moodboard.attempt_state\n"
+        "import moodboard.attempt_journal\n"
         "from moodboard.provider_artifacts import validate_provider_artifact\n"
         f"document = json.loads({json.dumps(json.dumps(document))})\n"
         "validate_provider_artifact(document)\n"
@@ -217,6 +218,8 @@ def test_installed_provider_artifact_validator_resolves_its_registry_offline(tmp
         f"assert module_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
         "state_path = pathlib.Path(sys.modules['moodboard.attempt_state'].__file__)\n"
         f"assert state_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
+        "journal_path = pathlib.Path(sys.modules['moodboard.attempt_journal'].__file__)\n"
+        f"assert journal_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
     )
     completed = subprocess.run(
         [sys.executable, "-c", script],
