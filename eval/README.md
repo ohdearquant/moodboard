@@ -134,5 +134,7 @@ The executable acceptance map for this slice is:
 | Quote arithmetic is exact and `$0.05` is pre-dispatch only | ambient-Decimal and over-quote tests |
 | Missing post-paid cost telemetry does not strand valid media evidence | `test_missing_reported_cost_remains_terminal_success_after_paid_response` |
 | Non-conforming cost telemetry degrades to explicit unavailability, never rejection | `test_nonconforming_cost_telemetry_degrades_to_unavailable_without_stranding` |
+| A cost lexeme past the structural budget rejects the document (integrity bound, not telemetry) | `test_cost_number_is_bounded_before_decimal_expansion` |
 | Credentials cannot survive public exceptions or local artifacts | real-E2E transport exception-graph tests |
+| An unanticipated post-response failure still scans the private artifacts | `test_post_response_failure_still_scans_the_private_artifacts` |
 | Real board/retrieval identities are derived, never label hashes | `test_openrouter_real_e2e_authority.py` |
