@@ -174,6 +174,75 @@ dataclass therefore cannot bypass the schema or serialize a class/kind mismatch.
 `selectable_output_occurrence` producer/admission/lineage union is intentionally not defined by
 this module; ADR-0014's contract supplies it before ADR-0012 acceptance condition 1 is complete.
 
+## `intent_packet.py`: the frozen generation input
+
+`moodboard.intent-packet.v1` is the immutable, confirmed input to one future generation run. It
+is not a mutable Studio draft, a provider request, or a provider receipt, and it does not extend
+report v1.0 or v1.1. Its structural authority is the committed Draft 2020-12 schema at
+`moodboard/schema/intent_packet_v1.schema.json`, with the localized-operation and verification
+policy schemas resolved from the same installed package. Every nested object is closed.
+
+Packet identity is
+`sha256(UTF8("moodboard.intent-packet.v1\0") || RFC8785(packet-without-intent_packet_id))`.
+The registered localized operation separately identifies its payload under
+`moodboard.operation.localized-edit.v1`; the verifier policy identifies its full document minus
+`policy_id` under `moodboard.verification-policy.v1`. These identities use the shared
+`contracts.py` primitive and are verified independently, so changing a payload while preserving
+an old operation digest fails even when a caller recomputes the outer packet id.
+
+The packet binds:
+
+- the creative session, exact board id, descriptor representation id, and fit-policy id;
+- the source asset UUID, BLAKE3 ContentRef, source-byte SHA-256, media type, and dimensions;
+- the exact instruction, retrieval authority, ordered routed references, original Khive ranks,
+  full-precision source-image cosine values, and each reference's provider use;
+- requested provider/model, adapter and capability-snapshot identities, a closed options profile,
+  source/mask delivery, provider-route and destination policy, model-disclosure policy, and the
+  provider's declared idempotency/reconciliation capabilities; and
+- the acceptance verifier policy plus the exact references, operation inputs, and dispatch facts
+  shown at confirmation.
+
+The first retrieval route is an explicit collection gate with
+`empty_result_policy:"no_ungated_fallback"`. Dispatch-ready packets require at least one routed
+reference. Array order is authoritative: `routed_rank` is contiguous one-based array order,
+`source_search_rank` is strictly increasing, source cosine is non-increasing, and reference,
+asset, and ContentRef identities are unique. This is stable filtering, not a learned reranker.
+
+Reference transmission is an explicit enum: `attached_image`, `prompt_context_only`, or
+`not_sent`. Attached images bind their byte SHA-256. Prompt-only references bind the compiler
+revision and exact text items; they do not imply that image bytes crossed the provider boundary.
+The localized operation uses a role-discriminated input union: source images use
+`native_input|attached_control`, while masks use
+`native_mask|attached_overlay|prompt_only|not_sent`. The registered OpenRouter packet profile uses
+`locality_mask:not_sent`; no OpenRouter mask capability or provider run is claimed. The compositor
+enforces preservation separately from the generator.
+
+`board_representation_id(board)` hashes exactly `{model_repo,model_revision,model_dim}` under
+`moodboard.board-representation.v1`. `board_fit_policy_id(board)` hashes the complete persisted
+score-moving fit projection under `moodboard-fit-policy.v1`; it excludes only the provenance label
+that names the source of the already-bound far-outlier multiplier. Both are narrower identities
+inside the existing whole-board id, not replacements for it.
+
+The first closed options profiles are `moodboard.openrouter-images-options.v1` and the empty
+provider-neutral `moodboard.generation-options.none.v1`. The OpenRouter profile is a request
+vocabulary, not proof that one endpoint supports every enumerated value; a later immutable
+capability artifact and preflight must narrow it before dispatch. The packet has no credential,
+header, or cookie fields and records only a non-secret credential-profile UUID. Closure does not
+classify arbitrary instruction or prompt text as secret; the Studio/backend boundary must keep and
+scan actual credential values out of packet, confirmation, error, and log artifacts.
+
+The confirmation mirror includes the exact idempotency and reconciliation projections, because a
+change from at-most-once dispatch to retransmit-safe behavior is itself a renewed-confirmation
+event. It proves what the current packet says was confirmed. `default_trust` eligibility
+additionally depends on an enrolled, unchanged prior Studio policy and cannot be proven by this
+packet alone; the Studio boundary owns that check.
+
+This packet-only layer completes ADR-0014's frozen packet identity and drift detection. It does
+not define generation runs, attempts, append-only attempt events, capability artifacts,
+normalized provider requests, provider receipts, output occurrences, dispatch/retry behavior, or
+actual provider I/O. Those remain separate contracts and PRs. In particular, it does not complete
+ADR-0012's `selectable_output_occurrence` union or claim that a provider-backed run occurred.
+
 ## `report.py`
 
 ### The axis vocabulary

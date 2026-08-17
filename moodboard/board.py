@@ -33,6 +33,8 @@ from typing import Literal
 
 import numpy as np
 
+from moodboard.contracts import compute_projection_identity
+
 BOARD_HASH_VERSION = 2
 """The literal "v" in the hashed payload. Bumped in the same change that adds a new fitting
 parameter or score-bearing artifact input, per ADR-0005. This final v2 definition is the one
@@ -57,6 +59,7 @@ _MAX_EMBEDDING_BYTES = 64 * 1024 * 1024
 _MAX_REFERENCES = 100_000
 _MAX_MODEL_DIM = 8192
 FIT_POLICY_SCHEMA = "moodboard-fit-policy.v1"
+BOARD_REPRESENTATION_SCHEMA = "moodboard.board-representation.v1"
 DEFAULT_K_CAP = 5
 DEFAULT_MIN_CATEGORY_SIZE = 5
 DEFAULT_INTERVAL_LEVEL = 0.9
@@ -395,6 +398,52 @@ class BrandBoard:
     reference_asset_location_digest: str | None
     integrity_verified: bool
     reference_asset_locations: tuple[ReferenceAssetLocation, ...] = ()
+
+
+def board_representation_id(board: BrandBoard) -> str:
+    """Identify the exact descriptor representation carried by one board.
+
+    This narrower ADR-0014 identity deliberately excludes references, fit parameters, display
+    provenance, and build time.  It is derived from the same persisted model fields that already
+    participate in ``board_id``; callers must still validate/read the board before dispatch.
+    """
+
+    if not isinstance(board, BrandBoard):
+        raise TypeError("board_representation_id requires a BrandBoard")
+    return compute_projection_identity(
+        {
+            "model_repo": board.model_repo,
+            "model_revision": board.model_revision,
+            "model_dim": board.model_dim,
+        },
+        domain_tag=BOARD_REPRESENTATION_SCHEMA,
+    )
+
+
+def board_fit_policy_id(board: BrandBoard) -> str:
+    """Identify every persisted score-moving fit parameter for one board.
+
+    ``far_outlier_iqr_multiplier_source`` is provenance explaining where the already-persisted
+    numeric value came from.  Like ``board_id``, this identity binds the value and excludes that
+    source label so a path rename cannot move score identity.
+    """
+
+    if not isinstance(board, BrandBoard):
+        raise TypeError("board_fit_policy_id requires a BrandBoard")
+    return compute_projection_identity(
+        {
+            "schema_version": FIT_POLICY_SCHEMA,
+            "metric": board.metric,
+            "k": board.k,
+            "k_cap": board.k_cap,
+            "cluster_cut": board.cluster_cut,
+            "dup_cut": board.dup_cut,
+            "min_category_size": board.min_category_size,
+            "interval_level": board.interval_level,
+            "far_outlier_iqr_multiplier": board.far_outlier_iqr_multiplier,
+        },
+        domain_tag=FIT_POLICY_SCHEMA,
+    )
 
 
 def build_board(

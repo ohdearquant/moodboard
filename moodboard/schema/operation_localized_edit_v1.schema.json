@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/operation_localized_edit_v1.schema.json",
+  "title": "Moodboard localized-edit operation v1",
+  "description": "Closed ADR-0016 operation envelope. Compressed-source dimensions are intentionally not equated with the separately compiled canonical raster dimensions.",
+  "type": "object",
+  "required": ["kind", "schema_version", "payload_sha256", "payload"],
+  "properties": {
+    "kind": { "const": "localized_edit" },
+    "schema_version": { "const": "moodboard.operation.localized-edit.v1" },
+    "payload_sha256": { "$ref": "#/$defs/digest" },
+    "payload": { "$ref": "#/$defs/payload" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "dimension": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32768
+    },
+    "safeCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "versionToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+    },
+    "sourceRaster": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "compiler_revision",
+        "width",
+        "height",
+        "mode",
+        "byte_count",
+        "source_content_sha256",
+        "raster_sha256"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.raster.srgb-u8.v1" },
+        "compiler_revision": { "$ref": "#/$defs/versionToken" },
+        "width": { "$ref": "#/$defs/dimension" },
+        "height": { "$ref": "#/$defs/dimension" },
+        "mode": { "const": "RGB" },
+        "byte_count": { "$ref": "#/$defs/safeCount" },
+        "source_content_sha256": { "$ref": "#/$defs/digest" },
+        "raster_sha256": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "normalizedCoordinateStrings": {
+      "type": "object",
+      "required": ["left", "top", "right", "bottom"],
+      "properties": {
+        "left": { "$ref": "#/$defs/normalizedCoordinateString" },
+        "top": { "$ref": "#/$defs/normalizedCoordinateString" },
+        "right": { "$ref": "#/$defs/normalizedCoordinateString" },
+        "bottom": { "$ref": "#/$defs/normalizedCoordinateString" }
+      },
+      "additionalProperties": false
+    },
+    "normalizedCoordinateString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^(0(?:\\.[0-9]{1,18})?|1(?:\\.0{1,18})?)$"
+    },
+    "region": {
+      "type": "object",
+      "required": ["selection_tool_revision", "left", "top", "right", "bottom"],
+      "properties": {
+        "selection_tool_revision": { "$ref": "#/$defs/versionToken" },
+        "left": { "type": "integer", "minimum": 0, "maximum": 32767 },
+        "top": { "type": "integer", "minimum": 0, "maximum": 32767 },
+        "right": { "type": "integer", "minimum": 1, "maximum": 32768 },
+        "bottom": { "type": "integer", "minimum": 1, "maximum": 32768 },
+        "normalized_provenance": { "$ref": "#/$defs/normalizedCoordinateStrings" }
+      },
+      "additionalProperties": false
+    },
+    "mask": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "compiler_revision",
+        "width",
+        "height",
+        "byte_count",
+        "editable_count",
+        "protected_count",
+        "source_raster_sha256",
+        "mask_sha256"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.mask.u8.v1" },
+        "compiler_revision": { "$ref": "#/$defs/versionToken" },
+        "width": { "$ref": "#/$defs/dimension" },
+        "height": { "$ref": "#/$defs/dimension" },
+        "byte_count": { "$ref": "#/$defs/safeCount" },
+        "editable_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "protected_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "source_raster_sha256": { "$ref": "#/$defs/digest" },
+        "mask_sha256": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "source_raster",
+        "region",
+        "mask",
+        "raw_diagnostic_verifiers",
+        "insert_compiler_policy",
+        "compositor_policy"
+      ],
+      "properties": {
+        "source_raster": { "$ref": "#/$defs/sourceRaster" },
+        "region": { "$ref": "#/$defs/region" },
+        "mask": { "$ref": "#/$defs/mask" },
+        "raw_diagnostic_verifiers": {
+          "type": "array",
+          "maxItems": 0,
+          "items": false,
+          "description": "No raw diagnostic verifier is registered in the v1 implementation."
+        },
+        "insert_compiler_policy": { "const": "raw_crop_nearest.v1" },
+        "compositor_policy": { "const": "source_backed_rect_replace.v1" }
+      },
+      "additionalProperties": false
+    }
+  }
+}
