@@ -420,20 +420,20 @@ def test_reported_cost_preserves_an_explicit_provider_currency(tmp_path: Path) -
 def test_nonconforming_cost_telemetry_degrades_to_unavailable_without_stranding(
     tmp_path: Path,
 ) -> None:
-    """Telemetry shape must never reject the paid response carrying it (eval/README.md)."""
+    """Telemetry shape must never reject the paid response carrying it (eval/README.md).
+
+    A cost the provider did send but the adapter cannot certify is recorded as
+    reported_uncertifiable, never as not_reported: the receipt must not invert what the
+    provider did.
+    """
     _journal, attempt, _capability, prepared = _seed_dispatch(tmp_path)
-    unavailable = {
-        "state": "unavailable",
-        "amount": None,
-        "currency": None,
-        "provenance": "not_reported",
-    }
-    for usage in (
-        {"cost": 0.033, "currency": "usd"},
-        {"cost": 0.033, "currency": "USDC"},
-        {"cost": "0.033", "currency": "USD"},
-        {"cost": -0.033},
-        "not-a-telemetry-object",
+    for usage, provenance in (
+        ({"cost": 0.033, "currency": "usd"}, "reported_uncertifiable"),
+        ({"cost": 0.033, "currency": "USDC"}, "reported_uncertifiable"),
+        ({"cost": "0.033", "currency": "USD"}, "reported_uncertifiable"),
+        ({"cost": -0.033}, "reported_uncertifiable"),
+        ("not-a-telemetry-object", "reported_uncertifiable"),
+        ({"note": "usage without a cost key"}, "not_reported"),
     ):
         body = json.dumps(
             {
@@ -457,7 +457,12 @@ def test_nonconforming_cost_telemetry_degrades_to_unavailable_without_stranding(
         )
 
         receipt = provider_to_json(decoded.receipt)
-        assert receipt["cost"] == unavailable
+        assert receipt["cost"] == {
+            "state": "unavailable",
+            "amount": None,
+            "currency": None,
+            "provenance": provenance,
+        }
         validate_provider_artifact(receipt)
 
 
@@ -1175,7 +1180,7 @@ def test_cost_number_is_bounded_before_decimal_expansion(tmp_path: Path) -> None
         "state": "unavailable",
         "amount": None,
         "currency": None,
-        "provenance": "not_reported",
+        "provenance": "reported_uncertifiable",
     }
 
 

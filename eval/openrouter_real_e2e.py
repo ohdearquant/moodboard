@@ -1939,6 +1939,12 @@ def _reported_cost_telemetry(dispatch: OpenRouterDispatchResult) -> tuple[Decima
         receipt = provider_to_json(dispatch.decoded.receipt)
         cost = receipt.get("cost")
         if (
+            isinstance(cost, dict)
+            and cost.get("state") == "unavailable"
+            and cost.get("provenance") == "reported_uncertifiable"
+        ):
+            return None, "reported_uncertifiable"
+        if (
             not isinstance(cost, dict)
             or cost.get("state") != "reported"
             or not isinstance(cost.get("amount"), str)
@@ -2281,6 +2287,12 @@ def _execute_with_token(
         )
         _scan_private_artifacts(target, token)
         return "ok", result
+    except OpenRouterRealE2EError as error:
+        # The secret-scan verdicts are the one diagnostic built to be unambiguous; every
+        # other failure still collapses to the generic code so no detail can carry a secret.
+        if error.code in {"credential_material_persisted", "artifact_secret_scan_failed"}:
+            return error.code, None
+        return "execution_failed", None
     except BaseException:
         return "execution_failed", None
     finally:
@@ -2450,7 +2462,14 @@ def execute_openrouter_real_e2e(
     ):
         _fail("challenge_expired")
     credential_ok, token_value = _call_sanitized(lambda: _credential_loader(CREDENTIAL_PROFILE_ID))
-    if not credential_ok or not isinstance(token_value, str):
+    # The injected seam honors the same token shape the production loader enforces; an empty
+    # or non-ASCII token would otherwise make the artifact secret scan vacuous.
+    if (
+        not credential_ok
+        or not isinstance(token_value, str)
+        or not 16 <= len(token_value) <= 4096
+        or any(ord(character) < 33 or ord(character) > 126 for character in token_value)
+    ):
         _fail("credential_unavailable")
     token = token_value
     status, result = _execute_with_token(

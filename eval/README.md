@@ -107,6 +107,11 @@ The fixed `$0.05` value is a **quote-admission limit**, not a provider-enforced 
 checked against the exact live discovery pricing before source access. Reported cost is post-hoc
 telemetry: missing, differently reported, or unexpectedly high telemetry cannot undo a charge and
 therefore does not strand an otherwise valid provider response before terminal media admission.
+A receipt distinguishes a provider that sent no cost (`not_reported`) from one that sent a cost
+the adapter could not certify (`reported_uncertifiable`); the raw response bytes always retain the
+original. This covers telemetry the adapter could parse: a response whose JSON number lexemes
+exceed the adapter's structural budgets is rejected as a malformed document by the bounded parse,
+which is a document-integrity bound, not a telemetry judgment.
 Reports distinguish provider lifecycle state, media admission, raw structural/locality evidence,
 localized-edit gate status, workflow acceptance (`not_recorded`), semantic/aesthetic judgment
 (`not_run`), and compositor execution (`not_run`).
