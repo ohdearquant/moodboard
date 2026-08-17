@@ -82,13 +82,17 @@ jobs:
 
       - name: Stage and test the viewer
         # The Python inliner deliberately consumes only the manifest-verified package-data copy.
-        # test:ci is a superset of build (fixture/validator drift checks, typecheck, the vitest
+        # test:ci:portable is a superset of build (validator drift check, typecheck, the vitest
         # suite, then the same build), so the viewer's own tests run here and the committed
         # static output is proven byte-identical before the Python matrix exercises the HTML
-        # command.
+        # command. fixture:check is excluded deliberately: the showcase fixture's PNG bytes and
+        # score cascade are specific to the platform that generated it (image encoders and
+        # floating-point libraries differ across OS), so regenerating it on this runner drifts
+        # by construction. The full gate, fixture:check included, runs locally via test:ci on
+        # the platform that produced the committed fixture.
         run: |
           npm --prefix viewer ci
-          npm --prefix viewer run test:ci
+          npm --prefix viewer run test:ci:portable
           git diff --exit-code -- viewer/dist-static
 
       - name: Tests
