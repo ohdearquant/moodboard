@@ -1,0 +1,287 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/provider_receipt_v1.schema.json",
+  "title": "Moodboard provider receipt v1",
+  "description": "Content-addressed, sanitized provider response receipt without credentials or headers.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "provider_receipt_id",
+    "attempt_id",
+    "normalized_request_id",
+    "received_at",
+    "requested_provider",
+    "requested_model",
+    "selected_route_id",
+    "http_status",
+    "provider_handle",
+    "actual_model",
+    "upstream_route",
+    "raw_response",
+    "outputs",
+    "cost",
+    "latency"
+  ],
+  "properties": {
+    "schema_version": { "const": "moodboard.provider-receipt.v1" },
+    "provider_receipt_id": { "$ref": "#/$defs/digest" },
+    "attempt_id": { "$ref": "#/$defs/canonicalUuid" },
+    "normalized_request_id": { "$ref": "#/$defs/digest" },
+    "received_at": { "$ref": "#/$defs/timestamp" },
+    "requested_provider": { "$ref": "#/$defs/boundedToken" },
+    "requested_model": { "$ref": "#/$defs/boundedToken" },
+    "selected_route_id": { "$ref": "#/$defs/boundedToken" },
+    "http_status": { "type": "integer", "minimum": 100, "maximum": 599 },
+    "provider_handle": { "$ref": "#/$defs/nullableProviderHandle" },
+    "actual_model": { "$ref": "#/$defs/actualModel" },
+    "upstream_route": { "$ref": "#/$defs/upstreamRoute" },
+    "raw_response": { "$ref": "#/$defs/rawResponse" },
+    "outputs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/providerOutput" }
+    },
+    "cost": {
+      "oneOf": [
+        { "$ref": "#/$defs/reportedCost" },
+        { "$ref": "#/$defs/unavailableCost" }
+      ]
+    },
+    "latency": { "$ref": "#/$defs/latency" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "canonicalUuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "boundedToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "sourceField": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 512,
+      "pattern": "^\\$(?:\\.[A-Za-z_][A-Za-z0-9_-]*|\\[[0-9]{1,4}\\])+$",
+      "description": "Bounded JSON-path-like location of a provider response claim."
+    },
+    "safePositiveCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "minLength": 20,
+      "maxLength": 40
+    },
+    "nullableProviderHandle": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\r\\n\\u0000-\\u001f\\u007f]+$"
+        },
+        { "type": "null" }
+      ]
+    },
+    "actualModel": {
+      "type": "object",
+      "required": ["state", "model", "source_field"],
+      "properties": {
+        "state": { "enum": ["attested", "undisclosed"] },
+        "model": {
+          "oneOf": [
+            { "$ref": "#/$defs/boundedToken" },
+            { "type": "null" }
+          ]
+        },
+        "source_field": {
+          "oneOf": [
+            { "$ref": "#/$defs/sourceField" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "state": { "const": "attested" } },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "model": { "$ref": "#/$defs/boundedToken" },
+              "source_field": { "$ref": "#/$defs/sourceField" }
+            }
+          },
+          "else": {
+            "properties": {
+              "model": { "type": "null" },
+              "source_field": { "type": "null" }
+            }
+          }
+        }
+      ]
+    },
+    "upstreamRoute": {
+      "type": "object",
+      "required": ["state", "provider_tag", "source_field"],
+      "properties": {
+        "state": { "enum": ["disclosed", "unknown"] },
+        "provider_tag": {
+          "oneOf": [
+            { "$ref": "#/$defs/boundedToken" },
+            { "type": "null" }
+          ]
+        },
+        "source_field": {
+          "oneOf": [
+            { "$ref": "#/$defs/sourceField" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "state": { "const": "disclosed" } },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "provider_tag": { "$ref": "#/$defs/boundedToken" },
+              "source_field": { "$ref": "#/$defs/sourceField" }
+            }
+          },
+          "else": {
+            "properties": {
+              "provider_tag": { "type": "null" },
+              "source_field": { "type": "null" }
+            }
+          }
+        }
+      ]
+    },
+    "rawResponse": {
+      "oneOf": [
+        { "$ref": "#/$defs/retainedRawResponse" },
+        { "$ref": "#/$defs/notRetainedRawResponse" }
+      ]
+    },
+    "retainedRawResponse": {
+      "type": "object",
+      "required": [
+        "state",
+        "content_ref",
+        "content_sha256",
+        "byte_count",
+        "privacy"
+      ],
+      "properties": {
+        "state": { "const": "retained" },
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "content_sha256": { "$ref": "#/$defs/digest" },
+        "byte_count": { "$ref": "#/$defs/safePositiveCount" },
+        "privacy": { "const": "private_provider_payload" }
+      },
+      "additionalProperties": false
+    },
+    "notRetainedRawResponse": {
+      "type": "object",
+      "required": ["state", "reason"],
+      "properties": {
+        "state": { "const": "not_retained" },
+        "reason": {
+          "enum": ["provider_terms", "retention_policy", "not_available"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "providerOutput": {
+      "type": "object",
+      "required": [
+        "output_index",
+        "role",
+        "content_ref",
+        "content_sha256",
+        "byte_count",
+        "media_type_claim"
+      ],
+      "properties": {
+        "output_index": { "type": "integer", "minimum": 0, "maximum": 7 },
+        "role": { "const": "generated_image" },
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "content_sha256": { "$ref": "#/$defs/digest" },
+        "byte_count": { "$ref": "#/$defs/safePositiveCount" },
+        "media_type_claim": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 7,
+              "maxLength": 127,
+              "pattern": "^image/[a-z0-9][a-z0-9.+-]*$"
+            },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "reportedCost": {
+      "type": "object",
+      "required": ["state", "amount", "currency", "provenance"],
+      "properties": {
+        "state": { "const": "reported" },
+        "amount": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^(0|[1-9][0-9]{0,20})(\\.[0-9]{1,18})?$"
+        },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "provenance": { "const": "provider_receipt" }
+      },
+      "additionalProperties": false
+    },
+    "unavailableCost": {
+      "type": "object",
+      "required": ["state", "amount", "currency", "provenance"],
+      "properties": {
+        "state": { "const": "unavailable" },
+        "amount": { "type": "null" },
+        "currency": { "type": "null" },
+        "provenance": {
+          "enum": ["not_reported", "redacted_by_provider", "not_applicable"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "latency": {
+      "type": "object",
+      "required": ["milliseconds", "boundary"],
+      "properties": {
+        "milliseconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "boundary": { "const": "submit_to_response_received" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

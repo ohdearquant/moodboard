@@ -14,9 +14,11 @@ build one. So this module builds the wheel.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -39,6 +41,18 @@ INTENT_PACKET_SCHEMAS = {
         "intent_packet_v1.schema.json",
         "operation_localized_edit_v1.schema.json",
         "verification_policy_v1.schema.json",
+    )
+}
+PROVIDER_ARTIFACT_SCHEMAS = {
+    REPO_ROOT / "moodboard" / "schema" / name: f"moodboard/schema/{name}"
+    for name in (
+        "generation_run_v1.schema.json",
+        "generation_attempt_v1.schema.json",
+        "generation_attempt_event_v1.schema.json",
+        "provider_capability_snapshot_v1.schema.json",
+        "normalized_provider_request_v1.schema.json",
+        "provider_receipt_v1.schema.json",
+        "output_occurrence_v1.schema.json",
     )
 }
 
@@ -136,9 +150,10 @@ def test_the_schema_the_report_validates_against_also_ships(tmp_path):
         "the current report writer schema is missing from the wheel, so rank/report validation "
         "cannot run from an installed copy"
     )
-    assert judgment_schema_bytes == (
-        REPO_ROOT / "moodboard" / "schema" / "judgment_v1.schema.json"
-    ).read_bytes(), "the installed typed-judgment contract differs from the reviewed schema bytes"
+    assert (
+        judgment_schema_bytes
+        == (REPO_ROOT / "moodboard" / "schema" / "judgment_v1.schema.json").read_bytes()
+    ), "the installed typed-judgment contract differs from the reviewed schema bytes"
 
 
 def test_the_intent_packet_schema_registry_ships_byte_for_byte(tmp_path):
@@ -155,6 +170,63 @@ def test_the_intent_packet_schema_registry_ships_byte_for_byte(tmp_path):
             assert archive.read(packaged_path) == source.read_bytes(), (
                 f"the installed {packaged_path} differs from the reviewed contract bytes"
             )
+
+
+def test_the_provider_artifact_schema_registry_ships_byte_for_byte(tmp_path):
+    """Every provider-evidence branch must remain available to an offline install."""
+
+    wheel = _build_wheel(tmp_path / "dist")
+
+    with zipfile.ZipFile(wheel) as archive:
+        for source, packaged_path in PROVIDER_ARTIFACT_SCHEMAS.items():
+            assert packaged_path in archive.namelist(), (
+                f"{packaged_path} is missing from the wheel, so the installed provider-artifact "
+                "validator cannot reconstruct its closed offline registry"
+            )
+            assert archive.read(packaged_path) == source.read_bytes(), (
+                f"the installed {packaged_path} differs from the reviewed contract bytes"
+            )
+
+
+def test_installed_provider_artifact_validator_resolves_its_registry_offline(tmp_path):
+    """Import and execute the validator from wheel bytes, not from this source checkout."""
+
+    wheel = _build_wheel(tmp_path / "dist")
+    installed = tmp_path / "installed"
+    with zipfile.ZipFile(wheel) as archive:
+        archive.extractall(installed)
+
+    document = {
+        "schema_version": "moodboard.generation-run.v1",
+        "generation_run_id": "20000000-0000-4000-8000-000000000001",
+        "creative_session_id": "20000000-0000-4000-8000-000000000002",
+        "intent_packet_id": "1" * 64,
+        "requested_provider": "openrouter",
+        "requested_model": "qwen/qwen-image-3",
+        "provider_route_policy_id": "2" * 64,
+        "created_at": "2026-08-16T20:30:02Z",
+    }
+    script = (
+        "import json, pathlib, sys\n"
+        f"sys.path.insert(0, {str(installed)!r})\n"
+        "from moodboard.provider_artifacts import validate_provider_artifact\n"
+        f"document = json.loads({json.dumps(json.dumps(document))})\n"
+        "validate_provider_artifact(document)\n"
+        "module_path = pathlib.Path(sys.modules['moodboard.provider_artifacts'].__file__)\n"
+        f"assert module_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={**os.environ, "PYTHONNOUSERSITE": "1"},
+    )
+    assert completed.returncode == 0, (
+        "installed provider-artifact validator could not resolve its packaged schemas\n"
+        f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+    )
 
 
 def test_the_demo_acquisition_catalog_and_manifest_contract_ship_byte_for_byte(tmp_path):

@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/generation_attempt_event_v1.schema.json",
+  "title": "Moodboard generation attempt event v1",
+  "description": "Content-addressed append-only provider-attempt state occurrence. Transition legality is reduced separately.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "attempt_event_id",
+    "attempt_id",
+    "sequence",
+    "state",
+    "recorded_at",
+    "detail"
+  ],
+  "properties": {
+    "schema_version": { "const": "moodboard.generation-attempt-event.v1" },
+    "attempt_event_id": { "$ref": "#/$defs/digest" },
+    "attempt_id": { "$ref": "#/$defs/canonicalUuid" },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "state": {
+      "enum": [
+        "prepared",
+        "submitted",
+        "outcome_unknown",
+        "response_received",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "recorded_at": { "$ref": "#/$defs/timestamp" },
+    "detail": {
+      "oneOf": [
+        { "$ref": "#/$defs/preparedDetail" },
+        { "$ref": "#/$defs/submittedDetail" },
+        { "$ref": "#/$defs/outcomeUnknownDetail" },
+        { "$ref": "#/$defs/responseReceivedDetail" },
+        { "$ref": "#/$defs/succeededDetail" },
+        { "$ref": "#/$defs/failedDetail" },
+        { "$ref": "#/$defs/cancelledDetail" }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": { "state": { "const": "prepared" } },
+        "required": ["state"]
+      },
+      "then": { "properties": { "detail": { "$ref": "#/$defs/preparedDetail" } } }
+    },
+    {
+      "if": {
+        "properties": { "state": { "const": "submitted" } },
+        "required": ["state"]
+      },
+      "then": { "properties": { "detail": { "$ref": "#/$defs/submittedDetail" } } }
+    },
+    {
+      "if": {
+        "properties": { "state": { "const": "outcome_unknown" } },
+        "required": ["state"]
+      },
+      "then": { "properties": { "detail": { "$ref": "#/$defs/outcomeUnknownDetail" } } }
+    },
+    {
+      "if": {
+        "properties": { "state": { "const": "response_received" } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": { "detail": { "$ref": "#/$defs/responseReceivedDetail" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "state": { "const": "succeeded" } },
+        "required": ["state"]
+      },
+      "then": { "properties": { "detail": { "$ref": "#/$defs/succeededDetail" } } }
+    },
+    {
+      "if": {
+        "properties": { "state": { "const": "failed" } },
+        "required": ["state"]
+      },
+      "then": { "properties": { "detail": { "$ref": "#/$defs/failedDetail" } } }
+    },
+    {
+      "if": {
+        "properties": { "state": { "const": "cancelled" } },
+        "required": ["state"]
+      },
+      "then": { "properties": { "detail": { "$ref": "#/$defs/cancelledDetail" } } }
+    }
+  ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "canonicalUuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "boundedToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "minLength": 20,
+      "maxLength": 40
+    },
+    "nullableProviderHandle": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\r\\n\\u0000-\\u001f\\u007f]+$"
+        },
+        { "type": "null" }
+      ]
+    },
+    "preparedDetail": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": { "kind": { "const": "prepared" } },
+      "additionalProperties": false
+    },
+    "submittedDetail": {
+      "type": "object",
+      "required": ["kind", "provider_handle"],
+      "properties": {
+        "kind": { "const": "submitted" },
+        "provider_handle": { "$ref": "#/$defs/nullableProviderHandle" }
+      },
+      "additionalProperties": false
+    },
+    "outcomeUnknownDetail": {
+      "type": "object",
+      "required": ["kind", "failure_stage", "failure_code", "provider_handle"],
+      "properties": {
+        "kind": { "const": "outcome_unknown" },
+        "failure_stage": { "enum": ["dispatch", "reconciliation"] },
+        "failure_code": { "$ref": "#/$defs/boundedToken" },
+        "provider_handle": { "$ref": "#/$defs/nullableProviderHandle" }
+      },
+      "additionalProperties": false
+    },
+    "responseReceivedDetail": {
+      "type": "object",
+      "required": ["kind", "provider_receipt_id"],
+      "properties": {
+        "kind": { "const": "response_received" },
+        "provider_receipt_id": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "succeededDetail": {
+      "type": "object",
+      "required": ["kind", "output_occurrence_ids"],
+      "properties": {
+        "kind": { "const": "succeeded" },
+        "output_occurrence_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/digest" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "failedDetail": {
+      "type": "object",
+      "required": ["kind", "failure_stage", "failure_code"],
+      "properties": {
+        "kind": { "const": "failed" },
+        "failure_stage": {
+          "enum": [
+            "preflight",
+            "dispatch",
+            "provider",
+            "reconciliation",
+            "provenance",
+            "output_validation"
+          ]
+        },
+        "failure_code": { "$ref": "#/$defs/boundedToken" }
+      },
+      "additionalProperties": false
+    },
+    "cancelledDetail": {
+      "type": "object",
+      "required": ["kind", "cancellation_stage", "cancellation_code", "authority"],
+      "properties": {
+        "kind": { "const": "cancelled" },
+        "cancellation_stage": {
+          "enum": ["preflight", "dispatch", "provider", "reconciliation"]
+        },
+        "cancellation_code": { "$ref": "#/$defs/boundedToken" },
+        "authority": {
+          "enum": ["local_pre_dispatch", "provider_confirmed_no_output"]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
