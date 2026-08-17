@@ -1460,6 +1460,40 @@ def build_locality_not_run(
     return blocked
 
 
+def _measure_outside_mask_rgb_exact(
+    source_bytes: bytes,
+    output_bytes: bytes,
+    mask_bytes: bytes,
+) -> tuple[int, int]:
+    """Return changed protected pixels and maximum protected-channel error.
+
+    Both producer-specific verification wrappers call this one byte operator.  Their lineage
+    checks remain separate, but the meaning of an exact measurement cannot drift by producer.
+    """
+
+    if len(source_bytes) != len(output_bytes) or len(source_bytes) != len(mask_bytes) * 3:
+        raise LocalityError(
+            "contract_mismatch", "exact-locality byte planes do not share one RGB shape"
+        )
+    changed = 0
+    maximum = 0
+    for pixel_index, mask_value in enumerate(mask_bytes):
+        if mask_value != 0:
+            continue
+        channel_index = pixel_index * 3
+        pixel_changed = False
+        for offset in range(3):
+            difference = abs(
+                source_bytes[channel_index + offset] - output_bytes[channel_index + offset]
+            )
+            if difference:
+                pixel_changed = True
+                maximum = max(maximum, difference)
+        if pixel_changed:
+            changed += 1
+    return changed, maximum
+
+
 def verify_outside_mask_rgb_exact(
     source_raster: CanonicalRasterArtifact,
     output_raster: CanonicalRasterArtifact,
@@ -1507,24 +1541,11 @@ def verify_outside_mask_rgb_exact(
         raise LocalityError(
             "contract_mismatch", "source, output, and mask raster identities do not align"
         )
-    changed = 0
-    maximum = 0
-    source_bytes = source_raster.rgb_bytes
-    output_bytes = output_raster.rgb_bytes
-    for pixel_index, mask_value in enumerate(mask.mask_bytes):
-        if mask_value != 0:
-            continue
-        channel_index = pixel_index * 3
-        pixel_changed = False
-        for offset in range(3):
-            difference = abs(
-                source_bytes[channel_index + offset] - output_bytes[channel_index + offset]
-            )
-            if difference:
-                pixel_changed = True
-                maximum = max(maximum, difference)
-        if pixel_changed:
-            changed += 1
+    changed, maximum = _measure_outside_mask_rgb_exact(
+        source_raster.rgb_bytes,
+        output_raster.rgb_bytes,
+        mask.mask_bytes,
+    )
     state = "pass" if changed == 0 and maximum == 0 else "fail"
     authority = {
         "schema_version": EXACT_LOCALITY_VERIFIER_VERSION,

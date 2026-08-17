@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/insert_compile_confirmation_v1.schema.json",
+  "title": "Moodboard insert compile confirmation v1",
+  "description": "Closed, user-confirmed projection for compiling one eligible raw generator raster into a deterministic compositor insert.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "insert_compile_confirmation_id",
+    "confirmation_key",
+    "principal_id",
+    "studio_session_id",
+    "intent_packet_id",
+    "raw_output_occurrence_id",
+    "raw_output_raster_sha256",
+    "raw_structural_evidence_id",
+    "raw_locality_evidence_id",
+    "crop",
+    "target_region",
+    "compiler_policy",
+    "preview_projection",
+    "confirmed_at"
+  ],
+  "properties": {
+    "schema_version": { "const": "moodboard.insert-compile-confirmation.v1" },
+    "insert_compile_confirmation_id": { "$ref": "#/$defs/digest" },
+    "confirmation_key": { "$ref": "#/$defs/digest" },
+    "principal_id": { "$ref": "#/$defs/canonicalUuid" },
+    "studio_session_id": { "$ref": "#/$defs/canonicalUuid" },
+    "intent_packet_id": { "$ref": "#/$defs/digest" },
+    "raw_output_occurrence_id": { "$ref": "#/$defs/digest" },
+    "raw_output_raster_sha256": { "$ref": "#/$defs/digest" },
+    "raw_structural_evidence_id": { "$ref": "#/$defs/digest" },
+    "raw_locality_evidence_id": { "$ref": "#/$defs/digest" },
+    "crop": { "$ref": "#/$defs/bounds" },
+    "target_region": { "$ref": "#/$defs/targetRegion" },
+    "compiler_policy": { "$ref": "#/$defs/compilerPolicy" },
+    "preview_projection": { "$ref": "#/$defs/previewProjection" },
+    "confirmed_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "canonicalUuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "minLength": 20,
+      "maxLength": 30,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$"
+    },
+    "coordinate": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 32767
+    },
+    "exclusiveCoordinate": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32768
+    },
+    "dimension": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32768
+    },
+    "bounds": {
+      "type": "object",
+      "required": ["left", "top", "right", "bottom"],
+      "properties": {
+        "left": { "$ref": "#/$defs/coordinate" },
+        "top": { "$ref": "#/$defs/coordinate" },
+        "right": { "$ref": "#/$defs/exclusiveCoordinate" },
+        "bottom": { "$ref": "#/$defs/exclusiveCoordinate" }
+      },
+      "additionalProperties": false
+    },
+    "targetRegion": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "target_region_id",
+        "source_raster_sha256",
+        "mask_sha256",
+        "left",
+        "top",
+        "right",
+        "bottom",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.target-region.v1" },
+        "target_region_id": { "$ref": "#/$defs/digest" },
+        "source_raster_sha256": { "$ref": "#/$defs/digest" },
+        "mask_sha256": { "$ref": "#/$defs/digest" },
+        "left": { "$ref": "#/$defs/coordinate" },
+        "top": { "$ref": "#/$defs/coordinate" },
+        "right": { "$ref": "#/$defs/exclusiveCoordinate" },
+        "bottom": { "$ref": "#/$defs/exclusiveCoordinate" },
+        "width": { "$ref": "#/$defs/dimension" },
+        "height": { "$ref": "#/$defs/dimension" }
+      },
+      "additionalProperties": false
+    },
+    "compilerPolicy": {
+      "type": "object",
+      "required": ["policy_id", "compiler_revision"],
+      "properties": {
+        "policy_id": { "const": "raw_crop_nearest.v1" },
+        "compiler_revision": {
+          "const": "moodboard.insert-compiler.raw-crop-nearest.v1"
+        }
+      },
+      "additionalProperties": false
+    },
+    "previewProjection": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "intent_packet_id",
+        "raw_output_occurrence_id",
+        "raw_output_raster_sha256",
+        "raw_structural_evidence_id",
+        "raw_locality_evidence_id",
+        "crop",
+        "target_region_id",
+        "target_width",
+        "target_height",
+        "policy_id",
+        "compiler_revision"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.insert-preview-projection.v1" },
+        "intent_packet_id": { "$ref": "#/$defs/digest" },
+        "raw_output_occurrence_id": { "$ref": "#/$defs/digest" },
+        "raw_output_raster_sha256": { "$ref": "#/$defs/digest" },
+        "raw_structural_evidence_id": { "$ref": "#/$defs/digest" },
+        "raw_locality_evidence_id": { "$ref": "#/$defs/digest" },
+        "crop": { "$ref": "#/$defs/bounds" },
+        "target_region_id": { "$ref": "#/$defs/digest" },
+        "target_width": { "$ref": "#/$defs/dimension" },
+        "target_height": { "$ref": "#/$defs/dimension" },
+        "policy_id": { "const": "raw_crop_nearest.v1" },
+        "compiler_revision": {
+          "const": "moodboard.insert-compiler.raw-crop-nearest.v1"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

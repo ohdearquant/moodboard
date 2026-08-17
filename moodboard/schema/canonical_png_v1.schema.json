@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/canonical_png_v1.schema.json",
+  "title": "Moodboard canonical PNG descriptor v1",
+  "description": "Closed descriptor for one byte-frozen, lossless RGB8 PNG. PNG bytes are stored separately and bound by content_sha256 and content_ref.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "encoder_revision",
+    "deflate_revision",
+    "width",
+    "height",
+    "mode",
+    "byte_count",
+    "content_sha256",
+    "content_ref"
+  ],
+  "properties": {
+    "schema_version": { "const": "moodboard.canonical-png.v1" },
+    "encoder_revision": {
+      "const": "moodboard.png-encoder.rgb8-filter0-deflate-stored.v1"
+    },
+    "deflate_revision": {
+      "const": "moodboard.deflate.rfc1951-stored-blocks.v1"
+    },
+    "width": { "$ref": "#/$defs/dimension" },
+    "height": { "$ref": "#/$defs/dimension" },
+    "mode": { "const": "RGB" },
+    "byte_count": { "$ref": "#/$defs/safePositiveCount" },
+    "content_sha256": { "$ref": "#/$defs/digest" },
+    "content_ref": { "$ref": "#/$defs/digest" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "dimension": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32768
+    },
+    "safePositiveCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50368324
+    }
+  }
+}
