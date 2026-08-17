@@ -1,0 +1,813 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/intent_packet_v1.schema.json",
+  "title": "Moodboard frozen intent packet v1",
+  "description": "Closed packet-only ADR-0014 handoff for the registered ADR-0016 localized-edit operation.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "intent_packet_id",
+    "creative_session_id",
+    "operation",
+    "board",
+    "source",
+    "instruction",
+    "retrieval_route",
+    "references",
+    "generation_request",
+    "verification_policy",
+    "confirmation"
+  ],
+  "properties": {
+    "schema_version": { "const": "moodboard.intent-packet.v1" },
+    "intent_packet_id": { "$ref": "#/$defs/digest" },
+    "creative_session_id": { "$ref": "#/$defs/canonicalUuid" },
+    "operation": {
+      "$ref": "https://github.com/ohdearquant/moodboard/schema/operation_localized_edit_v1.schema.json"
+    },
+    "board": { "$ref": "#/$defs/board" },
+    "source": { "$ref": "#/$defs/source" },
+    "instruction": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "retrieval_route": { "$ref": "#/$defs/retrievalRoute" },
+    "references": { "$ref": "#/$defs/references" },
+    "generation_request": { "$ref": "#/$defs/generationRequest" },
+    "verification_policy": {
+      "$ref": "https://github.com/ohdearquant/moodboard/schema/verification_policy_v1.schema.json"
+    },
+    "confirmation": { "$ref": "#/$defs/confirmation" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "canonicalUuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "boundedToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "versionToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+    },
+    "dimension": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32768
+    },
+    "safePositiveCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "board": {
+      "type": "object",
+      "required": ["board_id", "representation_id", "fit_policy_id"],
+      "properties": {
+        "board_id": { "$ref": "#/$defs/digest" },
+        "representation_id": { "$ref": "#/$defs/digest" },
+        "fit_policy_id": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "description": "Source-media metadata. These dimensions are not asserted equal to canonical-raster dimensions because orientation compilation is a separate operation-owned fact.",
+      "required": [
+        "asset_id",
+        "content_ref",
+        "content_sha256",
+        "mime",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "asset_id": { "$ref": "#/$defs/canonicalUuid" },
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "content_sha256": { "$ref": "#/$defs/digest" },
+        "mime": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 127,
+          "pattern": "^image/[a-z0-9][a-z0-9.+-]*$"
+        },
+        "width": { "$ref": "#/$defs/dimension" },
+        "height": { "$ref": "#/$defs/dimension" }
+      },
+      "additionalProperties": false
+    },
+    "retrievalRoute": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "route_policy_id",
+        "eligible_corpus_sha256",
+        "empty_result_policy",
+        "evidence_artifact_id"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.intent-route.collection-gate.v1" },
+        "route_policy_id": { "$ref": "#/$defs/digest" },
+        "eligible_corpus_sha256": { "$ref": "#/$defs/digest" },
+        "empty_result_policy": { "const": "no_ungated_fallback" },
+        "evidence_artifact_id": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "promptContext": {
+      "type": "object",
+      "required": ["compiler_revision", "text_items"],
+      "properties": {
+        "compiler_revision": { "$ref": "#/$defs/versionToken" },
+        "text_items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "reference": {
+      "type": "object",
+      "required": [
+        "reference_occurrence_id",
+        "role",
+        "asset_id",
+        "content_ref",
+        "source_search_rank",
+        "routed_rank",
+        "source_similarity",
+        "route_reason",
+        "provider_use"
+      ],
+      "properties": {
+        "reference_occurrence_id": { "$ref": "#/$defs/canonicalUuid" },
+        "role": { "const": "visual_context" },
+        "asset_id": { "$ref": "#/$defs/canonicalUuid" },
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "content_sha256": { "$ref": "#/$defs/digest" },
+        "source_search_rank": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "routed_rank": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "source_similarity": {
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1
+        },
+        "route_reason": { "const": "declared_collection_match" },
+        "provider_use": {
+          "enum": ["attached_image", "prompt_context_only", "not_sent"]
+        },
+        "prompt_context": { "$ref": "#/$defs/promptContext" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "provider_use": { "const": "attached_image" } },
+            "required": ["provider_use"]
+          },
+          "then": {
+            "required": ["content_sha256"],
+            "not": { "required": ["prompt_context"] }
+          }
+        },
+        {
+          "if": {
+            "properties": { "provider_use": { "const": "prompt_context_only" } },
+            "required": ["provider_use"]
+          },
+          "then": { "required": ["prompt_context"] }
+        },
+        {
+          "if": {
+            "properties": { "provider_use": { "const": "not_sent" } },
+            "required": ["provider_use"]
+          },
+          "then": { "not": { "required": ["prompt_context"] } }
+        }
+      ]
+    },
+    "references": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/reference" }
+    },
+    "originalSourceArtifact": {
+      "type": "object",
+      "required": ["asset_id", "content_ref", "content_sha256"],
+      "properties": {
+        "asset_id": { "$ref": "#/$defs/canonicalUuid" },
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "content_sha256": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "originalMaskArtifact": {
+      "type": "object",
+      "required": ["mask_sha256", "content_ref", "content_sha256"],
+      "properties": {
+        "mask_sha256": { "$ref": "#/$defs/digest" },
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "content_sha256": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "deliveredArtifact": {
+      "type": "object",
+      "required": [
+        "content_ref",
+        "content_sha256",
+        "byte_count",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "content_sha256": { "$ref": "#/$defs/digest" },
+        "byte_count": { "$ref": "#/$defs/safePositiveCount" },
+        "width": { "$ref": "#/$defs/dimension" },
+        "height": { "$ref": "#/$defs/dimension" }
+      },
+      "additionalProperties": false
+    },
+    "emptyParameters": {
+      "type": "object",
+      "maxProperties": 0,
+      "additionalProperties": false
+    },
+    "deliveredDerivative": {
+      "type": "object",
+      "required": [
+        "compiler_revision",
+        "source_identity_sha256",
+        "parameters",
+        "byte_count",
+        "width",
+        "height",
+        "content_ref",
+        "content_sha256"
+      ],
+      "properties": {
+        "compiler_revision": { "$ref": "#/$defs/versionToken" },
+        "source_identity_sha256": { "$ref": "#/$defs/digest" },
+        "parameters": { "$ref": "#/$defs/emptyParameters" },
+        "byte_count": { "$ref": "#/$defs/safePositiveCount" },
+        "width": { "$ref": "#/$defs/dimension" },
+        "height": { "$ref": "#/$defs/dimension" },
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "content_sha256": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "nullableProviderField": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z][A-Za-z0-9_.\\[\\]-]*$"
+        },
+        { "type": "null" }
+      ]
+    },
+    "nullableProviderRole": {
+      "oneOf": [
+        { "$ref": "#/$defs/boundedToken" },
+        { "type": "null" }
+      ]
+    },
+    "nullablePromptText": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 8192 },
+        { "type": "null" }
+      ]
+    },
+    "sourceOperationInput": {
+      "type": "object",
+      "required": [
+        "role",
+        "original_artifact",
+        "delivery_mode",
+        "provider_field",
+        "provider_role",
+        "capability_id",
+        "delivered_artifact",
+        "derivative",
+        "prompt_text"
+      ],
+      "properties": {
+        "role": { "const": "source_image" },
+        "original_artifact": { "$ref": "#/$defs/originalSourceArtifact" },
+        "delivery_mode": { "enum": ["native_input", "attached_control"] },
+        "provider_field": { "$ref": "#/$defs/nullableProviderField" },
+        "provider_role": { "$ref": "#/$defs/nullableProviderRole" },
+        "capability_id": { "$ref": "#/$defs/digest" },
+        "delivered_artifact": {
+          "oneOf": [
+            { "$ref": "#/$defs/deliveredArtifact" },
+            { "type": "null" }
+          ]
+        },
+        "derivative": {
+          "oneOf": [
+            { "$ref": "#/$defs/deliveredDerivative" },
+            { "type": "null" }
+          ]
+        },
+        "prompt_text": { "type": "null" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "delivery_mode": { "const": "native_input" } },
+            "required": ["delivery_mode"]
+          },
+          "then": {
+            "properties": {
+              "provider_field": { "type": "string" },
+              "provider_role": { "$ref": "#/$defs/boundedToken" },
+              "delivered_artifact": { "$ref": "#/$defs/deliveredArtifact" },
+              "derivative": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "delivery_mode": { "const": "attached_control" } },
+            "required": ["delivery_mode"]
+          },
+          "then": {
+            "properties": {
+              "provider_field": { "type": "string" },
+              "provider_role": { "$ref": "#/$defs/boundedToken" },
+              "delivered_artifact": { "$ref": "#/$defs/deliveredArtifact" },
+              "derivative": { "$ref": "#/$defs/deliveredDerivative" }
+            }
+          }
+        }
+      ]
+    },
+    "maskOperationInput": {
+      "type": "object",
+      "required": [
+        "role",
+        "original_artifact",
+        "delivery_mode",
+        "provider_field",
+        "provider_role",
+        "capability_id",
+        "delivered_artifact",
+        "derivative",
+        "prompt_text"
+      ],
+      "properties": {
+        "role": { "const": "locality_mask" },
+        "original_artifact": { "$ref": "#/$defs/originalMaskArtifact" },
+        "delivery_mode": {
+          "enum": ["native_mask", "attached_overlay", "prompt_only", "not_sent"]
+        },
+        "provider_field": { "$ref": "#/$defs/nullableProviderField" },
+        "provider_role": { "$ref": "#/$defs/nullableProviderRole" },
+        "capability_id": { "$ref": "#/$defs/digest" },
+        "delivered_artifact": {
+          "oneOf": [
+            { "$ref": "#/$defs/deliveredArtifact" },
+            { "type": "null" }
+          ]
+        },
+        "derivative": {
+          "oneOf": [
+            { "$ref": "#/$defs/deliveredDerivative" },
+            { "type": "null" }
+          ]
+        },
+        "prompt_text": { "$ref": "#/$defs/nullablePromptText" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "delivery_mode": { "enum": ["native_mask", "attached_overlay"] }
+            },
+            "required": ["delivery_mode"]
+          },
+          "then": {
+            "properties": {
+              "provider_field": { "type": "string" },
+              "provider_role": { "$ref": "#/$defs/boundedToken" },
+              "delivered_artifact": { "$ref": "#/$defs/deliveredArtifact" },
+              "derivative": { "$ref": "#/$defs/deliveredDerivative" },
+              "prompt_text": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "delivery_mode": { "const": "prompt_only" } },
+            "required": ["delivery_mode"]
+          },
+          "then": {
+            "properties": {
+              "provider_field": { "type": "string" },
+              "provider_role": { "$ref": "#/$defs/boundedToken" },
+              "delivered_artifact": { "type": "null" },
+              "derivative": { "type": "null" },
+              "prompt_text": { "type": "string", "minLength": 1, "maxLength": 8192 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "delivery_mode": { "const": "not_sent" } },
+            "required": ["delivery_mode"]
+          },
+          "then": {
+            "properties": {
+              "provider_field": { "type": "null" },
+              "provider_role": { "type": "null" },
+              "delivered_artifact": { "type": "null" },
+              "derivative": { "type": "null" },
+              "prompt_text": { "type": "null" }
+            }
+          }
+        }
+      ]
+    },
+    "operationInputs": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        { "$ref": "#/$defs/sourceOperationInput" },
+        { "$ref": "#/$defs/maskOperationInput" }
+      ],
+      "items": false,
+      "description": "Authoritative order is source_image followed by locality_mask."
+    },
+    "openRouterImagesOptions": {
+      "type": "object",
+      "required": ["schema_version", "seed", "resolution", "aspect_ratio"],
+      "properties": {
+        "schema_version": { "const": "moodboard.openrouter-images-options.v1" },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "resolution": { "enum": ["1K", "2K", "4K"] },
+        "aspect_ratio": {
+          "enum": ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "noGenerationOptions": {
+      "type": "object",
+      "required": ["schema_version"],
+      "properties": {
+        "schema_version": { "const": "moodboard.generation-options.none.v1" }
+      },
+      "additionalProperties": false
+    },
+    "generationOptions": {
+      "oneOf": [
+        { "$ref": "#/$defs/openRouterImagesOptions" },
+        { "$ref": "#/$defs/noGenerationOptions" }
+      ]
+    },
+    "permittedRoute": {
+      "type": "object",
+      "required": [
+        "route_id",
+        "provider",
+        "model",
+        "upstream_provider_tag",
+        "privacy_class",
+        "retention_class"
+      ],
+      "properties": {
+        "route_id": { "$ref": "#/$defs/boundedToken" },
+        "provider": { "$ref": "#/$defs/boundedToken" },
+        "model": { "$ref": "#/$defs/boundedToken" },
+        "upstream_provider_tag": { "$ref": "#/$defs/boundedToken" },
+        "privacy_class": { "$ref": "#/$defs/boundedToken" },
+        "retention_class": { "$ref": "#/$defs/boundedToken" }
+      },
+      "additionalProperties": false
+    },
+    "providerRoutePolicy": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "provider_route_policy_id",
+        "permitted_routes",
+        "moodboard_fallback_permitted",
+        "undisclosed_upstream_routing_permitted"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.provider-route-policy.v1" },
+        "provider_route_policy_id": { "$ref": "#/$defs/digest" },
+        "permitted_routes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/permittedRoute" }
+        },
+        "moodboard_fallback_permitted": { "type": "boolean" },
+        "undisclosed_upstream_routing_permitted": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "destination": {
+      "type": "object",
+      "required": ["privacy_class", "retention_class", "credential_profile_id"],
+      "properties": {
+        "privacy_class": { "$ref": "#/$defs/boundedToken" },
+        "retention_class": { "$ref": "#/$defs/boundedToken" },
+        "credential_profile_id": { "$ref": "#/$defs/canonicalUuid" }
+      },
+      "additionalProperties": false
+    },
+    "idempotency": {
+      "type": "object",
+      "required": [
+        "provider_accepts_key",
+        "deduplication_scope",
+        "retention_seconds",
+        "ambiguous_transport_retransmit_safe"
+      ],
+      "properties": {
+        "provider_accepts_key": { "type": "boolean" },
+        "deduplication_scope": {
+          "oneOf": [
+            { "$ref": "#/$defs/boundedToken" },
+            { "type": "null" }
+          ]
+        },
+        "retention_seconds": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1, "maximum": 31536000 },
+            { "type": "null" }
+          ]
+        },
+        "ambiguous_transport_retransmit_safe": { "type": "boolean" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "provider_accepts_key": { "const": false } },
+            "required": ["provider_accepts_key"]
+          },
+          "then": {
+            "properties": {
+              "deduplication_scope": { "type": "null" },
+              "retention_seconds": { "type": "null" },
+              "ambiguous_transport_retransmit_safe": { "const": false }
+            }
+          },
+          "else": {
+            "properties": {
+              "deduplication_scope": { "$ref": "#/$defs/boundedToken" },
+              "retention_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 31536000
+              }
+            }
+          }
+        }
+      ]
+    },
+    "reconciliation": {
+      "type": "object",
+      "required": ["supported", "provider_handle_kind"],
+      "properties": {
+        "supported": { "type": "boolean" },
+        "provider_handle_kind": {
+          "oneOf": [
+            { "$ref": "#/$defs/boundedToken" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "supported": { "const": false } },
+            "required": ["supported"]
+          },
+          "then": {
+            "properties": { "provider_handle_kind": { "type": "null" } }
+          },
+          "else": {
+            "properties": {
+              "provider_handle_kind": { "$ref": "#/$defs/boundedToken" }
+            }
+          }
+        }
+      ]
+    },
+    "generationRequest": {
+      "type": "object",
+      "required": [
+        "requested_provider",
+        "requested_model",
+        "adapter_revision",
+        "capability_snapshot_id",
+        "output_count",
+        "options",
+        "operation_inputs",
+        "provider_route_policy",
+        "destination",
+        "actual_model_policy",
+        "idempotency",
+        "reconciliation"
+      ],
+      "properties": {
+        "requested_provider": { "$ref": "#/$defs/boundedToken" },
+        "requested_model": { "$ref": "#/$defs/boundedToken" },
+        "adapter_revision": { "$ref": "#/$defs/versionToken" },
+        "capability_snapshot_id": { "$ref": "#/$defs/digest" },
+        "output_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "options": { "$ref": "#/$defs/generationOptions" },
+        "operation_inputs": { "$ref": "#/$defs/operationInputs" },
+        "provider_route_policy": { "$ref": "#/$defs/providerRoutePolicy" },
+        "destination": { "$ref": "#/$defs/destination" },
+        "actual_model_policy": {
+          "enum": ["exact_required", "requested_only_permitted"]
+        },
+        "idempotency": { "$ref": "#/$defs/idempotency" },
+        "reconciliation": { "$ref": "#/$defs/reconciliation" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "requested_provider": { "const": "openrouter" } },
+            "required": ["requested_provider"]
+          },
+          "then": {
+            "properties": {
+              "options": { "$ref": "#/$defs/openRouterImagesOptions" }
+            }
+          },
+          "else": {
+            "properties": {
+              "options": { "$ref": "#/$defs/noGenerationOptions" }
+            }
+          }
+        }
+      ]
+    },
+    "referenceUse": {
+      "type": "object",
+      "required": ["reference_occurrence_id", "provider_use"],
+      "properties": {
+        "reference_occurrence_id": { "$ref": "#/$defs/canonicalUuid" },
+        "provider_use": {
+          "enum": ["attached_image", "prompt_context_only", "not_sent"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "dispatchShown": {
+      "type": "object",
+      "required": [
+        "requested_provider",
+        "requested_model",
+        "output_count",
+        "destination",
+        "adapter_revision",
+        "capability_snapshot_id",
+        "options",
+        "provider_route_policy",
+        "actual_model_policy",
+        "idempotency",
+        "reconciliation",
+        "verification_policy_id",
+        "required_verifiers"
+      ],
+      "properties": {
+        "requested_provider": { "$ref": "#/$defs/boundedToken" },
+        "requested_model": { "$ref": "#/$defs/boundedToken" },
+        "output_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "destination": { "$ref": "#/$defs/destination" },
+        "adapter_revision": { "$ref": "#/$defs/versionToken" },
+        "capability_snapshot_id": { "$ref": "#/$defs/digest" },
+        "options": { "$ref": "#/$defs/generationOptions" },
+        "provider_route_policy": { "$ref": "#/$defs/providerRoutePolicy" },
+        "actual_model_policy": {
+          "enum": ["exact_required", "requested_only_permitted"]
+        },
+        "idempotency": { "$ref": "#/$defs/idempotency" },
+        "reconciliation": { "$ref": "#/$defs/reconciliation" },
+        "verification_policy_id": { "$ref": "#/$defs/digest" },
+        "required_verifiers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true,
+          "prefixItems": [
+            { "const": "moodboard.verifier.outside-mask-rgb-exact.v1" }
+          ],
+          "items": false
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "requested_provider": { "const": "openrouter" } },
+            "required": ["requested_provider"]
+          },
+          "then": {
+            "properties": {
+              "options": { "$ref": "#/$defs/openRouterImagesOptions" }
+            }
+          },
+          "else": {
+            "properties": {
+              "options": { "$ref": "#/$defs/noGenerationOptions" }
+            }
+          }
+        }
+      ]
+    },
+    "confirmation": {
+      "type": "object",
+      "required": [
+        "mode",
+        "references_shown",
+        "reference_use",
+        "operation_inputs_shown",
+        "dispatch_shown",
+        "compact_summary_id",
+        "confirmed_at",
+        "studio_session_id",
+        "principal_id"
+      ],
+      "properties": {
+        "mode": { "enum": ["explicit", "default_trust"] },
+        "references_shown": { "$ref": "#/$defs/references" },
+        "reference_use": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/referenceUse" }
+        },
+        "operation_inputs_shown": { "$ref": "#/$defs/operationInputs" },
+        "dispatch_shown": { "$ref": "#/$defs/dispatchShown" },
+        "compact_summary_id": { "$ref": "#/$defs/digest" },
+        "confirmed_at": {
+          "type": "string",
+          "format": "date-time",
+          "minLength": 20,
+          "maxLength": 40
+        },
+        "studio_session_id": { "$ref": "#/$defs/canonicalUuid" },
+        "principal_id": { "$ref": "#/$defs/canonicalUuid" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

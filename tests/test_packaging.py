@@ -33,6 +33,14 @@ DEMO_RUNTIME_DATA = {
     / "schema"
     / "demo_manifest_v1.schema.json": "moodboard/schema/demo_manifest_v1.schema.json",
 }
+INTENT_PACKET_SCHEMAS = {
+    REPO_ROOT / "moodboard" / "schema" / name: f"moodboard/schema/{name}"
+    for name in (
+        "intent_packet_v1.schema.json",
+        "operation_localized_edit_v1.schema.json",
+        "verification_policy_v1.schema.json",
+    )
+}
 
 
 def _build_wheel(destination: Path) -> Path:
@@ -131,6 +139,22 @@ def test_the_schema_the_report_validates_against_also_ships(tmp_path):
     assert judgment_schema_bytes == (
         REPO_ROOT / "moodboard" / "schema" / "judgment_v1.schema.json"
     ).read_bytes(), "the installed typed-judgment contract differs from the reviewed schema bytes"
+
+
+def test_the_intent_packet_schema_registry_ships_byte_for_byte(tmp_path):
+    """External schema references must resolve from an installed, offline package."""
+
+    wheel = _build_wheel(tmp_path / "dist")
+
+    with zipfile.ZipFile(wheel) as archive:
+        for source, packaged_path in INTENT_PACKET_SCHEMAS.items():
+            assert packaged_path in archive.namelist(), (
+                f"{packaged_path} is missing from the wheel, so the installed intent-packet "
+                "validator cannot resolve its closed operation and verifier registry"
+            )
+            assert archive.read(packaged_path) == source.read_bytes(), (
+                f"the installed {packaged_path} differs from the reviewed contract bytes"
+            )
 
 
 def test_the_demo_acquisition_catalog_and_manifest_contract_ship_byte_for_byte(tmp_path):
