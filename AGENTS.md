@@ -73,8 +73,11 @@ ordinary test depend on a real `kkernel`, a model checkpoint, or the network.
 
 | Path | Regenerate with |
 |---|---|
-| `viewer/src/generated/report-validators.mjs` (+ `.d.mts`) | `npm --prefix viewer run validators:write` |
-| `viewer/src/generated/*-bridge.json` | the matching `*:write` script in `viewer/package.json` |
+| `viewer/src/generated/report-validators.mjs` | `npm --prefix viewer run validators:write` |
+| `viewer/src/generated/report-validators.d.mts` | edited alongside the generator; `validators:write` does not emit it |
+| `viewer/src/generated/pixel-rag-bridge.json` | `npm --prefix viewer run pixel-rag:write` |
+| `viewer/src/generated/preference-replay-bridge.json` | `npm --prefix viewer run preference-replay:write` |
+| `viewer/src/generated/firefly-bridge.json` | `uv run python -m moodboard.firefly_viewer` (no npm write script; `firefly:check` verifies) |
 | `viewer/dist-static/` | `npm --prefix viewer run build` |
 | `moodboard/viewer_dist/` | staged by the viewer build; never edited directly |
 
