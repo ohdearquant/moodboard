@@ -2484,12 +2484,13 @@ def _finalized_provider_evidence(
                 locality = build_locality_not_run(structural.judgment, inputs.mask)
                 locality_document = judgment_to_json(locality)
                 locality_state = str(locality_document["result"]["state"])
+            except OpenRouterRealE2EError:
+                raise
             except Exception:
-                structural_document = None
-                locality_document = None
-                structural_state = "not_run"
-                structural_reason = None
-                locality_state = "not_run"
+                # Fail closed, matching the success branch: publishing "not_run" for a
+                # verification that was attempted and raised would be a false report, and the
+                # degraded bytes would wedge exact replay behind an artifact conflict.
+                _fail("finalization_artifact_invalid")
         journal.verify_integrity()
         result = OpenRouterRealE2EResult(
             generation_run_id=inputs.run.generation_run_id,
@@ -2801,27 +2802,23 @@ def _execute_with_token(
             structural_reason: str | None = None
             locality_state = "not_run"
             if len(stored_response.output_bytes) == 1:
-                try:
-                    structural = verify_output_structure(
-                        source_raster,
-                        provider_receipt=stored_response.receipt,
-                        output_index=0,
-                        output_bytes=stored_response.output_bytes[0],
-                        output_occurrence=None,
-                    )
-                    structural_document = judgment_to_json(structural.judgment)
-                    structural_state = str(structural_document["result"]["state"])
-                    reason = structural_document["result"].get("reason")
-                    structural_reason = reason if isinstance(reason, str) else None
-                    locality = build_locality_not_run(structural.judgment, mask)
-                    locality_document = judgment_to_json(locality)
-                    locality_state = str(locality_document["result"]["state"])
-                except Exception:
-                    structural_document = None
-                    locality_document = None
-                    structural_state = "not_run"
-                    structural_reason = None
-                    locality_state = "not_run"
+                # A verification that raises fails the run closed rather than being published
+                # as "not_run". The journal keeps the durable evidence at response_received,
+                # and the credential-free finalizer is the recovery path.
+                structural = verify_output_structure(
+                    source_raster,
+                    provider_receipt=stored_response.receipt,
+                    output_index=0,
+                    output_bytes=stored_response.output_bytes[0],
+                    output_occurrence=None,
+                )
+                structural_document = judgment_to_json(structural.judgment)
+                structural_state = str(structural_document["result"]["state"])
+                reason = structural_document["result"].get("reason")
+                structural_reason = reason if isinstance(reason, str) else None
+                locality = build_locality_not_run(structural.judgment, mask)
+                locality_document = judgment_to_json(locality)
+                locality_state = str(locality_document["result"]["state"])
             # ADR-0014 keeps media/provenance rejection at response_received.  The structural
             # judgment and locality not_run evidence remain visible without forging a terminal
             # provider failure or a selectable output occurrence.
@@ -2935,9 +2932,14 @@ def _execute_with_token(
         _scan_private_artifacts(target, token)
         return "ok", result
     except OpenRouterRealE2EError as error:
-        # The secret-scan verdicts are the one diagnostic built to be unambiguous; every
-        # other failure still collapses to the generic code so no detail can carry a secret.
-        if error.code in {"credential_material_persisted", "artifact_secret_scan_failed"}:
+        # The secret-scan verdicts and the artifact-materialization conflict are diagnostics
+        # built to be unambiguous; every other failure still collapses to the generic code so
+        # no detail can carry a secret. All three are static literal strings.
+        if error.code in {
+            "credential_material_persisted",
+            "artifact_secret_scan_failed",
+            "finalization_artifact_conflict",
+        }:
             return error.code, None
         return "execution_failed", None
     except BaseException:
