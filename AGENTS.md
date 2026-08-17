@@ -103,11 +103,16 @@ record, the change is a new record plus the code, not just the code.
 
 ## Style
 
+The style authority is [`docs/STYLE.md`](docs/STYLE.md). The points agents get wrong most:
+
+- New comments and docstrings are terse: one-line docstrings for most functions, comments only
+  where the why is not visible in the code. Rationale longer than two sentences goes to a
+  decision record, `INTERFACES.md`, or the commit message, with a citation left in the source.
+- Much of the existing code predates that rule and carries paragraph-length load-bearing
+  comments. Do not delete them on style grounds; migrate their substance to the right home
+  when you touch the code they describe.
 - Python is linted by ruff with the configuration in `pyproject.toml` (line length 100).
   There is no separate formatter; match the surrounding code.
-- Comments in this codebase explain *why*, often at paragraph length, and many of them are
-  load-bearing records of a decision. Preserve them unless you are removing the code they
-  describe, and write in the same register when you add your own.
 - Tests are deterministic. No sleeps, no wall-clock dependence, no network, no randomness
   without a fixed seed.
 - Commit subjects are lowercase and type-prefixed (`docs:`, `feat:`, `fix:`, `ci:`), matching
