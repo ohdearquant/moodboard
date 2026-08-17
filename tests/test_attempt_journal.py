@@ -474,7 +474,14 @@ def test_dispatch_claim_rejects_a_capability_not_bound_to_the_attempt(tmp_path: 
     assert journal.read_state(attempt["attempt_id"]).state == "prepared"
 
 
-def test_dispatch_claim_rejects_an_impossible_calendar_timestamp(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "claimed_at",
+    ("2026-99-99T99:99:99Z", "2026-08-16T24:00:00Z"),
+)
+def test_dispatch_claim_rejects_an_impossible_calendar_timestamp(
+    tmp_path: Path,
+    claimed_at: str,
+) -> None:
     run, attempt, capability, prepared, _ = _chain()
     journal = AttemptJournal((tmp_path / "attempts.sqlite3").resolve())
     _append_prepared(journal, run, attempt, prepared)
@@ -486,7 +493,7 @@ def test_dispatch_claim_rejects_an_impossible_calendar_timestamp(tmp_path: Path)
             expected_head_event_id=prepared["attempt_event_id"],
             expected_next_sequence=2,
             dispatch_claim_id=_CLAIM_ID,
-            claimed_at="2026-99-99T99:99:99Z",
+            claimed_at=claimed_at,
             wire_request_sha256=_WIRE_SHA256,
             wire_request_byte_count=4096,
         )

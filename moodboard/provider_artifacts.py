@@ -31,6 +31,7 @@ from moodboard.contracts import (
     canonical_json_bytes,
     compute_document_identity,
     compute_projection_identity,
+    is_canonical_utc_timestamp,
     verify_document_identity,
 )
 from moodboard.intent_packet import IntentPacket
@@ -102,6 +103,13 @@ _SINGLETON_VERSIONS = frozenset(
 _MAX_BUNDLE_ARTIFACTS = 64
 _MAX_BUNDLE_EVENTS = 32
 _MAX_BUNDLE_OUTPUTS = 8
+_TIMESTAMP_FIELDS = {
+    RUN_VERSION: "created_at",
+    ATTEMPT_VERSION: "created_at",
+    EVENT_VERSION: "recorded_at",
+    CAPABILITY_VERSION: "captured_at",
+    RECEIPT_VERSION: "received_at",
+}
 
 
 class ProviderArtifactError(ValueError):
@@ -527,6 +535,13 @@ def validate_provider_artifact(document: dict[str, Any]) -> None:
         raise ProviderArtifactError(
             f"unsupported provider-artifact schema_version: {schema_version!r}"
         )
+    timestamp_field = _TIMESTAMP_FIELDS.get(schema_version)
+    if (
+        timestamp_field is not None
+        and timestamp_field in document
+        and not is_canonical_utc_timestamp(document[timestamp_field])
+    ):
+        raise ProviderArtifactError(f"{timestamp_field} must be a real canonical UTC timestamp")
     _validate_schema(document, schema_version)
     _validate_identity(document, schema_version)
     if schema_version == RUN_VERSION:

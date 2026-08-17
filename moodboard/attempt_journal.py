@@ -25,13 +25,16 @@ import uuid
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, fields
-from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
 from typing import Any, Final, TypeAlias
 
 from moodboard.attempt_state import AttemptState, AttemptStateError, reduce_attempt_events
-from moodboard.contracts import ContractIdentityError, canonical_json_bytes
+from moodboard.contracts import (
+    ContractIdentityError,
+    canonical_json_bytes,
+    is_canonical_utc_timestamp,
+)
 from moodboard.provider_artifacts import (
     EVENT_VERSION,
     GenerationAttempt,
@@ -70,7 +73,6 @@ _MAX_WIRE_REQUEST_BYTES: Final = 32 * 1024 * 1024
 _MAX_TREE_DEPTH: Final = 64
 _MAX_TREE_NODES: Final = 20_000
 _DIGEST_RE: Final = re.compile(r"^[0-9a-f]{64}$")
-_TIMESTAMP_RE: Final = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$")
 _HIGH_CONFIDENCE_SECRET_PATTERNS: Final = (
     re.compile(r"sk-or-v1-[A-Za-z0-9_-]{16,}"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
@@ -307,14 +309,8 @@ def _validate_digest(value: str, field: str) -> None:
 
 
 def _validate_timestamp(value: str, field: str) -> None:
-    if not isinstance(value, str) or len(value) > 40 or _TIMESTAMP_RE.fullmatch(value) is None:
-        raise AttemptJournalError(f"{field} must be a bounded UTC timestamp")
-    try:
-        parsed = datetime.fromisoformat(f"{value[:-1]}+00:00")
-    except ValueError as error:
-        raise AttemptJournalError(f"{field} must be a real calendar timestamp") from error
-    if parsed.tzinfo != UTC:
-        raise AttemptJournalError(f"{field} must use UTC")
+    if not is_canonical_utc_timestamp(value):
+        raise AttemptJournalError(f"{field} must be a real canonical UTC timestamp")
 
 
 def _validate_artifact_timestamp(artifact: ProviderArtifact) -> None:

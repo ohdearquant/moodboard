@@ -1,4 +1,4 @@
-"""Shared canonical identity primitives for immutable Moodboard contracts.
+"""Shared canonical primitives for immutable Moodboard contracts.
 
 ADR-0012 through ADR-0016 identify documents with RFC 8785 JSON Canonicalization
 Scheme bytes and a schema-version domain separator.  This module is deliberately
@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 import rfc8785
@@ -19,14 +21,48 @@ __all__ = [
     "canonical_json_bytes",
     "compute_document_identity",
     "compute_projection_identity",
+    "is_canonical_utc_timestamp",
     "verify_document_identity",
 ]
 
 _LOWER_HEX = frozenset("0123456789abcdef")
+_CANONICAL_UTC_TIMESTAMP_RE = re.compile(
+    r"^(?P<year>[0-9]{4})-(?P<month>[0-9]{2})-(?P<day>[0-9]{2})"
+    r"T(?P<hour>[0-9]{2}):(?P<minute>[0-9]{2}):(?P<second>[0-9]{2})"
+    r"(?:\.(?P<fraction>[0-9]{1,9}))?Z$"
+)
 
 
 class ContractIdentityError(ValueError):
     """A value cannot participate in the declared immutable identity contract."""
+
+
+def is_canonical_utc_timestamp(value: object) -> bool:
+    """Return whether ``value`` is one real canonical UTC timestamp.
+
+    The v1 spelling is deliberately narrower than general RFC 3339: uppercase
+    ``T``/``Z``, no offset, and at most nine fractional-second digits. Leap
+    seconds and ``24:00:00`` are not part of this contract.
+    """
+
+    if not isinstance(value, str):
+        return False
+    matched = _CANONICAL_UTC_TIMESTAMP_RE.fullmatch(value)
+    if matched is None:
+        return False
+    try:
+        datetime(
+            int(matched["year"]),
+            int(matched["month"]),
+            int(matched["day"]),
+            int(matched["hour"]),
+            int(matched["minute"]),
+            int(matched["second"]),
+            tzinfo=UTC,
+        )
+    except ValueError:
+        return False
+    return True
 
 
 def canonical_json_bytes(value: Any) -> bytes:
@@ -47,9 +83,7 @@ def _domain_tag_bytes(domain_tag: str) -> bytes:
         raise ContractIdentityError("domain_tag must be valid UTF-8") from error
 
 
-def compute_projection_identity(
-    projection: Mapping[str, Any], *, domain_tag: str
-) -> str:
+def compute_projection_identity(projection: Mapping[str, Any], *, domain_tag: str) -> str:
     """Hash one contract-declared identity projection under an exact domain tag.
 
     Callers, not this helper, own the closed projection.  This distinction matters:
@@ -108,11 +142,7 @@ def verify_document_identity(
     """Fail unless a document carries its exact domain-separated computed identity."""
 
     claimed = document.get(identity_field)
-    if (
-        not isinstance(claimed, str)
-        or len(claimed) != 64
-        or not set(claimed) <= _LOWER_HEX
-    ):
+    if not isinstance(claimed, str) or len(claimed) != 64 or not set(claimed) <= _LOWER_HEX:
         raise ContractIdentityError(
             f"document {identity_field} must be 64 lowercase hexadecimal characters"
         )
