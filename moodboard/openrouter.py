@@ -7,10 +7,9 @@ This module owns four deliberately narrow boundaries:
 * decoding of one buffered provider response into a receipt plus private payload bytes; and
 * ordering one non-idempotent send behind :class:`~moodboard.attempt_journal.AttemptJournal`.
 
-It does not mint output occurrences or append ``succeeded``.  A caller-supplied response
-publisher must durably store the receipt, raw response, and output bytes before this adapter will
-append ``response_received``.  Media admission and the atomic terminal-success gate are separate
-concerns.
+It does not mint output occurrences or append ``succeeded``.  The attempt journal atomically
+stores the receipt, private raw response, output bytes, and derived ``response_received`` event.
+Media admission and the atomic terminal-success gate are separate concerns.
 """
 
 from __future__ import annotations
@@ -1749,7 +1748,6 @@ def dispatch_openrouter_attempt(
     *,
     credential_resolver: Callable[[str], str],
     transport: Callable[..., OpenRouterHttpResponse],
-    response_publisher: Callable[[OpenRouterDecodedResponse], None],
     dispatch_claim_id: str,
     claimed_at: str,
     recorded_at: str | Callable[[], str],
@@ -1770,7 +1768,7 @@ def dispatch_openrouter_attempt(
         isinstance(recorded_at, str) or callable(recorded_at)
     ):
         raise OpenRouterAdapterError("dispatch_timestamp_invalid", "dispatch timestamp is invalid")
-    if not all(callable(value) for value in (credential_resolver, transport, response_publisher)):
+    if not all(callable(value) for value in (credential_resolver, transport)):
         raise OpenRouterAdapterError("dispatch_callable_invalid", "dispatch callable is invalid")
     try:
         stored_attempt = journal.read_attempt(descriptor.attempt_id)
@@ -1964,9 +1962,79 @@ def dispatch_openrouter_attempt(
                 "failure_code": "credential_material_detected",
             },
         )
+    response_head_event_id = submitted_state.head_event_id
+    if response_head_event_id is None:
+        raise OpenRouterAdapterError(
+            "event_persistence_failed", "submitted attempt has no durable head"
+        )
+
+    def recover_exact_publication(current: AttemptState) -> OpenRouterDispatchResult | None:
+        if current.state != "response_received":
+            return None
+        stored = journal.read_provider_response(descriptor.attempt_id)
+        if (
+            stored.receipt == decoded.receipt
+            and stored.raw_response_bytes == decoded.raw_response_bytes
+            and stored.output_bytes == decoded.output_bytes
+        ):
+            return OpenRouterDispatchResult("response_received", current, stored.event, decoded)
+        raise OpenRouterAdapterError(
+            "event_persistence_failed", "stored provider response conflicts"
+        )
+
     try:
-        response_publisher(decoded)
-    except Exception:
+        publication = journal.publish_provider_response(
+            decoded.receipt,
+            decoded.raw_response_bytes,
+            decoded.output_bytes,
+            expected_head_event_id=response_head_event_id,
+            expected_next_sequence=submitted_state.next_sequence,
+        )
+    except AttemptJournalError:
+        # A COMMIT acknowledgement can be lost after the evidence/event transaction became
+        # durable. Re-read that exact package before projecting a persistence failure; a provider
+        # response must never be sent again merely to repair local acknowledgement uncertainty.
+        try:
+            current = journal.read_state(descriptor.attempt_id)
+            recovered = recover_exact_publication(current)
+            if recovered is not None:
+                return recovered
+            if current.state == "outcome_unknown":
+                if current.head_event_id is None:
+                    raise OpenRouterAdapterError(
+                        "event_persistence_failed", "outcome_unknown attempt has no durable head"
+                    )
+                try:
+                    publication = journal.publish_provider_response(
+                        decoded.receipt,
+                        decoded.raw_response_bytes,
+                        decoded.output_bytes,
+                        expected_head_event_id=current.head_event_id,
+                        expected_next_sequence=current.next_sequence,
+                    )
+                except AttemptJournalError:
+                    latest = journal.read_state(descriptor.attempt_id)
+                    recovered = recover_exact_publication(latest)
+                    if recovered is not None:
+                        return recovered
+                    raise OpenRouterAdapterError(
+                        "event_persistence_failed",
+                        "provider response persistence is uncertain",
+                    ) from None
+                return OpenRouterDispatchResult(
+                    "response_received", publication.state, publication.event, decoded
+                )
+            if current.state != "submitted":
+                raise OpenRouterAdapterError(
+                    "event_persistence_failed",
+                    "attempt advanced incompatibly after provider response",
+                )
+        except OpenRouterAdapterError:
+            raise
+        except Exception:
+            raise OpenRouterAdapterError(
+                "event_persistence_failed", "provider response persistence is uncertain"
+            ) from None
         return _terminal_result(
             journal,
             submitted_state,
@@ -1978,18 +2046,9 @@ def dispatch_openrouter_attempt(
                 "failure_code": "output_persistence_failed",
             },
         )
-    response_event = _event(
-        descriptor.attempt_id,
-        submitted_state.next_sequence,
-        "response_received",
-        response_at,
-        {
-            "kind": "response_received",
-            "provider_receipt_id": decoded.receipt.provider_receipt_id,
-        },
+    return OpenRouterDispatchResult(
+        "response_received", publication.state, publication.event, decoded
     )
-    response_state = _append_result_event(journal, submitted_state, response_event)
-    return OpenRouterDispatchResult("response_received", response_state, response_event, decoded)
 
 
 def reconcile_openrouter_attempt(

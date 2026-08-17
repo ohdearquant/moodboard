@@ -11,6 +11,7 @@ import base64
 import copy
 import hashlib
 import json
+import sqlite3
 import threading
 from dataclasses import FrozenInstanceError, is_dataclass, replace
 from pathlib import Path
@@ -21,7 +22,11 @@ import pytest
 from blake3 import blake3
 
 import moodboard.openrouter as openrouter_module
-from moodboard.attempt_journal import AttemptJournal
+from moodboard.attempt_journal import (
+    AttemptJournal,
+    AttemptJournalError,
+    JournalNotFoundError,
+)
 from moodboard.contracts import compute_document_identity
 from moodboard.openrouter import (
     ADAPTER_REVISION,
@@ -275,12 +280,11 @@ def test_prepare_pins_exact_jcs_wire_body_data_urls_identity_and_fixture_order()
     assert _REFERENCE_DATA_URL not in prepared_repr
 
 
-def test_success_claims_before_transport_and_publishes_exact_response_before_event(
+def test_success_claims_before_transport_and_atomically_persists_response_evidence(
     tmp_path: Path,
 ) -> None:
     journal, attempt, capability, prepared = _seed_dispatch(tmp_path)
     observed: list[str] = []
-    published: dict[str, object] = {}
 
     def credential_resolver(credential_profile_id: str) -> str:
         assert credential_profile_id == "00000000-0000-4000-8000-000000000005"
@@ -298,17 +302,6 @@ def test_success_claims_before_transport_and_publishes_exact_response_before_eve
         observed.append("transport")
         return _success_response()
 
-    def response_publisher(decoded: OpenRouterDecodedResponse) -> None:
-        assert journal.read_state(attempt.attempt_id).state == "submitted"
-        assert [event.state for event in journal.read_events(attempt.attempt_id)] == [
-            "prepared",
-            "submitted",
-        ]
-        published["receipt"] = provider_to_json(decoded.receipt)
-        published["raw_response_bytes"] = decoded.raw_response_bytes
-        published["output_bytes"] = decoded.output_bytes
-        observed.append("publisher")
-
     def recorded_at() -> str:
         assert journal.read_state(attempt.attempt_id).state == "submitted"
         observed.append("clock")
@@ -321,7 +314,6 @@ def test_success_claims_before_transport_and_publishes_exact_response_before_eve
         prepared,
         credential_resolver=credential_resolver,
         transport=transport,
-        response_publisher=response_publisher,
         dispatch_claim_id=_DISPATCH_CLAIM_ID,
         claimed_at=_CLAIMED_AT,
         recorded_at=recorded_at,
@@ -332,7 +324,7 @@ def test_success_claims_before_transport_and_publishes_exact_response_before_eve
     assert result.state.state == "response_received"
     assert result.event is not None and result.event.state == "response_received"
     assert isinstance(result.decoded, OpenRouterDecodedResponse)
-    assert observed == ["transport", "clock", "publisher"]
+    assert observed == ["transport", "clock"]
     assert [event.state for event in journal.read_events(attempt.attempt_id)] == [
         "prepared",
         "submitted",
@@ -341,11 +333,10 @@ def test_success_claims_before_transport_and_publishes_exact_response_before_eve
 
     decoded = result.decoded
     receipt = provider_to_json(decoded.receipt)
-    assert published == {
-        "receipt": receipt,
-        "raw_response_bytes": _RESPONSE_BODY,
-        "output_bytes": (_OUTPUT_BYTES,),
-    }
+    stored = journal.read_provider_response(attempt.attempt_id)
+    assert provider_to_json(stored.receipt) == receipt
+    assert stored.raw_response_bytes == _RESPONSE_BODY
+    assert stored.output_bytes == (_OUTPUT_BYTES,)
     assert decoded.raw_response_bytes == _RESPONSE_BODY
     assert decoded.output_bytes == (_OUTPUT_BYTES,)
     assert receipt["actual_model"] == {
@@ -427,7 +418,6 @@ def test_concurrent_and_exact_dispatch_replay_send_the_attempt_at_most_once(
                     prepared,
                     credential_resolver=lambda _: "test-bearer-token",
                     transport=transport,
-                    response_publisher=lambda _: None,
                     dispatch_claim_id=_DISPATCH_CLAIM_ID,
                     claimed_at=_CLAIMED_AT,
                     recorded_at=_RECORDED_AT,
@@ -462,7 +452,6 @@ def test_concurrent_and_exact_dispatch_replay_send_the_attempt_at_most_once(
         prepared,
         credential_resolver=lambda _: "test-bearer-token",
         transport=transport,
-        response_publisher=lambda _: pytest.fail("replay must not republish"),
         dispatch_claim_id=_DISPATCH_CLAIM_ID,
         claimed_at=_CLAIMED_AT,
         recorded_at=_RECORDED_AT,
@@ -498,7 +487,6 @@ def test_ambiguous_transport_is_durably_unknown_and_never_retried(
         prepared,
         credential_resolver=lambda _: secret,
         transport=transport,
-        response_publisher=lambda _: pytest.fail("unknown response cannot publish"),
         dispatch_claim_id=_DISPATCH_CLAIM_ID,
         claimed_at=_CLAIMED_AT,
         recorded_at=_RECORDED_AT,
@@ -510,7 +498,6 @@ def test_ambiguous_transport_is_durably_unknown_and_never_retried(
         prepared,
         credential_resolver=lambda _: secret,
         transport=transport,
-        response_publisher=lambda _: pytest.fail("replay cannot publish"),
         dispatch_claim_id=_DISPATCH_CLAIM_ID,
         claimed_at=_CLAIMED_AT,
         recorded_at=_RECORDED_AT,
@@ -552,6 +539,66 @@ def test_ambiguous_transport_is_durably_unknown_and_never_retried(
     assert secret not in repr(replay)
 
 
+def test_valid_response_recovers_from_concurrent_outcome_unknown_without_resend(
+    tmp_path: Path,
+) -> None:
+    journal, attempt, capability, prepared = _seed_dispatch(tmp_path)
+    sends = 0
+
+    def transport(*, body: bytes, bearer_token: str) -> OpenRouterHttpResponse:
+        nonlocal sends
+        assert body == _WIRE_BODY
+        assert bearer_token == "test-bearer-token"
+        sends += 1
+        submitted = journal.read_state(attempt.attempt_id)
+        assert submitted.state == "submitted"
+        assert submitted.head_event_id is not None
+        journal.append_event(
+            _event(
+                attempt_id=attempt.attempt_id,
+                sequence=submitted.next_sequence,
+                state="outcome_unknown",
+                recorded_at=_RECORDED_AT,
+                detail={
+                    "kind": "outcome_unknown",
+                    "failure_stage": "dispatch",
+                    "failure_code": "ambiguous_transport",
+                    "provider_handle": None,
+                },
+            ),
+            expected_head_event_id=submitted.head_event_id,
+            expected_next_sequence=submitted.next_sequence,
+        )
+        return _success_response()
+
+    result = dispatch_openrouter_attempt(
+        journal,
+        attempt,
+        capability,
+        prepared,
+        credential_resolver=lambda _: "test-bearer-token",
+        transport=transport,
+        dispatch_claim_id=_DISPATCH_CLAIM_ID,
+        claimed_at=_CLAIMED_AT,
+        recorded_at=_RECORDED_AT,
+    )
+
+    assert result.kind == "response_received"
+    assert result.state.state == "response_received"
+    assert result.decoded is not None
+    assert sends == 1
+    assert [event.state for event in journal.read_events(attempt.attempt_id)] == [
+        "prepared",
+        "submitted",
+        "outcome_unknown",
+        "response_received",
+    ]
+    stored = journal.read_provider_response(attempt.attempt_id)
+    assert stored.receipt == result.decoded.receipt
+    assert stored.raw_response_bytes == _RESPONSE_BODY
+    assert stored.output_bytes == (_OUTPUT_BYTES,)
+
+
 def test_credential_failure_is_preflight_before_claim_or_transport_and_is_sanitized(
     tmp_path: Path,
 ) -> None:
@@ -577,7 +624,6 @@ def test_credential_failure_is_preflight_before_claim_or_transport_and_is_saniti
         prepared,
         credential_resolver=credential_resolver,
         transport=transport,
-        response_publisher=lambda _: pytest.fail("preflight failure cannot publish"),
         dispatch_claim_id=_DISPATCH_CLAIM_ID,
         claimed_at=_CLAIMED_AT,
         recorded_at=_RECORDED_AT,
@@ -620,7 +666,6 @@ def test_complete_non_2xx_is_provider_failure_without_publishing_or_leaking_resp
         body=body,
         elapsed_milliseconds=17,
     )
-    published: list[OpenRouterDecodedResponse] = []
 
     result = dispatch_openrouter_attempt(
         journal,
@@ -629,7 +674,6 @@ def test_complete_non_2xx_is_provider_failure_without_publishing_or_leaking_resp
         prepared,
         credential_resolver=lambda _: secret,
         transport=lambda **_: response,
-        response_publisher=published.append,
         dispatch_claim_id=_DISPATCH_CLAIM_ID,
         claimed_at=_CLAIMED_AT,
         recorded_at=_RECORDED_AT,
@@ -644,7 +688,8 @@ def test_complete_non_2xx_is_provider_failure_without_publishing_or_leaking_resp
         "failure_code": "openrouter_http_429",
     }
     assert result.decoded is None
-    assert published == []
+    with pytest.raises(JournalNotFoundError):
+        journal.read_provider_response(attempt.attempt_id)
     assert [event.state for event in journal.read_events(attempt.attempt_id)] == [
         "prepared",
         "submitted",
@@ -660,7 +705,6 @@ def test_fewer_outputs_fails_output_validation_without_publication_or_response_e
     tmp_path: Path,
 ) -> None:
     journal, attempt, capability, prepared = _seed_dispatch(tmp_path)
-    published: list[OpenRouterDecodedResponse] = []
     short_response = OpenRouterHttpResponse(
         status=200,
         headers={"content-type": "application/json"},
@@ -675,7 +719,6 @@ def test_fewer_outputs_fails_output_validation_without_publication_or_response_e
         prepared,
         credential_resolver=lambda _: "test-bearer-token",
         transport=lambda **_: short_response,
-        response_publisher=published.append,
         dispatch_claim_id=_DISPATCH_CLAIM_ID,
         claimed_at=_CLAIMED_AT,
         recorded_at=_RECORDED_AT,
@@ -690,7 +733,8 @@ def test_fewer_outputs_fails_output_validation_without_publication_or_response_e
         "failure_code": "output_count_mismatch",
     }
     assert result.decoded is None
-    assert published == []
+    with pytest.raises(JournalNotFoundError):
+        journal.read_provider_response(attempt.attempt_id)
     assert [event.state for event in journal.read_events(attempt.attempt_id)] == [
         "prepared",
         "submitted",
@@ -698,14 +742,21 @@ def test_fewer_outputs_fails_output_validation_without_publication_or_response_e
     ]
 
 
-def test_publisher_failure_is_output_validation_and_never_claims_response_received(
+def test_evidence_commit_failure_is_output_validation_and_never_claims_response_received(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     journal, attempt, capability, prepared = _seed_dispatch(tmp_path)
 
-    def response_publisher(_: OpenRouterDecodedResponse) -> None:
+    def fail_evidence_commit(*_: object, **__: object) -> None:
         assert journal.read_state(attempt.attempt_id).state == "submitted"
-        raise OSError("durable response store unavailable")
+        raise AttemptJournalError("durable response store unavailable")
+
+    monkeypatch.setattr(
+        AttemptJournal,
+        "publish_provider_response",
+        fail_evidence_commit,
+    )
 
     result = dispatch_openrouter_attempt(
         journal,
@@ -714,7 +765,6 @@ def test_publisher_failure_is_output_validation_and_never_claims_response_receiv
         prepared,
         credential_resolver=lambda _: "test-bearer-token",
         transport=lambda **_: _success_response(),
-        response_publisher=response_publisher,
         dispatch_claim_id=_DISPATCH_CLAIM_ID,
         claimed_at=_CLAIMED_AT,
         recorded_at=_RECORDED_AT,
@@ -735,6 +785,58 @@ def test_publisher_failure_is_output_validation_and_never_claims_response_receiv
     ]
 
 
+def test_dispatch_recovers_response_received_after_lost_evidence_commit_ack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal, attempt, capability, prepared = _seed_dispatch(tmp_path)
+    original_commit = AttemptJournal._commit
+    lost_ack = False
+    sends = 0
+
+    def commit_then_lose_response_ack(connection: sqlite3.Connection) -> None:
+        nonlocal lost_ack
+        has_response = (
+            connection.execute("SELECT count(*) FROM provider_responses").fetchone()[0] == 1
+        )
+        original_commit(connection)
+        if has_response and not lost_ack:
+            lost_ack = True
+            raise AttemptJournalError("simulated lost response commit acknowledgement")
+
+    def transport(**_: object) -> OpenRouterHttpResponse:
+        nonlocal sends
+        sends += 1
+        return _success_response()
+
+    monkeypatch.setattr(
+        AttemptJournal,
+        "_commit",
+        staticmethod(commit_then_lose_response_ack),
+    )
+    result = dispatch_openrouter_attempt(
+        journal,
+        attempt,
+        capability,
+        prepared,
+        credential_resolver=lambda _: "test-bearer-token",
+        transport=transport,
+        dispatch_claim_id=_DISPATCH_CLAIM_ID,
+        claimed_at=_CLAIMED_AT,
+        recorded_at=_RECORDED_AT,
+    )
+
+    assert lost_ack is True
+    assert sends == 1
+    assert result.kind == "response_received"
+    assert result.state.state == "response_received"
+    assert result.decoded is not None
+    stored = AttemptJournal(journal.path).read_provider_response(attempt.attempt_id)
+    assert stored.receipt == result.decoded.receipt
+    assert stored.raw_response_bytes == _RESPONSE_BODY
+    assert stored.output_bytes == (_OUTPUT_BYTES,)
+
+
 def test_unsupported_reconcile_does_no_io_and_appends_no_self_event(tmp_path: Path) -> None:
     journal, attempt, capability, prepared = _seed_dispatch(tmp_path)
     dispatch_openrouter_attempt(
@@ -744,7 +846,6 @@ def test_unsupported_reconcile_does_no_io_and_appends_no_self_event(tmp_path: Pa
         prepared,
         credential_resolver=lambda _: "test-bearer-token",
         transport=lambda **_: (_ for _ in ()).throw(TimeoutError("ambiguous")),
-        response_publisher=lambda _: pytest.fail("unknown response cannot publish"),
         dispatch_claim_id=_DISPATCH_CLAIM_ID,
         claimed_at=_CLAIMED_AT,
         recorded_at=_RECORDED_AT,
@@ -827,7 +928,6 @@ def test_dispatch_rejects_resealed_normalized_semantic_drift_before_claim(
             forged_prepared,
             credential_resolver=lambda _: "test-bearer-token",
             transport=lambda **_: pytest.fail("normalized drift cannot send"),
-            response_publisher=lambda _: pytest.fail("normalized drift cannot publish"),
             dispatch_claim_id=_DISPATCH_CLAIM_ID,
             claimed_at=_CLAIMED_AT,
             recorded_at=_RECORDED_AT,
@@ -885,7 +985,6 @@ def test_dispatch_rejects_resealed_capability_operation_drift_before_claim(
             prepared,
             credential_resolver=lambda _: "test-bearer-token",
             transport=lambda **_: pytest.fail("capability drift cannot send"),
-            response_publisher=lambda _: pytest.fail("capability drift cannot publish"),
             dispatch_claim_id=_DISPATCH_CLAIM_ID,
             claimed_at=_CLAIMED_AT,
             recorded_at=_RECORDED_AT,
@@ -909,7 +1008,6 @@ def test_dispatch_rejects_caller_attempt_that_differs_from_journal_authority(
             prepared,
             credential_resolver=lambda _: "test-bearer-token",
             transport=lambda **_: pytest.fail("caller/journal drift cannot send"),
-            response_publisher=lambda _: pytest.fail("caller/journal drift cannot publish"),
             dispatch_claim_id=_DISPATCH_CLAIM_ID,
             claimed_at=_CLAIMED_AT,
             recorded_at=_RECORDED_AT,
@@ -936,7 +1034,6 @@ def test_response_provenance_field_is_not_laundered_as_undisclosed(tmp_path: Pat
         prepared,
         credential_resolver=lambda _: "test-bearer-token",
         transport=lambda **_: OpenRouterHttpResponse(200, {}, body, 1),
-        response_publisher=lambda _: pytest.fail("conflicting provenance cannot publish"),
         dispatch_claim_id=_DISPATCH_CLAIM_ID,
         claimed_at=_CLAIMED_AT,
         recorded_at=_RECORDED_AT,
@@ -962,7 +1059,6 @@ def test_dispatch_rejects_retrograde_evidence_time_before_claim(tmp_path: Path) 
             prepared,
             credential_resolver=lambda _: "test-bearer-token",
             transport=lambda **_: pytest.fail("retrograde evidence cannot send"),
-            response_publisher=lambda _: pytest.fail("retrograde evidence cannot publish"),
             dispatch_claim_id=_DISPATCH_CLAIM_ID,
             claimed_at=_CLAIMED_AT,
             recorded_at="2000-01-01T00:00:00Z",
@@ -1066,7 +1162,7 @@ def test_prepare_rejects_declared_oversize_source_before_resolver() -> None:
     assert resolutions == 0
 
 
-def test_active_bearer_reflection_never_reaches_publisher(tmp_path: Path) -> None:
+def test_active_bearer_reflection_never_reaches_durable_evidence(tmp_path: Path) -> None:
     secret = "opaque-active-bearer-secret-1234567890"
     journal, attempt, capability, prepared = _seed_dispatch(tmp_path, forbidden_secrets=(secret,))
     body = json.dumps(
@@ -1077,8 +1173,6 @@ def test_active_bearer_reflection_never_reaches_publisher(tmp_path: Path) -> Non
         },
         separators=(",", ":"),
     ).encode()
-    published: list[OpenRouterDecodedResponse] = []
-
     result = dispatch_openrouter_attempt(
         journal,
         attempt,
@@ -1086,7 +1180,6 @@ def test_active_bearer_reflection_never_reaches_publisher(tmp_path: Path) -> Non
         prepared,
         credential_resolver=lambda _: secret,
         transport=lambda **_: OpenRouterHttpResponse(200, {}, body, 1),
-        response_publisher=published.append,
         dispatch_claim_id=_DISPATCH_CLAIM_ID,
         claimed_at=_CLAIMED_AT,
         recorded_at=_RECORDED_AT,
@@ -1099,7 +1192,8 @@ def test_active_bearer_reflection_never_reaches_publisher(tmp_path: Path) -> Non
         "failure_stage": "output_validation",
         "failure_code": "credential_material_detected",
     }
-    assert published == []
+    with pytest.raises(JournalNotFoundError):
+        journal.read_provider_response(attempt.attempt_id)
     assert secret not in repr(result)
 
 
@@ -1194,7 +1288,6 @@ def test_non_bearer_grammar_credentials_fail_before_claim_or_send(
         prepared,
         credential_resolver=lambda _: token,
         transport=transport,
-        response_publisher=lambda _: pytest.fail("invalid bearer cannot publish"),
         dispatch_claim_id=_DISPATCH_CLAIM_ID,
         claimed_at=_CLAIMED_AT,
         recorded_at=_RECORDED_AT,
@@ -1250,7 +1343,7 @@ def test_active_bearer_inside_unaligned_input_bytes_is_found_before_claim() -> N
     assert raised.value.code == "credential_material_detected"
 
 
-def test_unicode_escaped_active_bearer_is_scanned_semantically_before_publish(
+def test_unicode_escaped_active_bearer_is_scanned_before_durable_evidence(
     tmp_path: Path,
 ) -> None:
     secret = "opaque-active-bearer-secret-1234567890"
@@ -1261,8 +1354,6 @@ def test_unicode_escaped_active_bearer_is_scanned_semantically_before_publish(
         b'\\u006fpaque-active-bearer-secret-1234567890"}}'
     )
     assert secret.encode() not in body
-    published: list[OpenRouterDecodedResponse] = []
-
     result = dispatch_openrouter_attempt(
         journal,
         attempt,
@@ -1270,7 +1361,6 @@ def test_unicode_escaped_active_bearer_is_scanned_semantically_before_publish(
         prepared,
         credential_resolver=lambda _: secret,
         transport=lambda **_: OpenRouterHttpResponse(200, {}, body, 1),
-        response_publisher=published.append,
         dispatch_claim_id=_DISPATCH_CLAIM_ID,
         claimed_at=_CLAIMED_AT,
         recorded_at=_RECORDED_AT,
@@ -1279,7 +1369,8 @@ def test_unicode_escaped_active_bearer_is_scanned_semantically_before_publish(
     assert result.kind == "failed"
     assert result.event is not None
     assert result.event.detail["failure_code"] == "credential_material_detected"
-    assert published == []
+    with pytest.raises(JournalNotFoundError):
+        journal.read_provider_response(attempt.attempt_id)
 
 
 def test_escaped_lone_surrogate_becomes_stable_output_failure(tmp_path: Path) -> None:
@@ -1296,7 +1387,6 @@ def test_escaped_lone_surrogate_becomes_stable_output_failure(tmp_path: Path) ->
         prepared,
         credential_resolver=lambda _: "test-bearer-token",
         transport=lambda **_: OpenRouterHttpResponse(200, {}, body, 1),
-        response_publisher=lambda _: pytest.fail("invalid Unicode cannot publish"),
         dispatch_claim_id=_DISPATCH_CLAIM_ID,
         claimed_at=_CLAIMED_AT,
         recorded_at=_RECORDED_AT,
