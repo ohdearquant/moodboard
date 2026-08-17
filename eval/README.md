@@ -89,19 +89,26 @@ transport parameter and cannot dispatch.
 Execution requires a separate, closed confirmation context that names the exact challenge and
 compact summary, one enrolled principal, one Studio session, the same creative session, and one
 fresh explicit approval. A document hash alone is not Studio authority: the production API has no
-default confirmer and fails `confirmation_authority_unavailable` until a trusted Studio boundary
-that atomically verifies and consumes the authorization is supplied. The retired Boolean
-`authorize_one_paid_call` entry point always fails
+default confirmer and fails `confirmation_authority_unavailable` unless a
+`StudioConfirmationLedger` already contains the server-issued authority and exact grant. The
+retired Boolean `authorize_one_paid_call` entry point always fails
 `two_phase_confirmation_required`; the command line only reports the missing trusted-authority
 integration and cannot prepare or dispatch a live challenge.
 
 After all frozen bytes, identities, timestamps, directory inode, reconstructed wire, and a fresh
-byte-identical discovery response agree, a caller-supplied Studio boundary must atomically and
-durably consume the confirmation before Keychain access. This repository does not implement that
-ledger: the default rejects execution, while the injected offline seam proves one-process CAS and
-local `O_EXCL` concurrency behavior only. Credential-bearing work is contained in a non-raising
-inner scope, core dumps are disabled before Keychain access, and private response and output bytes
-remain in the owner-only journal/run directory.
+byte-identical discovery response agree, the ledger rechecks session epoch/revocation and exact
+grant bindings in one write transaction. Only a newly inserted consumption authorizes execution;
+exact replay and ambiguous commit acknowledgement never do. The consume commit occurs before
+local evidence, Keychain, AttemptJournal, or transport and is irreversible. A crash in that gap can
+burn the approval without sending, but can never release it for a retry. The ledger lives outside
+challenge directories; its owner-only SQLite boundary does not claim resistance to malicious
+same-UID whole-database rollback. Credential-bearing work is contained in a non-raising inner
+scope, core dumps are disabled before Keychain access, and private response and output bytes remain
+in the owner-only journal/run directory.
+
+This repository implements the persistence substrate and injected offline integration, not the
+trusted Studio producer that authenticates the enrolled principal/session and issues authority
+epochs and explicit grants. Consequently the default and CLI remain fail-closed for live use.
 
 `finalize_openrouter_real_e2e(challenge_dir: Path, *, _clock=_canonical_timestamp) ->
 OpenRouterRealE2EResult` is a separate local recovery operation after exact provider-response
@@ -145,10 +152,11 @@ localized-edit gate status, workflow acceptance (`not_recorded`), semantic/aesth
 
 No paid call is currently authorized. The available local Pixel-RAG evidence uses a retired
 projection and fails the current public reader when supplied explicitly. A separately governed
-evidence republication, a trusted authority-to-creative-session integration, and a durable Studio
-confirmation consumer remain prerequisites to a live run. The credential-free finalizer closes
-the local post-response recovery prerequisite only; it does not relax this live HOLD. Until the
-remaining authorities exist, the two-stage functions are an injected offline contract harness.
+evidence republication, a trusted authority-to-creative-session producer integration, and a
+deployed external ledger under that trust boundary remain prerequisites to a live run. The local
+ledger substrate and credential-free finalizer close persistence/recovery slices only; they do not
+relax this live HOLD. Until the remaining authorities exist, the two-stage functions are an
+injected offline contract harness.
 
 The executable acceptance map for this slice is:
 
@@ -158,7 +166,7 @@ The executable acceptance map for this slice is:
 | Exact discovery/source/authority/mask/overlay/summary bytes are bound | `test_prepare_freezes_exact_content_bound_snapshot_summary_and_overlay` and the artifact-drift matrix |
 | Self-minted confirmation is insufficient without Studio authority | `test_production_default_rejects_self_minted_context_before_discovery_or_key` |
 | Context, expiry, inode, fresh discovery, and rebuilt wire gate Keychain | confirmation-context, expiry, directory-swap, discovery-drift, and wire-drift tests |
-| One injected in-process consumption winner can reach one fake POST | replay, ambiguity, and concurrent-executor tests |
+| One durable external-ledger consumption winner can reach one fake POST | ledger replay, ambiguity, rollback, ordering, and concurrent-executor tests |
 | Quote arithmetic is exact and `$0.05` is pre-dispatch only | ambient-Decimal and over-quote tests |
 | Missing post-paid cost telemetry does not strand valid media evidence | `test_missing_reported_cost_remains_terminal_success_after_paid_response` |
 | Credentials cannot survive public exceptions or local artifacts | real-E2E transport exception-graph tests |

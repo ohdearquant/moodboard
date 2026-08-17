@@ -187,6 +187,7 @@ def test_finalize_api_is_credential_free_and_has_no_external_boundary_parameters
     for forbidden in (
         "confirmation_context_path",
         "_confirmation_consumer",
+        "_confirmation_ledger",
         "_credential_loader",
         "_discovery_fetcher",
         "_source_fetcher",

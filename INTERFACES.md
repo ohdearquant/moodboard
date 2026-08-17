@@ -731,19 +731,38 @@ indexes; they do not expand the provider schema registry or claim a reusable Stu
 It validates the exact challenge/summary identities, canonical principal/session/time fields,
 artifact SHA-256/counts, path/device/inode binding, expiry, reconstructed packet and wire, and a
 fresh byte-identical discovery response before credential access. The self-hash on the context is
-integrity, not authorization: a caller must also supply a trusted Studio confirmation consumer
-that atomically verifies and durably spends that exact authorization, and the production default
-rejects execution. The retired Boolean one-shot function cannot reach
-I/O, and the evaluation CLI only reports the missing trusted-authority prerequisite.
+integrity, not authorization: a caller must also supply a `StudioConfirmationLedger` containing a
+server-issued grant for those exact canonical bytes. The production default rejects execution.
+The retired Boolean one-shot function cannot reach I/O, and the evaluation CLI only reports the
+missing trusted-authority prerequisite.
 
-After validation, the caller-supplied confirmation consumer must atomically and durably spend the
-authorization; this repository has no production Studio ledger. The local `O_EXCL` record proves
-only same-directory concurrency behavior in the injected offline harness. The adapter journal
-remains the authoritative non-idempotent send and provider-evidence boundary. `$0.05` is only an
-exact discovery-quote admission limit, never a provider-side hard spend cap. Post-response cost is
-non-gating telemetry. A terminal provider occurrence is not an aesthetic judgment; the sanitized
-result separately reports media admission, raw structure/locality, localized-edit gate status,
-workflow acceptance `not_recorded`, semantic/aesthetic `not_run`, and compositor `not_run`.
+`moodboard.studio-confirmation-ledger.v1` is an owner-private, append-only SQLite substrate for a
+trusted Studio backend. Studio first records an active principal/session/creative-session epoch
+and the exact canonical challenge/context grant. Execution performs a read-only inspection before
+live discovery, then repeats authority, revocation, epoch, binding, and expiry checks inside one
+`BEGIN IMMEDIATE` transaction after fresh wire reconstruction. Only a newly inserted consumption
+row authorizes one generation POST. Exact replay and a lost commit acknowledgement never authorize
+another send; a consumed grant is never released, leased, taken over, or compensated. Consumption
+is unique by both confirmation-context id and challenge id.
+
+The ledger must be deployed outside challenge directories under a Studio-owned owner-only state
+directory. The durable consume CAS precedes local `consumed.json`/plan evidence, Keychain access,
+the AttemptJournal claim, and provider I/O. Because the Studio ledger and AttemptJournal are two
+databases, a crash between them may permanently spend a confirmation without sending; this is an
+intentional availability loss and never permits replay. SQLite integrity, immutable triggers, and
+file modes do not resist a malicious same-UID process restoring an older complete ledger. That
+threat requires a different-UID service or external monotonic authority and remains outside this
+local substrate's claim.
+
+The repository does not yet contain the trusted Studio producer that authenticates the enrolled
+principal/session and issues those authority/grant rows, so live execution remains fail-closed.
+The local `O_EXCL` record is secondary run evidence, not authorization authority. The adapter
+journal remains the authoritative non-idempotent send and provider-evidence boundary. `$0.05` is
+only an exact discovery-quote admission limit, never a provider-side hard spend cap.
+Post-response cost is non-gating telemetry. A terminal provider occurrence is not an aesthetic
+judgment; the sanitized result separately reports media admission, raw structure/locality,
+localized-edit gate status, workflow acceptance `not_recorded`, semantic/aesthetic `not_run`, and
+compositor `not_run`.
 
 `finalize_openrouter_real_e2e(challenge_dir: Path, *, _clock=_canonical_timestamp) ->
 OpenRouterRealE2EResult` is the credential-free recovery boundary after the paid operation has
@@ -795,10 +814,11 @@ automatically.
 The offline authority helper reads explicitly supplied board and Pixel-RAG artifacts through public validators
 and derives content-bound collection-gate identities. It never repairs stale bytes. The current
 local evidence belongs to a retired projection and fails when explicitly supplied to the current
-reader. Evidence republication, trusted authority-to-session integration, and a durable Studio
-confirmation boundary remain explicit prerequisites to any paid run. The local finalizer removes
-the post-response recovery blocker but does not supply any of those live authorities; this slice
-performs no provider call and makes no real-run claim.
+reader. Evidence republication, trusted authority-to-session producer integration, and deployment
+of the ledger behind that trusted Studio boundary remain explicit prerequisites to any paid run.
+The local ledger supplies irreversible one-use persistence, and the finalizer supplies
+post-response recovery; neither authenticates a live Studio user or repairs stale evidence. This
+slice performs no provider call and makes no real-run claim.
 
 The helper's identity domains are evaluation-local. `eligible_corpus_sha256` hashes RFC 8785 of
 `{schema_version, source_manifest:{catalog_sha256,dataset_id,manifest_sha256}, field, operator,
