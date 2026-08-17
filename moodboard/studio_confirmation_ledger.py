@@ -636,10 +636,15 @@ class StudioConfirmationLedger:
             descriptor = os.open(self._path, flags, 0o600)
         except FileExistsError:
             self._validate_file(self._path, allow_empty=True)
-            # A zero-byte remnant of an interrupted bootstrap is adopted and re-initialized.
-            # Serialized by the bootstrap lock; once the schema commits the file is
-            # non-empty, so a later opener takes the verify path instead.
-            return _file_metadata(self._path).st_size == 0
+            # A schema-less remnant of an interrupted bootstrap is adopted and re-initialized.
+            # The durability pragmas write the database header before the schema transaction,
+            # so an interrupted first bootstrap usually leaves a non-empty file holding no
+            # committed objects. Zero committed objects means zero recorded evidence, so
+            # adoption can never destroy history; a committed schema (including one still in
+            # an uncheckpointed WAL, which the probe's ordinary open recovers) takes the
+            # verify path, and unreadable bytes stay ledger_corruption. Serialized by the
+            # bootstrap lock.
+            return self._is_uninitialized_remnant()
         except OSError:
             failed = True
             descriptor = None
@@ -655,6 +660,44 @@ class StudioConfirmationLedger:
             self._discard_failed_new_ledger()
             _fail("ledger_security_error")
         return True
+
+    @staticmethod
+    def _connection_is_uninitialized(connection: sqlite3.Connection) -> bool:
+        try:
+            objects = connection.execute("SELECT count(*) FROM sqlite_master").fetchone()[0]
+            application_id = connection.execute("PRAGMA application_id").fetchone()[0]
+            user_version = connection.execute("PRAGMA user_version").fetchone()[0]
+        except sqlite3.Error:
+            # Unreadable bytes cannot prove they hold no committed evidence.
+            return False
+        return (
+            type(objects) is int
+            and objects == 0
+            and type(application_id) is int
+            and application_id == 0
+            and type(user_version) is int
+            and user_version == 0
+        )
+
+    def _is_uninitialized_remnant(self) -> bool:
+        if _file_metadata(self._path).st_size == 0:
+            return True
+        probe: sqlite3.Connection | None = None
+        try:
+            probe = sqlite3.connect(
+                self._path,
+                timeout=self._busy_timeout_ms / 1000,
+                isolation_level=None,
+            )
+            probe.enable_load_extension(False)
+            probe.execute(f"PRAGMA busy_timeout={self._busy_timeout_ms}")
+            return self._connection_is_uninitialized(probe)
+        except sqlite3.Error:
+            return False
+        finally:
+            if probe is not None:
+                with suppress(sqlite3.Error):
+                    probe.close()
 
     def _discard_failed_new_ledger(self) -> None:
         for suffix in ("-shm", "-wal", "-journal", ""):
@@ -741,7 +784,16 @@ class StudioConfirmationLedger:
                 self._configure_durability(connection)
                 self._initialize_schema(connection)
             else:
-                self._verify_metadata(connection)
+                try:
+                    self._verify_metadata(connection)
+                except StudioConfirmationLedgerError as error:
+                    # A schema-less bootstrap remnant is denied like a missing file, not
+                    # reported as corruption; only the next bootstrap may adopt it.
+                    if error.code == "ledger_corruption" and self._connection_is_uninitialized(
+                        connection
+                    ):
+                        _fail("ledger_security_error")
+                    raise
                 self._configure_durability(connection)
             self._verify_metadata(connection)
             after = _file_metadata(self._path)

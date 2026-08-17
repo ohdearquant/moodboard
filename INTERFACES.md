@@ -751,9 +751,13 @@ directory. The durable consume CAS precedes local `consumed.json`/plan evidence,
 the AttemptJournal claim, and provider I/O. Because the Studio ledger and AttemptJournal are two
 databases, a crash between them may permanently spend a confirmation without sending; this is an
 intentional availability loss and never permits replay. A crash during first bootstrap can leave a
-zero-byte database file; that remnant is treated exactly like a missing file — constructible,
-denied on reads, and adopted and re-initialized by the next bootstrap under the init lock — so an
-interrupted bootstrap never needs out-of-band deletion. SQLite integrity, immutable triggers, and
+schema-less database file — zero-byte, or holding only the header the durability pragmas write
+before the schema transaction commits. Either remnant is treated exactly like a missing file —
+constructible, denied on reads, and adopted and re-initialized by the next bootstrap under the
+init lock — so an interrupted bootstrap never needs out-of-band deletion. Adoption is decided by
+reading the database, so a committed schema that still lives in an uncheckpointed WAL is
+recognized and never discarded; only a file provably holding zero committed objects is adopted,
+and unreadable bytes remain `ledger_corruption`. SQLite integrity, immutable triggers, and
 file modes do not resist a malicious same-UID process restoring an older complete ledger. That
 threat requires a different-UID service or external monotonic authority and remains outside this
 local substrate's claim.

@@ -512,3 +512,79 @@ def test_zero_byte_bootstrap_remnant_is_adopted_by_the_next_bootstrap(tmp_path: 
     recorded = ledger.record_explicit_confirmation(context, challenge, authority_epoch=1)
     assert recorded.created is True
     ledger.verify_integrity()
+
+
+def test_header_only_bootstrap_remnant_is_adopted_by_the_next_bootstrap(tmp_path: Path) -> None:
+    """The durability pragmas write the header before the schema commits; that remnant heals."""
+    parent = tmp_path / "studio-state"
+    parent.mkdir(mode=0o700)
+    remnant = parent / "confirmations.sqlite3"
+    descriptor = os.open(remnant, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(descriptor)
+    interrupted = sqlite3.connect(remnant, isolation_level=None)
+    interrupted.execute("PRAGMA journal_mode=WAL")
+    interrupted.close()
+    assert remnant.stat().st_size > 0
+
+    ledger = StudioConfirmationLedger(remnant)
+    challenge = _challenge_document()
+    context = _context_document(challenge)
+    # Reads on the schema-less remnant deny exactly like a missing file, not as corruption.
+    _assert_code(
+        lambda: ledger.inspect_confirmation(context, challenge, inspected_at=_INSPECTED_AT),
+        "ledger_security_error",
+    )
+    # The next bootstrap adopts and re-initializes it in place.
+    assert ledger.record_session_authority(_authority()) is True
+    recorded = ledger.record_explicit_confirmation(context, challenge, authority_epoch=1)
+    assert recorded.created is True
+    ledger.verify_integrity()
+
+
+def test_garbage_nonzero_remnant_stays_ledger_corruption(tmp_path: Path) -> None:
+    """Unreadable bytes cannot prove they hold no evidence, so they are never adopted."""
+    parent = tmp_path / "studio-state"
+    parent.mkdir(mode=0o700)
+    remnant = parent / "confirmations.sqlite3"
+    descriptor = os.open(remnant, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.write(descriptor, b"this is not a database and must never be silently discarded")
+    os.close(descriptor)
+
+    ledger = StudioConfirmationLedger(remnant)
+    _assert_code(lambda: ledger.record_session_authority(_authority()), "ledger_corruption")
+    assert remnant.read_bytes().startswith(b"this is not a database")
+
+
+def test_committed_schema_in_an_uncheckpointed_wal_is_never_adopted(tmp_path: Path) -> None:
+    """Adoption reads the database, so a commit still living in the WAL is recognized."""
+    parent = tmp_path / "wal-source"
+    parent.mkdir(mode=0o700)
+    source = parent / "confirmations.sqlite3"
+    descriptor = os.open(source, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(descriptor)
+    writer = sqlite3.connect(source, isolation_level=None)
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("PRAGMA wal_autocheckpoint=0")
+    writer.execute("BEGIN IMMEDIATE")
+    writer.execute("CREATE TABLE committed_evidence(value)")
+    writer.execute("COMMIT")
+
+    def copy_to(destination_parent: Path, *, with_wal: bool) -> Path:
+        destination_parent.mkdir(mode=0o700)
+        destination = destination_parent / "confirmations.sqlite3"
+        suffixes = ("", "-wal") if with_wal else ("",)
+        for suffix in suffixes:
+            origin = Path(f"{source}{suffix}")
+            replica = Path(f"{destination}{suffix}")
+            replica.write_bytes(origin.read_bytes())
+            replica.chmod(0o600)
+        return destination
+
+    main_and_wal = copy_to(tmp_path / "wal-copy", with_wal=True)
+    main_only = copy_to(tmp_path / "main-only-copy", with_wal=False)
+    writer.close()
+
+    # Control: without the WAL the same main file is provably schema-less and adoptable.
+    assert StudioConfirmationLedger(main_only)._is_uninitialized_remnant() is True
+    # With the WAL present the committed schema is visible and must never be discarded.
+    assert StudioConfirmationLedger(main_and_wal)._is_uninitialized_remnant() is False
