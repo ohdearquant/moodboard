@@ -1078,8 +1078,31 @@ def test_output_media_and_receipt_bytes_must_agree_before_eligibility() -> None:
         with pytest.raises(ProviderArtifactError):
             validate_artifact_bundle(
                 changed_artifacts,
-                intent_packet=intent_packet_from_json(packet),
-            )
+            intent_packet=intent_packet_from_json(packet),
+        )
+
+
+@pytest.mark.parametrize("measured_mode", ("L", "LA", "RGB", "RGBA"))
+def test_output_occurrence_accepts_registered_opaque_decoded_modes(
+    measured_mode: str,
+) -> None:
+    _, artifacts = _valid_artifact_chain()
+    output = copy.deepcopy(_artifact(artifacts, OUTPUT_VERSION))
+    output["media_validation"]["measured_mode"] = measured_mode
+
+    assert validate_provider_artifact(output) is None
+
+
+@pytest.mark.parametrize("measured_mode", ("P", "CMYK", "other"))
+def test_output_occurrence_rejects_unregistered_decoded_modes(
+    measured_mode: str,
+) -> None:
+    _, artifacts = _valid_artifact_chain()
+    output = copy.deepcopy(_artifact(artifacts, OUTPUT_VERSION))
+    output["media_validation"]["measured_mode"] = measured_mode
+
+    with pytest.raises(ProviderArtifactError):
+        validate_provider_artifact(output)
 
 
 def test_conflicting_attested_model_is_retained_as_rejected_and_cannot_be_laundered() -> None:
