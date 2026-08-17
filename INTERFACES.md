@@ -581,6 +581,15 @@ takeover, or same-attempt resend path. A crash after commit but before the socke
 conservatively ambiguous and cannot regain authorization. A deliberate retry or fallback must be
 a separately recorded attempt.
 
+`publish_provider_response` is the matching response-side transaction. It validates the canonical
+provider receipt against the registered attempt, rehashes the private raw-response bytes when they
+are retained, rehashes every contiguous output payload, derives the exact `response_received`
+event from `receipt.received_at`, and commits the receipt, payload rows, and event together under
+one `BEGIN IMMEDIATE`. Exact replay is checked before CAS staleness, so retry after a lost commit
+acknowledgement converges without another provider send. Evidence without its event, or an event
+without its complete evidence package, is corruption rather than a recoverable intermediate state.
+The byte-bearing read projection is frozen and omits private payloads from `repr`.
+
 This is an **at-most-one local send authorization**, not provider exactly-once execution or
 billing. The journal never performs network I/O and it cannot prove whether the provider observed
 the call. SQLite runs in verified WAL mode with `synchronous=FULL`, foreign keys enabled, trusted
@@ -598,13 +607,24 @@ Such a process already holds the authority that protects the journal directory; 
 cross-principal tamper resistance would require a separately designed signing or privileged
 storage boundary.
 
-Generic append deliberately rejects `submitted` and `succeeded`. Only the atomic claim operation
-may create `submitted`. `succeeded` remains unavailable until the separate media/verifier evidence
-store can durably prove the receipt, output bytes, admission, lineage, MIME, dimensions, and every
-output occurrence in the same terminal transaction. A topologically legal reducer event is not
-enough. This change closes the durable CAS portion of ADR-0014 acceptance condition 3 and the
-non-idempotent local authorization portion of condition 4; provider I/O, reconciliation,
-retry/fallback attempts, and evidence-gated success remain open single-concern changes.
+Generic append deliberately rejects `submitted`, `response_received`, and `succeeded`. Only the
+atomic claim operation may create `submitted`, and only `publish_provider_response` may create
+`response_received`. `succeeded` remains unavailable until the separate media/verifier terminal
+gate can prove admission, lineage, MIME, dimensions, and every output occurrence in the same
+terminal transaction. A topologically legal reducer event is not enough. Journal schema v2 is a
+pre-release exact schema with no v1 migration; callers recreate a fresh owner-only journal. Its
+64 MiB database cap and 40 MiB per-response retained-payload ceiling (24 MiB raw response plus
+16 MiB aggregate outputs, excluding receipt/event/SQLite overhead) intentionally support the
+registered single-output P0 route, not arbitrary multi-output retention. This change closes the
+durable CAS and response-publication portions of ADR-0014 acceptance condition 3 and the
+non-idempotent local authorization portion of condition 4; reconciliation, retry/fallback
+attempts, media admission, and evidence-gated success remain open single-concern changes.
+
+The 64 MiB logical database page cap is hard; SQLite's `journal_size_limit` is not a hard physical
+WAL cap while an external reader pins the checkpoint horizon. Journal-owned reads are short-lived,
+but a same-UID process holding its own read transaction can let the WAL overshoot by the final
+bounded write transaction. A later journal open fails closed; after that reader releases, an
+authorized SQLite recovery/checkpoint must reduce the WAL before `AttemptJournal` can reopen.
 
 ## `openrouter.py`: bounded Image API adapter through `response_received`
 
@@ -656,18 +676,19 @@ provenance.
 Before publication, the adapter scans the semantic response tree, exact raw bytes, and decoded
 outputs for the active credential and high-confidence credential forms, including Base64,
 URL-safe Base64, hexadecimal, and JSON-escaped spellings. A match produces only a stable failure
-code; those bytes never reach the publisher. Evidence timestamps cannot regress behind the
-prepared/submitted head. Production callers may provide a timestamp callable so receipt time is
-sampled after transport rather than guessed before the request.
+code; those bytes never reach durable evidence storage. Evidence timestamps cannot regress behind
+the prepared/submitted head. Production callers may provide a timestamp callable so receipt time
+is sampled after transport rather than guessed before the request.
 
-The response publisher is a required trust boundary: before it returns, it must durably and
-no-clobber store the private raw response bytes, every output payload, and the canonical receipt.
-Only then does the adapter append `response_received`. The adapter never appends `succeeded` and
-never mints an output occurrence. The current attempt journal has no receipt/blob/output tables,
-and the current media API still needs a non-circular output-occurrence constructor plus atomic
-terminal evidence gate. Consequently this slice advances ADR-0014 conditions 1, 4, 6, and 8 but
-does not claim condition 7, completed provider lifecycle, retry/fallback, or repository-wide
-secret scanning. Khive and Lattice are unchanged.
+The adapter submits a decoded response only through `AttemptJournal.publish_provider_response`.
+That single transaction no-clobber stores the private raw response when retention permits it,
+every output payload, the canonical receipt, and the derived `response_received` event. There is
+no caller-supplied publisher that can authorize the state transition, and no separate event append
+window. The adapter never appends `succeeded` and never mints an output occurrence. Media admission
+still needs a non-circular output-occurrence constructor plus the atomic terminal evidence gate.
+Consequently this slice advances ADR-0014 conditions 1, 3, 4, 6, and 8 but does not claim condition
+7, completed provider lifecycle, retry/fallback, or repository-wide secret scanning. Khive and
+Lattice are unchanged.
 
 `openrouter_https_transport` is the production fixed-origin helper for
 `https://openrouter.ai/api/v1/images`. It sets only the application-controlled Authorization,

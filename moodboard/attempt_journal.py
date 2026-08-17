@@ -24,10 +24,12 @@ import time
 import uuid
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from functools import cache
 from pathlib import Path
 from typing import Any, Final, TypeAlias
+
+from blake3 import blake3
 
 from moodboard.attempt_state import AttemptState, AttemptStateError, reduce_attempt_events
 from moodboard.contracts import (
@@ -43,6 +45,7 @@ from moodboard.provider_artifacts import (
     ProviderArtifact,
     ProviderArtifactError,
     ProviderCapabilitySnapshot,
+    ProviderReceipt,
     from_json_dict,
     seal_provider_artifact,
     to_json_dict,
@@ -59,17 +62,25 @@ __all__ = [
     "JournalNotFoundError",
     "JournalSecurityError",
     "JournalVersionError",
+    "ProviderEvidenceConflictError",
+    "ProviderResponsePublishResult",
     "RegistrationResult",
     "StaleAttemptHeadError",
+    "StoredProviderResponse",
 ]
 
 ArtifactInput: TypeAlias = ProviderArtifact | Mapping[str, Any]
 
 _APPLICATION_ID: Final = 0x4D424A31
-_USER_VERSION: Final = 1
+_USER_VERSION: Final = 2
 _MAX_DATABASE_BYTES: Final = 64 * 1024 * 1024
 _MAX_DOCUMENT_BYTES: Final = 2 * 1024 * 1024
 _MAX_WIRE_REQUEST_BYTES: Final = 32 * 1024 * 1024
+_MAX_SQLITE_VALUE_BYTES: Final = 32 * 1024 * 1024
+_MAX_PROVIDER_RAW_BYTES: Final = 24 * 1024 * 1024
+_MAX_PROVIDER_OUTPUT_BYTES: Final = 16 * 1024 * 1024
+_MAX_PROVIDER_OUTPUT_TOTAL_BYTES: Final = 16 * 1024 * 1024
+_MAX_PROVIDER_OUTPUTS: Final = 8
 _MAX_TREE_DEPTH: Final = 64
 _MAX_TREE_NODES: Final = 20_000
 _DIGEST_RE: Final = re.compile(r"^[0-9a-f]{64}$")
@@ -87,6 +98,8 @@ _TABLES: Final = {
     "generation_attempts",
     "attempt_events",
     "non_idempotent_dispatch_claims",
+    "provider_responses",
+    "provider_response_outputs",
 }
 _TRIGGERS: Final = {
     f"{table}_{operation}_immutable" for table in _TABLES for operation in ("update", "delete")
@@ -125,6 +138,26 @@ _EXPECTED_COLUMNS: Final = {
         ("claim_json", "BLOB"),
         ("capability_sha256", "TEXT"),
         ("capability_json", "BLOB"),
+    ),
+    "provider_responses": (
+        ("attempt_id", "TEXT"),
+        ("provider_receipt_id", "TEXT"),
+        ("response_event_id", "TEXT"),
+        ("receipt_sha256", "TEXT"),
+        ("receipt_json", "BLOB"),
+        ("raw_content_ref", "TEXT"),
+        ("raw_content_sha256", "TEXT"),
+        ("raw_byte_count", "INTEGER"),
+        ("raw_bytes", "BLOB"),
+    ),
+    "provider_response_outputs": (
+        ("attempt_id", "TEXT"),
+        ("output_index", "INTEGER"),
+        ("provider_receipt_id", "TEXT"),
+        ("content_ref", "TEXT"),
+        ("content_sha256", "TEXT"),
+        ("byte_count", "INTEGER"),
+        ("payload_bytes", "BLOB"),
     ),
 }
 _CLAIM_KEYS: Final = frozenset(
@@ -177,6 +210,10 @@ class DispatchClaimConflictError(AttemptJournalError):
     """A dispatch claim is invalid, already occupied, or not replay-equivalent."""
 
 
+class ProviderEvidenceConflictError(AttemptJournalError):
+    """An attempt already has different immutable provider-response evidence."""
+
+
 @dataclass(frozen=True, slots=True)
 class RegistrationResult:
     created: bool
@@ -199,6 +236,26 @@ class DispatchClaimResult:
     state: AttemptState
 
 
+@dataclass(frozen=True, slots=True)
+class StoredProviderResponse:
+    """A verified receipt and its exact private payloads."""
+
+    receipt: ProviderReceipt
+    event: GenerationAttemptEvent
+    raw_response_bytes: bytes | None = field(repr=False)
+    output_bytes: tuple[bytes, ...] = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderResponsePublishResult:
+    """Outcome of an atomic provider-response publication or exact replay."""
+
+    created: bool
+    receipt: ProviderReceipt
+    event: GenerationAttemptEvent
+    state: AttemptState
+
+
 def _reject_json_constant(value: str) -> None:
     del value
     raise ValueError("non-I-JSON numeric constant")
@@ -214,28 +271,33 @@ def _reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _tree_depth_and_nodes(value: Any) -> tuple[int, int]:
-    stack: list[tuple[Any, int]] = [(value, 1)]
-    seen: set[int] = set()
+    stack: list[tuple[Any, int, bool]] = [(value, 1, False)]
+    active: set[int] = set()
     maximum = 0
     nodes = 0
     while stack:
-        current, depth = stack.pop()
+        current, depth, exiting = stack.pop()
+        if exiting:
+            active.remove(id(current))
+            continue
         maximum = max(maximum, depth)
         nodes += 1
         if maximum > _MAX_TREE_DEPTH or nodes > _MAX_TREE_NODES:
             raise JournalSecurityError("journal input exceeds the bounded JSON envelope")
         if isinstance(current, Mapping):
             identity = id(current)
-            if identity in seen:
+            if identity in active:
                 raise JournalSecurityError("journal input contains a recursive object")
-            seen.add(identity)
-            stack.extend((item, depth + 1) for item in current.values())
+            active.add(identity)
+            stack.append((current, depth, True))
+            stack.extend((item, depth + 1, False) for item in current.values())
         elif isinstance(current, (list, tuple)):
             identity = id(current)
-            if identity in seen:
+            if identity in active:
                 raise JournalSecurityError("journal input contains a recursive array")
-            seen.add(identity)
-            stack.extend((item, depth + 1) for item in current)
+            active.add(identity)
+            stack.append((current, depth, True))
+            stack.extend((item, depth + 1, False) for item in current)
     return maximum, nodes
 
 
@@ -285,8 +347,16 @@ class _SecretScanner:
                 self.scan_bytes(current)
 
     def scan_bytes(self, raw: bytes) -> None:
-        if len(raw) > _MAX_DOCUMENT_BYTES:
+        if type(raw) is not bytes or len(raw) > _MAX_DOCUMENT_BYTES:
             raise JournalSecurityError("journal value exceeds the persistence bound")
+        self._scan_unbounded_bytes(raw)
+
+    def scan_evidence_bytes(self, raw: bytes, *, maximum: int) -> None:
+        if type(raw) is not bytes or not 1 <= len(raw) <= maximum:
+            raise JournalSecurityError("provider evidence exceeds its persistence bound")
+        self._scan_unbounded_bytes(raw)
+
+    def _scan_unbounded_bytes(self, raw: bytes) -> None:
         if any(secret in raw for secret in self._variants):
             raise JournalSecurityError("journal input contains a forbidden credential")
         text = raw.decode("utf-8", errors="ignore")
@@ -313,6 +383,11 @@ def _validate_timestamp(value: str, field: str) -> None:
         raise AttemptJournalError(f"{field} must be a real canonical UTC timestamp")
 
 
+def _timestamp_key(value: str) -> tuple[str, int]:
+    fraction = value[20:-1] if len(value) > 20 else ""
+    return value[:19], int(fraction.ljust(9, "0") or "0")
+
+
 def _validate_artifact_timestamp(artifact: ProviderArtifact) -> None:
     if isinstance(artifact, GenerationRun | GenerationAttempt):
         _validate_timestamp(artifact.created_at, "created_at")
@@ -320,6 +395,8 @@ def _validate_artifact_timestamp(artifact: ProviderArtifact) -> None:
         _validate_timestamp(artifact.recorded_at, "recorded_at")
     elif isinstance(artifact, ProviderCapabilitySnapshot):
         _validate_timestamp(artifact.captured_at, "captured_at")
+    elif isinstance(artifact, ProviderReceipt):
+        _validate_timestamp(artifact.received_at, "received_at")
 
 
 def _canonical_artifact(
@@ -327,12 +404,19 @@ def _canonical_artifact(
     expected_type: type[GenerationRun]
     | type[GenerationAttempt]
     | type[GenerationAttemptEvent]
-    | type[ProviderCapabilitySnapshot],
+    | type[ProviderCapabilitySnapshot]
+    | type[ProviderReceipt],
     scanner: _SecretScanner,
 ) -> tuple[ProviderArtifact, bytes, str]:
     if isinstance(
         value,
-        (GenerationRun, GenerationAttempt, GenerationAttemptEvent, ProviderCapabilitySnapshot),
+        (
+            GenerationRun,
+            GenerationAttempt,
+            GenerationAttemptEvent,
+            ProviderCapabilitySnapshot,
+            ProviderReceipt,
+        ),
     ):
         scanner.scan({field.name: getattr(value, field.name) for field in fields(value)})
     else:
@@ -467,6 +551,41 @@ CREATE TABLE non_idempotent_dispatch_claims (
     FOREIGN KEY (attempt_id, submitted_event_id)
       REFERENCES attempt_events(attempt_id, attempt_event_id)
 );
+CREATE TABLE provider_responses (
+    attempt_id TEXT PRIMARY KEY,
+    provider_receipt_id TEXT NOT NULL UNIQUE,
+    response_event_id TEXT NOT NULL UNIQUE,
+    receipt_sha256 TEXT NOT NULL,
+    receipt_json BLOB NOT NULL,
+    raw_content_ref TEXT,
+    raw_content_sha256 TEXT,
+    raw_byte_count INTEGER,
+    raw_bytes BLOB,
+    UNIQUE (attempt_id, provider_receipt_id),
+    CHECK (
+      (raw_content_ref IS NULL AND raw_content_sha256 IS NULL
+       AND raw_byte_count IS NULL AND raw_bytes IS NULL)
+      OR
+      (raw_content_ref IS NOT NULL AND raw_content_sha256 IS NOT NULL
+       AND raw_byte_count BETWEEN 1 AND 25165824 AND raw_bytes IS NOT NULL)
+    ),
+    FOREIGN KEY (attempt_id) REFERENCES generation_attempts(attempt_id),
+    FOREIGN KEY (attempt_id, response_event_id)
+      REFERENCES attempt_events(attempt_id, attempt_event_id)
+);
+CREATE TABLE provider_response_outputs (
+    attempt_id TEXT NOT NULL,
+    output_index INTEGER NOT NULL CHECK (output_index BETWEEN 0 AND 7),
+    provider_receipt_id TEXT NOT NULL,
+    content_ref TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    byte_count INTEGER NOT NULL CHECK (byte_count BETWEEN 1 AND 16777216),
+    payload_bytes BLOB NOT NULL,
+    PRIMARY KEY (attempt_id, output_index),
+    UNIQUE (provider_receipt_id, output_index),
+    FOREIGN KEY (attempt_id, provider_receipt_id)
+      REFERENCES provider_responses(attempt_id, provider_receipt_id)
+);
 """
 
 
@@ -552,7 +671,7 @@ class AttemptJournal:
             connection.row_factory = sqlite3.Row
             connection.enable_load_extension(False)
             if hasattr(connection, "setlimit"):
-                connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, _MAX_DOCUMENT_BYTES * 2)
+                connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, _MAX_SQLITE_VALUE_BYTES)
                 connection.setlimit(sqlite3.SQLITE_LIMIT_SQL_LENGTH, 256 * 1024)
                 connection.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 0)
                 connection.setlimit(sqlite3.SQLITE_LIMIT_TRIGGER_DEPTH, 16)
@@ -669,7 +788,7 @@ class AttemptJournal:
         tables = {row["name"] for row in objects if row["type"] == "table"}
         triggers = {row["name"] for row in objects if row["type"] == "trigger"}
         if tables != _TABLES or triggers != _TRIGGERS:
-            raise JournalCorruptionError("attempt journal schema does not match version one")
+            raise JournalCorruptionError("attempt journal schema does not match version two")
         actual_schema = {(row["type"], row["name"]): row["sql"] for row in objects}
         if actual_schema != _expected_schema_objects():
             raise JournalCorruptionError("attempt journal schema SQL fingerprint drifted")
@@ -679,7 +798,7 @@ class AttemptJournal:
                 for row in connection.execute(f'PRAGMA table_info("{table}")').fetchall()
             )
             if actual != expected:
-                raise JournalCorruptionError("attempt journal columns do not match version one")
+                raise JournalCorruptionError("attempt journal columns do not match version two")
 
     def _begin(self) -> sqlite3.Connection:
         with self._bootstrap_lock():
@@ -761,7 +880,8 @@ class AttemptJournal:
         expected_type: type[GenerationRun]
         | type[GenerationAttempt]
         | type[GenerationAttemptEvent]
-        | type[ProviderCapabilitySnapshot],
+        | type[ProviderCapabilitySnapshot]
+        | type[ProviderReceipt],
     ) -> ProviderArtifact:
         if not isinstance(raw, bytes) or len(raw) > _MAX_DOCUMENT_BYTES:
             raise JournalCorruptionError("stored artifact exceeds its byte bound")
@@ -1023,6 +1143,255 @@ class AttemptJournal:
         return row
 
     @staticmethod
+    def _provider_receipt_binding(
+        attempt: GenerationAttempt,
+        receipt: ProviderReceipt,
+        predecessor: AttemptState,
+    ) -> None:
+        if (
+            receipt.attempt_id != attempt.attempt_id
+            or receipt.normalized_request_id != attempt.normalized_request_id
+            or receipt.requested_provider != attempt.requested_provider
+            or receipt.requested_model != attempt.requested_model
+            or receipt.selected_route_id != attempt.selected_route_id
+            or receipt.http_status != 200
+        ):
+            raise ProviderEvidenceConflictError(
+                "provider receipt does not bind the immutable attempt"
+            )
+        if predecessor.last_recorded_at is not None and _timestamp_key(
+            receipt.received_at
+        ) < _timestamp_key(predecessor.last_recorded_at):
+            raise ProviderEvidenceConflictError(
+                "provider receipt time regresses behind the immutable attempt"
+            )
+        if (
+            predecessor.provider_handle is not None
+            and receipt.provider_handle != predecessor.provider_handle
+        ):
+            raise ProviderEvidenceConflictError(
+                "provider receipt changed the immutable provider handle"
+            )
+
+    def _validated_provider_payloads(
+        self,
+        receipt: ProviderReceipt,
+        raw_response_bytes: bytes | None,
+        output_bytes: tuple[bytes, ...],
+    ) -> None:
+        if type(output_bytes) is not tuple or len(output_bytes) > _MAX_PROVIDER_OUTPUTS:
+            raise JournalSecurityError("provider output evidence count is outside the bound")
+        if len(receipt.outputs) != len(output_bytes):
+            raise ProviderEvidenceConflictError(
+                "provider output count does not match the immutable receipt"
+            )
+        total = 0
+        for index, payload in enumerate(output_bytes):
+            if type(payload) is not bytes:
+                raise JournalSecurityError("provider output evidence must be exact bytes")
+            self._scanner.scan_evidence_bytes(payload, maximum=_MAX_PROVIDER_OUTPUT_BYTES)
+            total += len(payload)
+            if total > _MAX_PROVIDER_OUTPUT_TOTAL_BYTES:
+                raise JournalSecurityError("provider output evidence exceeds the cumulative bound")
+            output = receipt.outputs[index] if index < len(receipt.outputs) else None
+            if not isinstance(output, Mapping) or (
+                output.get("output_index") != index
+                or output.get("content_ref") != blake3(payload).hexdigest()
+                or output.get("content_sha256") != hashlib.sha256(payload).hexdigest()
+                or output.get("byte_count") != len(payload)
+            ):
+                raise ProviderEvidenceConflictError(
+                    "provider output bytes do not match the immutable receipt"
+                )
+
+        raw_claim = receipt.raw_response
+        if raw_claim.get("state") == "not_retained":
+            if raw_response_bytes is not None:
+                raise ProviderEvidenceConflictError(
+                    "a not-retained provider receipt cannot persist raw response bytes"
+                )
+            return
+        if raw_response_bytes is None:
+            raise ProviderEvidenceConflictError(
+                "a retained provider receipt requires exact raw bytes"
+            )
+        if type(raw_response_bytes) is not bytes:
+            raise JournalSecurityError("raw provider response must be exact bytes")
+        self._scanner.scan_evidence_bytes(raw_response_bytes, maximum=_MAX_PROVIDER_RAW_BYTES)
+        if (
+            raw_claim.get("state") != "retained"
+            or raw_claim.get("content_ref") != blake3(raw_response_bytes).hexdigest()
+            or raw_claim.get("content_sha256") != hashlib.sha256(raw_response_bytes).hexdigest()
+            or raw_claim.get("byte_count") != len(raw_response_bytes)
+        ):
+            raise ProviderEvidenceConflictError(
+                "raw provider response bytes do not match the immutable receipt"
+            )
+
+    def _decode_evidence_blob(self, value: Any, *, maximum: int, description: str) -> bytes:
+        if type(value) is not bytes or not 1 <= len(value) <= maximum:
+            raise JournalCorruptionError(f"stored {description} exceeds its byte bound")
+        try:
+            self._scanner.scan_evidence_bytes(value, maximum=maximum)
+        except JournalSecurityError as error:
+            raise JournalCorruptionError(
+                f"stored {description} violates the secret boundary"
+            ) from error
+        return value
+
+    def _load_provider_response(
+        self,
+        connection: sqlite3.Connection,
+        attempt: GenerationAttempt,
+        events: list[GenerationAttemptEvent],
+        row: sqlite3.Row,
+    ) -> StoredProviderResponse:
+        receipt_artifact = self._decode_artifact(
+            self._row_blob(row, "receipt_json"), row["receipt_sha256"], ProviderReceipt
+        )
+        assert isinstance(receipt_artifact, ProviderReceipt)
+        receipt = receipt_artifact
+        if (
+            row["attempt_id"] != attempt.attempt_id
+            or row["provider_receipt_id"] != receipt.provider_receipt_id
+        ):
+            raise JournalCorruptionError("provider response row identity drifted")
+        response_events = [event for event in events if event.state == "response_received"]
+        if len(response_events) != 1:
+            raise JournalCorruptionError(
+                "provider response evidence requires one response_received event"
+            )
+        event = response_events[0]
+        predecessor = self._reduce_stored(attempt, events[: event.sequence - 1])
+        try:
+            self._provider_receipt_binding(attempt, receipt, predecessor)
+        except ProviderEvidenceConflictError as error:
+            raise JournalCorruptionError(
+                "stored provider receipt does not bind its attempt"
+            ) from error
+        expected_event = seal_provider_artifact(
+            {
+                "schema_version": EVENT_VERSION,
+                "attempt_id": attempt.attempt_id,
+                "sequence": event.sequence,
+                "state": "response_received",
+                "recorded_at": receipt.received_at,
+                "detail": {
+                    "kind": "response_received",
+                    "provider_receipt_id": receipt.provider_receipt_id,
+                },
+            }
+        )
+        if (
+            not isinstance(expected_event, GenerationAttemptEvent)
+            or event != expected_event
+            or row["response_event_id"] != event.attempt_event_id
+        ):
+            raise JournalCorruptionError(
+                "provider response event does not match its immutable receipt"
+            )
+
+        raw_claim = receipt.raw_response
+        raw_value = row["raw_bytes"]
+        if raw_claim.get("state") == "not_retained":
+            if any(
+                row[field] is not None
+                for field in (
+                    "raw_content_ref",
+                    "raw_content_sha256",
+                    "raw_byte_count",
+                    "raw_bytes",
+                )
+            ):
+                raise JournalCorruptionError(
+                    "not-retained provider response unexpectedly stores raw bytes"
+                )
+            raw_bytes: bytes | None = None
+        else:
+            raw_bytes = self._decode_evidence_blob(
+                raw_value,
+                maximum=_MAX_PROVIDER_RAW_BYTES,
+                description="raw provider response",
+            )
+            if (
+                row["raw_content_ref"] != raw_claim.get("content_ref")
+                or row["raw_content_sha256"] != raw_claim.get("content_sha256")
+                or row["raw_byte_count"] != raw_claim.get("byte_count")
+                or row["raw_content_ref"] != blake3(raw_bytes).hexdigest()
+                or row["raw_content_sha256"] != hashlib.sha256(raw_bytes).hexdigest()
+                or row["raw_byte_count"] != len(raw_bytes)
+            ):
+                raise JournalCorruptionError(
+                    "stored raw provider response disagrees with its receipt"
+                )
+
+        output_rows = connection.execute(
+            "SELECT attempt_id, output_index, provider_receipt_id, content_ref, "
+            "content_sha256, byte_count, payload_bytes "
+            "FROM provider_response_outputs WHERE attempt_id=? ORDER BY output_index LIMIT 9",
+            (attempt.attempt_id,),
+        ).fetchall()
+        if len(output_rows) != len(receipt.outputs) or len(output_rows) > _MAX_PROVIDER_OUTPUTS:
+            raise JournalCorruptionError("stored provider output count disagrees with its receipt")
+        payloads: list[bytes] = []
+        total = 0
+        for index, (output_row, output_claim) in enumerate(
+            zip(output_rows, receipt.outputs, strict=True)
+        ):
+            if not isinstance(output_claim, Mapping):
+                raise JournalCorruptionError("stored provider output claim is not an object")
+            payload = self._decode_evidence_blob(
+                output_row["payload_bytes"],
+                maximum=_MAX_PROVIDER_OUTPUT_BYTES,
+                description="provider output",
+            )
+            total += len(payload)
+            if total > _MAX_PROVIDER_OUTPUT_TOTAL_BYTES:
+                raise JournalCorruptionError("stored provider outputs exceed the cumulative bound")
+            if (
+                output_row["attempt_id"] != attempt.attempt_id
+                or output_row["output_index"] != index
+                or output_row["provider_receipt_id"] != receipt.provider_receipt_id
+                or output_row["content_ref"] != output_claim.get("content_ref")
+                or output_row["content_sha256"] != output_claim.get("content_sha256")
+                or output_row["byte_count"] != output_claim.get("byte_count")
+                or output_claim.get("output_index") != index
+                or output_row["content_ref"] != blake3(payload).hexdigest()
+                or output_row["content_sha256"] != hashlib.sha256(payload).hexdigest()
+                or output_row["byte_count"] != len(payload)
+            ):
+                raise JournalCorruptionError("stored provider output disagrees with its receipt")
+            payloads.append(payload)
+        return StoredProviderResponse(receipt, event, raw_bytes, tuple(payloads))
+
+    def _verify_provider_response_for_attempt(
+        self,
+        connection: sqlite3.Connection,
+        attempt: GenerationAttempt,
+        events: list[GenerationAttemptEvent],
+    ) -> StoredProviderResponse | None:
+        row = connection.execute(
+            "SELECT * FROM provider_responses WHERE attempt_id=?",
+            (attempt.attempt_id,),
+        ).fetchone()
+        response_events = [event for event in events if event.state == "response_received"]
+        if row is None:
+            orphan = connection.execute(
+                "SELECT 1 FROM provider_response_outputs WHERE attempt_id=? LIMIT 1",
+                (attempt.attempt_id,),
+            ).fetchone()
+            if response_events or orphan is not None:
+                raise JournalCorruptionError(
+                    "response_received event and provider evidence must coexist"
+                )
+            return None
+        if len(response_events) != 1:
+            raise JournalCorruptionError(
+                "provider evidence and response_received event must coexist"
+            )
+        return self._load_provider_response(connection, attempt, events, row)
+
+    @staticmethod
     def _reduce_stored(
         attempt: GenerationAttempt, events: list[GenerationAttemptEvent]
     ) -> AttemptState:
@@ -1150,6 +1519,7 @@ class AttemptJournal:
             events = self._load_events(connection, attempt_id)
             self._reduce_stored(attempt, events)
             self._verify_claim_for_attempt(connection, attempt, events)
+            self._verify_provider_response_for_attempt(connection, attempt, events)
             result = tuple(events)
             self._commit(connection)
             return result
@@ -1171,6 +1541,7 @@ class AttemptJournal:
             events = self._load_events(connection, attempt_id)
             state = self._reduce_stored(attempt, events)
             self._verify_claim_for_attempt(connection, attempt, events)
+            self._verify_provider_response_for_attempt(connection, attempt, events)
             self._commit(connection)
             return state
         except AttemptJournalError:
@@ -1218,6 +1589,10 @@ class AttemptJournal:
             raise DispatchClaimConflictError(
                 "submitted is reserved for the atomic dispatch-claim transaction"
             )
+        if artifact.state == "response_received":
+            raise AttemptJournalError(
+                "response_received requires the atomic provider-evidence transaction"
+            )
         if artifact.state == "succeeded":
             raise AttemptJournalError("succeeded requires the later durable terminal gate")
         connection = self._begin()
@@ -1226,6 +1601,7 @@ class AttemptJournal:
             events = self._load_events(connection, artifact.attempt_id)
             state = self._reduce_stored(attempt, events)
             self._verify_claim_for_attempt(connection, attempt, events)
+            self._verify_provider_response_for_attempt(connection, attempt, events)
             occupied = connection.execute(
                 "SELECT canonical_sha256, document_json FROM attempt_events "
                 "WHERE attempt_id=? AND sequence=?",
@@ -1384,6 +1760,7 @@ class AttemptJournal:
             events = self._load_events(connection, attempt_id)
             state = self._reduce_stored(attempt, events)
             existing = self._verify_claim_for_attempt(connection, attempt, events)
+            self._verify_provider_response_for_attempt(connection, attempt, events)
             if existing is not None:
                 if self._row_blob(existing, "claim_json") != claim_bytes:
                     raise DispatchClaimConflictError(
@@ -1458,6 +1835,186 @@ class AttemptJournal:
             self._rollback(connection)
             raise
 
+    def read_provider_response(self, attempt_id: str) -> StoredProviderResponse:
+        """Read and revalidate one attempt's immutable private provider evidence."""
+
+        _validate_uuid(attempt_id, "attempt_id")
+        connection = self._begin_read()
+        try:
+            attempt = self._load_bound_attempt(connection, attempt_id)
+            events = self._load_events(connection, attempt_id)
+            self._reduce_stored(attempt, events)
+            self._verify_claim_for_attempt(connection, attempt, events)
+            stored = self._verify_provider_response_for_attempt(connection, attempt, events)
+            if stored is None:
+                raise JournalNotFoundError("provider response evidence is not stored")
+            self._commit(connection)
+            return stored
+        except AttemptJournalError:
+            self._rollback(connection)
+            raise
+        except sqlite3.Error as error:
+            self._rollback(connection)
+            raise JournalCorruptionError("provider response evidence could not be read") from error
+        except BaseException:
+            self._rollback(connection)
+            raise
+
+    def publish_provider_response(
+        self,
+        receipt_value: ArtifactInput,
+        raw_response_bytes: bytes | None,
+        output_bytes: tuple[bytes, ...],
+        *,
+        expected_head_event_id: str,
+        expected_next_sequence: int,
+    ) -> ProviderResponsePublishResult:
+        """Atomically store a receipt, exact private bytes, and ``response_received``."""
+
+        self._scanner.scan(
+            {
+                "expected_head_event_id": expected_head_event_id,
+                "expected_next_sequence": expected_next_sequence,
+            }
+        )
+        _validate_digest(expected_head_event_id, "expected_head_event_id")
+        if (
+            not isinstance(expected_next_sequence, int)
+            or isinstance(expected_next_sequence, bool)
+            or not 1 <= expected_next_sequence <= 5
+        ):
+            raise AttemptJournalError("expected_next_sequence must be a bounded integer")
+        receipt_artifact, receipt_bytes, receipt_sha = _canonical_artifact(
+            receipt_value, ProviderReceipt, self._scanner
+        )
+        assert isinstance(receipt_artifact, ProviderReceipt)
+        receipt = receipt_artifact
+        self._validated_provider_payloads(receipt, raw_response_bytes, output_bytes)
+
+        connection = self._begin()
+        try:
+            attempt = self._load_bound_attempt(connection, receipt.attempt_id)
+            events = self._load_events(connection, attempt.attempt_id)
+            state = self._reduce_stored(attempt, events)
+            self._verify_claim_for_attempt(connection, attempt, events)
+            stored = self._verify_provider_response_for_attempt(connection, attempt, events)
+
+            # Lost acknowledgements and concurrent exact publishers must recover from the
+            # immutable row before a now-stale compare-and-append token is considered.
+            if stored is not None:
+                if (
+                    stored.receipt != receipt
+                    or stored.raw_response_bytes != raw_response_bytes
+                    or stored.output_bytes != output_bytes
+                ):
+                    raise ProviderEvidenceConflictError(
+                        "attempt already has different provider-response evidence"
+                    )
+                self._commit(connection)
+                return ProviderResponsePublishResult(False, stored.receipt, stored.event, state)
+
+            self._provider_receipt_binding(attempt, receipt, state)
+            self._check_head(state, expected_head_event_id, expected_next_sequence)
+            if state.state not in {"submitted", "outcome_unknown"}:
+                raise ProviderEvidenceConflictError(
+                    "provider response requires a submitted or outcome_unknown attempt"
+                )
+            response_artifact = seal_provider_artifact(
+                {
+                    "schema_version": EVENT_VERSION,
+                    "attempt_id": attempt.attempt_id,
+                    "sequence": expected_next_sequence,
+                    "state": "response_received",
+                    "recorded_at": receipt.received_at,
+                    "detail": {
+                        "kind": "response_received",
+                        "provider_receipt_id": receipt.provider_receipt_id,
+                    },
+                }
+            )
+            if not isinstance(response_artifact, GenerationAttemptEvent):
+                raise AttemptJournalError("response_received event could not be derived")
+            response_bytes = canonical_json_bytes(to_json_dict(response_artifact))
+            self._scanner.scan_bytes(response_bytes)
+            response_sha = hashlib.sha256(response_bytes).hexdigest()
+            try:
+                next_state = reduce_attempt_events(attempt, [*events, response_artifact])
+            except AttemptStateError as error:
+                raise ProviderEvidenceConflictError(
+                    "provider response violates the attempt transition contract"
+                ) from error
+
+            raw_claim = receipt.raw_response
+            if raw_claim.get("state") == "retained":
+                raw_content_ref = raw_claim.get("content_ref")
+                raw_content_sha256 = raw_claim.get("content_sha256")
+                raw_byte_count = raw_claim.get("byte_count")
+            else:
+                raw_content_ref = None
+                raw_content_sha256 = None
+                raw_byte_count = None
+            try:
+                connection.execute(
+                    "INSERT INTO attempt_events VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        attempt.attempt_id,
+                        response_artifact.sequence,
+                        response_artifact.attempt_event_id,
+                        response_artifact.state,
+                        response_sha,
+                        response_bytes,
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO provider_responses "
+                    "(attempt_id, provider_receipt_id, response_event_id, receipt_sha256, "
+                    "receipt_json, raw_content_ref, raw_content_sha256, raw_byte_count, raw_bytes) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        attempt.attempt_id,
+                        receipt.provider_receipt_id,
+                        response_artifact.attempt_event_id,
+                        receipt_sha,
+                        receipt_bytes,
+                        raw_content_ref,
+                        raw_content_sha256,
+                        raw_byte_count,
+                        raw_response_bytes,
+                    ),
+                )
+                for index, payload in enumerate(output_bytes):
+                    output_claim = receipt.outputs[index]
+                    assert isinstance(output_claim, Mapping)
+                    connection.execute(
+                        "INSERT INTO provider_response_outputs "
+                        "(attempt_id, output_index, provider_receipt_id, content_ref, "
+                        "content_sha256, byte_count, payload_bytes) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            attempt.attempt_id,
+                            index,
+                            receipt.provider_receipt_id,
+                            output_claim["content_ref"],
+                            output_claim["content_sha256"],
+                            output_claim["byte_count"],
+                            payload,
+                        ),
+                    )
+            except sqlite3.IntegrityError as error:
+                raise ProviderEvidenceConflictError(
+                    "provider-response identity or immutable slot is already occupied"
+                ) from error
+            self._commit(connection)
+            return ProviderResponsePublishResult(True, receipt, response_artifact, next_state)
+        except AttemptJournalError:
+            self._rollback(connection)
+            raise
+        except sqlite3.Error as error:
+            self._rollback(connection)
+            raise AttemptJournalError("provider response transaction failed") from error
+        except BaseException:
+            self._rollback(connection)
+            raise
+
     def verify_integrity(self) -> None:
         connection = self._begin_read()
         try:
@@ -1472,6 +2029,7 @@ class AttemptJournal:
                 events = self._load_events(connection, attempt.attempt_id)
                 self._reduce_stored(attempt, events)
                 self._verify_claim_for_attempt(connection, attempt, events)
+                self._verify_provider_response_for_attempt(connection, attempt, events)
             self._commit(connection)
         except AttemptJournalError:
             self._rollback(connection)

@@ -255,6 +255,16 @@ decode_and_validate(receipt) -> output occurrences
 A synchronous `response_received` return still appends `submitted` before
 `response_received`; the adapter cannot skip the dispatch event in the state trace.
 
+For a retained synchronous response, the canonical receipt, exact private raw-response bytes,
+every provider output payload, and the derived `response_received` event form one recoverable
+local commit boundary. A receipt whose retention policy is `not_retained` commits the same package
+without raw-response bytes. Exact replay returns the existing commit; a differing receipt,
+payload, or attempt/output-index binding is a protocol conflict. The event is derived inside the
+transaction, so stored event drift is corruption rather than a caller-supplied conflict. A lost
+commit acknowledgement is resolved from durable local state and is never projected as provider
+failure. This boundary does not perform media admission, mint output occurrences, or append
+`succeeded`.
+
 The immutable capability snapshot records adapter revision, provider, requested model, input
 modalities, reference limits and roles, output count, dimensions/aspect-ratio surface, seed and
 option support, operation-input roles (including source/mask/control support), actual-model

@@ -34,6 +34,7 @@ from moodboard.attempt_journal import (
     JournalNotFoundError,
     JournalSecurityError,
     JournalVersionError,
+    ProviderEvidenceConflictError,
     RegistrationResult,
     StaleAttemptHeadError,
 )
@@ -127,6 +128,7 @@ def test_public_error_taxonomy_is_closed_under_the_journal_error() -> None:
         ImmutableRecordConflictError,
         StaleAttemptHeadError,
         DispatchClaimConflictError,
+        ProviderEvidenceConflictError,
     )
 
     assert all(issubclass(error_type, AttemptJournalError) for error_type in error_types)
@@ -378,7 +380,9 @@ def test_event_slot_conflict_stale_head_and_terminal_reopen_fail_closed(tmp_path
         )
 
 
-def test_generic_append_rejects_submitted_and_succeeded(tmp_path: Path) -> None:
+def test_generic_append_rejects_submitted_response_received_and_succeeded(
+    tmp_path: Path,
+) -> None:
     run, attempt, capability, prepared, events = _chain()
     journal = AttemptJournal((tmp_path / "attempts.sqlite3").resolve())
     _append_prepared(journal, run, attempt, prepared)
@@ -392,16 +396,17 @@ def test_generic_append_rejects_submitted_and_succeeded(tmp_path: Path) -> None:
 
     claim = _claim(journal, attempt, capability, prepared)
     response = next(event for event in events if event["state"] == "response_received")
-    response_result = journal.append_event(
-        response,
-        expected_head_event_id=claim.submitted_event.attempt_event_id,
-        expected_next_sequence=3,
-    )
+    with pytest.raises(AttemptJournalError, match="response_received|evidence"):
+        journal.append_event(
+            response,
+            expected_head_event_id=claim.submitted_event.attempt_event_id,
+            expected_next_sequence=3,
+        )
     succeeded = next(event for event in events if event["state"] == "succeeded")
     with pytest.raises(AttemptJournalError, match="succeeded|terminal gate"):
         journal.append_event(
             succeeded,
-            expected_head_event_id=response_result.event.attempt_event_id,
+            expected_head_event_id=claim.submitted_event.attempt_event_id,
             expected_next_sequence=4,
         )
 
@@ -411,16 +416,23 @@ def test_stored_succeeded_is_corruption_until_the_evidence_gate_exists(tmp_path:
     run, attempt, capability, prepared, events = _chain()
     journal = AttemptJournal(path)
     _append_prepared(journal, run, attempt, prepared)
-    claim = _claim(journal, attempt, capability, prepared)
+    _claim(journal, attempt, capability, prepared)
     response = next(event for event in events if event["state"] == "response_received")
-    journal.append_event(
-        response,
-        expected_head_event_id=claim.submitted_event.attempt_event_id,
-        expected_next_sequence=3,
-    )
+    response_bytes = canonical_json_bytes(response)
     succeeded = next(event for event in events if event["state"] == "succeeded")
     succeeded_bytes = canonical_json_bytes(succeeded)
     with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO attempt_events VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                attempt["attempt_id"],
+                response["sequence"],
+                response["attempt_event_id"],
+                response["state"],
+                hashlib.sha256(response_bytes).hexdigest(),
+                response_bytes,
+            ),
+        )
         connection.execute(
             "INSERT INTO attempt_events VALUES (?, ?, ?, ?, ?, ?)",
             (
@@ -713,6 +725,24 @@ def test_rejected_unrelated_sqlite_file_is_not_switched_to_wal(tmp_path: Path) -
         AttemptJournal(path).read_run("20000000-0000-4000-8000-000000000001")
 
     with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "delete"
+    assert not Path(f"{path}-wal").exists()
+    assert not Path(f"{path}-shm").exists()
+
+
+def test_v1_journal_is_explicitly_rejected_without_migration(tmp_path: Path) -> None:
+    path = (tmp_path / "v1.sqlite3").resolve()
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA application_id=0x4D424A31")
+        connection.execute("PRAGMA user_version=1")
+    path.chmod(0o600)
+
+    with pytest.raises(JournalVersionError):
+        AttemptJournal(path).read_run("20000000-0000-4000-8000-000000000001")
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA application_id").fetchone()[0] == 0x4D424A31
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
         assert connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "delete"
     assert not Path(f"{path}-wal").exists()
     assert not Path(f"{path}-shm").exists()
