@@ -1471,9 +1471,10 @@ def _decimal_cost(value: Any, currency: Any = None) -> dict[str, Any]:
 
     Cost is post-hoc telemetry: a shape this function cannot certify degrades to the
     schema's unavailable state and must never reject the paid response carrying it.
-    ``not_reported`` states the provider sent no cost; ``reported_uncertifiable`` states it
-    sent one this adapter could not certify, so the receipt never inverts what the provider
-    did. The raw response bytes retain whatever was actually reported.
+    ``not_reported`` states no cost value was legibly reported; ``reported_uncertifiable``
+    states a cost value was present and this adapter could not certify it, so the receipt
+    never inverts what the provider did in either direction. The raw response bytes retain
+    whatever was actually reported.
     """
     if value is None:
         return _unavailable_cost("not_reported")
@@ -1643,10 +1644,10 @@ def decode_openrouter_response(
             }
         )
     usage = document.get("usage")
-    if usage is None:
+    if not isinstance(usage, dict):
+        # A non-object usage carries no legible cost, so no cost was reported in the
+        # contract's terms; claiming one was would invert the fact the other way.
         cost = _unavailable_cost("not_reported")
-    elif not isinstance(usage, dict):
-        cost = _unavailable_cost("reported_uncertifiable")
     else:
         cost = _decimal_cost(usage.get("cost"), usage.get("currency"))
     draft = {
