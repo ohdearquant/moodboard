@@ -1,0 +1,897 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/judgment_v1.schema.json",
+  "title": "Moodboard typed judgment v1",
+  "description": "Closed evidence vocabulary for ADR-0012. It does not alter report v1.0 or v1.1.",
+  "oneOf": [
+    { "$ref": "#/$defs/intentJudgment" },
+    { "$ref": "#/$defs/similarityJudgment" },
+    { "$ref": "#/$defs/boardJudgment" },
+    { "$ref": "#/$defs/constraintJudgment" },
+    { "$ref": "#/$defs/humanJudgment" },
+    { "$ref": "#/$defs/predictionJudgment" }
+  ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "canonicalUuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "modelKey": {
+      "type": "string",
+      "pattern": "^moodboard_[0-9a-f]{64}_[1-9][0-9]{0,3}$"
+    },
+    "evidenceRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "artifact_id"],
+          "properties": {
+            "kind": { "const": "artifact" },
+            "artifact_id": { "$ref": "#/$defs/digest" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "content_ref"],
+          "properties": {
+            "kind": { "const": "content_ref" },
+            "content_ref": { "$ref": "#/$defs/digest" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "machineBase": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "evidence_id",
+        "kind",
+        "subject",
+        "result",
+        "authority",
+        "evidence_ref"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.judgment.v1" },
+        "evidence_id": { "$ref": "#/$defs/digest" },
+        "evidence_ref": { "$ref": "#/$defs/evidenceRef" }
+      }
+    },
+    "humanBase": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "evidence_id",
+        "kind",
+        "subject",
+        "result",
+        "authority",
+        "evidence_ref"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.judgment.v1" },
+        "evidence_id": { "$ref": "#/$defs/canonicalUuid" },
+        "evidence_ref": { "$ref": "#/$defs/evidenceRef" }
+      }
+    },
+
+    "assetOccurrenceSubject": {
+      "type": "object",
+      "required": ["kind", "asset_id", "content_ref", "route_query_occurrence_id"],
+      "properties": {
+        "kind": { "const": "asset_occurrence" },
+        "asset_id": { "$ref": "#/$defs/canonicalUuid" },
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "route_query_occurrence_id": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "intentResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["state", "route_reason", "collection"],
+          "properties": {
+            "state": { "const": "eligible" },
+            "route_reason": { "const": "declared_collection_match" },
+            "collection": { "type": "string", "minLength": 1, "maxLength": 256 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["state", "route_reason"],
+          "properties": {
+            "state": { "const": "excluded" },
+            "route_reason": { "const": "declared_collection_mismatch" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["state", "route_reason"],
+          "properties": {
+            "state": { "const": "not_computed" },
+            "route_reason": { "const": "route_not_run" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "intentAuthority": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "input_digest",
+        "route_policy_id",
+        "eligible_corpus_sha256",
+        "field",
+        "operator",
+        "value",
+        "empty_result_policy",
+        "interpretation"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.intent-route.collection-gate.v1" },
+        "input_digest": { "$ref": "#/$defs/digest" },
+        "route_policy_id": { "$ref": "#/$defs/digest" },
+        "eligible_corpus_sha256": { "$ref": "#/$defs/digest" },
+        "field": { "const": "collection" },
+        "operator": { "const": "equals" },
+        "value": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "empty_result_policy": { "const": "no_ungated_fallback" },
+        "interpretation": {
+          "const": "structural_routing_control_not_learned_retrieval_quality"
+        }
+      },
+      "additionalProperties": false
+    },
+    "intentJudgment": {
+      "allOf": [
+        { "$ref": "#/$defs/machineBase" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "intent_eligibility" },
+            "subject": { "$ref": "#/$defs/assetOccurrenceSubject" },
+            "result": { "$ref": "#/$defs/intentResult" },
+            "authority": { "$ref": "#/$defs/intentAuthority" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+
+    "retrievalResultSubject": {
+      "type": "object",
+      "required": ["kind", "query_occurrence_id", "ordered_result_artifact_id"],
+      "properties": {
+        "kind": { "const": "retrieval_result" },
+        "query_occurrence_id": { "$ref": "#/$defs/digest" },
+        "ordered_result_artifact_id": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "similarityRow": {
+      "type": "object",
+      "required": [
+        "routed_rank",
+        "source_search_rank",
+        "asset_id",
+        "content_ref",
+        "source_similarity"
+      ],
+      "properties": {
+        "routed_rank": { "type": "integer", "minimum": 1 },
+        "source_search_rank": { "type": "integer", "minimum": 1 },
+        "asset_id": { "$ref": "#/$defs/canonicalUuid" },
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "source_similarity": { "type": "number", "minimum": -1, "maximum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "similarityResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["state", "rows"],
+          "properties": {
+            "state": { "const": "computed" },
+            "rows": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/similarityRow" }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["state"],
+          "properties": { "state": { "enum": ["empty", "not_computed", "refused"] } },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "similarityAuthority": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "input_digest",
+        "descriptor_fingerprint",
+        "model_key",
+        "metric",
+        "method",
+        "preference_applied",
+        "reranker"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.source-similarity.v1" },
+        "input_digest": { "$ref": "#/$defs/digest" },
+        "descriptor_fingerprint": { "$ref": "#/$defs/digest" },
+        "model_key": { "$ref": "#/$defs/modelKey" },
+        "metric": { "const": "source_image_cosine" },
+        "method": { "const": "khive_exact_cosine_over_lattice_visual_embeddings" },
+        "preference_applied": { "const": false },
+        "reranker": { "type": "null" }
+      },
+      "additionalProperties": false
+    },
+    "similarityJudgment": {
+      "allOf": [
+        { "$ref": "#/$defs/machineBase" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "source_similarity" },
+            "subject": { "$ref": "#/$defs/retrievalResultSubject" },
+            "result": { "$ref": "#/$defs/similarityResult" },
+            "authority": { "$ref": "#/$defs/similarityAuthority" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+
+    "selectableOutputSubject": {
+      "type": "object",
+      "required": ["kind", "output_occurrence_id"],
+      "properties": {
+        "kind": { "const": "selectable_output_occurrence" },
+        "output_occurrence_id": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "scoreInterval": {
+      "type": "object",
+      "required": ["low", "high", "level", "method"],
+      "properties": {
+        "low": { "type": "number", "minimum": 0, "maximum": 1 },
+        "high": { "type": "number", "minimum": 0, "maximum": 1 },
+        "level": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+        "method": { "const": "loo-jackknife-plus" }
+      },
+      "additionalProperties": false
+    },
+    "resolutionMeasurement": {
+      "type": "object",
+      "required": [
+        "n_local",
+        "n_eff_local",
+        "n_eff_local_source",
+        "n_references",
+        "n_categories",
+        "resolution_alpha",
+        "supported_alpha",
+        "binding_floor",
+        "requested_alpha",
+        "category_id"
+      ],
+      "properties": {
+        "n_local": { "type": "integer", "minimum": 1 },
+        "n_eff_local": { "type": "number", "minimum": 1 },
+        "n_eff_local_source": { "enum": ["assumed_distinct", "duplicate_groups"] },
+        "n_references": { "type": "integer", "minimum": 1 },
+        "n_categories": { "type": "integer", "minimum": 1 },
+        "resolution_alpha": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "supported_alpha": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "binding_floor": { "enum": ["achievability", "effective"] },
+        "requested_alpha": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "category_id": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "outlierMeasurement": {
+      "type": "object",
+      "required": [
+        "candidate_alpha",
+        "reference_max",
+        "reference_iqr",
+        "threshold",
+        "iqr_multiplier",
+        "iqr_multiplier_source"
+      ],
+      "properties": {
+        "candidate_alpha": { "type": "number", "minimum": 0 },
+        "reference_max": { "type": "number", "minimum": 0 },
+        "reference_iqr": { "type": "number", "minimum": 0 },
+        "threshold": { "type": "number", "minimum": 0 },
+        "iqr_multiplier": { "type": "number", "minimum": 0 },
+        "iqr_multiplier_source": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "boardResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["state", "score", "interval", "rank"],
+          "properties": {
+            "state": { "const": "scored" },
+            "score": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+            "interval": { "$ref": "#/$defs/scoreInterval" },
+            "rank": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["state", "category_id", "reason", "measurement", "explanation"],
+          "properties": {
+            "state": { "const": "abstained" },
+            "category_id": { "type": "string", "minLength": 1 },
+            "reason": { "enum": ["resolution", "multi_modality"] },
+            "measurement": { "$ref": "#/$defs/resolutionMeasurement" },
+            "explanation": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["state", "category_id", "reason", "measurement", "explanation"],
+          "properties": {
+            "state": { "const": "abstained" },
+            "category_id": { "type": "string", "minLength": 1 },
+            "reason": { "const": "far_outlier" },
+            "measurement": { "$ref": "#/$defs/outlierMeasurement" },
+            "explanation": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["state"],
+          "properties": { "state": { "const": "not_computed" } },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "boardAuthority": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "input_digest",
+        "source_report_schema_version",
+        "source_report_sha256",
+        "board_id",
+        "report_asset_id"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.board-compatibility.v1" },
+        "input_digest": { "$ref": "#/$defs/digest" },
+        "source_report_schema_version": { "const": "1.1" },
+        "source_report_sha256": { "$ref": "#/$defs/digest" },
+        "board_id": { "$ref": "#/$defs/digest" },
+        "report_asset_id": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "boardJudgment": {
+      "allOf": [
+        { "$ref": "#/$defs/machineBase" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "board_compatibility" },
+            "subject": { "$ref": "#/$defs/selectableOutputSubject" },
+            "result": { "$ref": "#/$defs/boardResult" },
+            "authority": { "$ref": "#/$defs/boardAuthority" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+
+    "localityMeasurements": {
+      "type": "object",
+      "required": ["protected_pixel_count", "changed_pixel_count", "max_abs_channel_error"],
+      "properties": {
+        "protected_pixel_count": { "type": "integer", "minimum": 1 },
+        "changed_pixel_count": { "type": "integer", "minimum": 0 },
+        "max_abs_channel_error": { "type": "integer", "minimum": 0, "maximum": 255 }
+      },
+      "additionalProperties": false
+    },
+    "measuredLocalityResult": {
+      "type": "object",
+      "required": ["state", "measurements"],
+      "properties": {
+        "state": { "enum": ["pass", "fail"] },
+        "measurements": { "$ref": "#/$defs/localityMeasurements" }
+      },
+      "additionalProperties": false
+    },
+    "localityNotRunResult": {
+      "type": "object",
+      "required": ["state", "reason"],
+      "properties": {
+        "state": { "const": "not_run" },
+        "reason": { "const": "structural_verification_failed" }
+      },
+      "additionalProperties": false
+    },
+    "localityAuthority": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "input_digest",
+        "source_raster_sha256",
+        "output_raster_sha256",
+        "mask_sha256"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.verifier.outside-mask-rgb-exact.v1" },
+        "input_digest": { "$ref": "#/$defs/digest" },
+        "source_raster_sha256": { "$ref": "#/$defs/digest" },
+        "output_raster_sha256": { "$ref": "#/$defs/digest" },
+        "mask_sha256": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "localityNotRunAuthority": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "input_digest",
+        "source_raster_sha256",
+        "mask_sha256",
+        "blocking_structural_evidence_id"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.verifier.outside-mask-rgb-exact.v1" },
+        "input_digest": { "$ref": "#/$defs/digest" },
+        "source_raster_sha256": { "$ref": "#/$defs/digest" },
+        "mask_sha256": { "$ref": "#/$defs/digest" },
+        "blocking_structural_evidence_id": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "structuralMeasurements": {
+      "type": "object",
+      "required": [
+        "source_width",
+        "source_height",
+        "container_decoded",
+        "canonical_raster_compiled",
+        "frame_count",
+        "output_width",
+        "output_height",
+        "output_mode",
+        "opaque"
+      ],
+      "properties": {
+        "source_width": { "type": "integer", "minimum": 1 },
+        "source_height": { "type": "integer", "minimum": 1 },
+        "container_decoded": { "type": "boolean" },
+        "canonical_raster_compiled": { "type": "boolean" },
+        "frame_count": {
+          "oneOf": [
+            { "type": "integer", "minimum": 0 },
+            { "type": "null" }
+          ]
+        },
+        "output_width": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
+        },
+        "output_height": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
+        },
+        "output_mode": {
+          "type": ["string", "null"],
+          "enum": [null, "RGB", "RGBA", "L", "CMYK", "other"]
+        },
+        "opaque": { "type": ["boolean", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "structuralResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["state", "measurements"],
+          "properties": {
+            "state": { "const": "pass" },
+            "measurements": { "$ref": "#/$defs/structuralMeasurements" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["state", "reason", "measurements"],
+          "properties": {
+            "state": { "const": "fail" },
+            "reason": {
+              "enum": [
+                "decode_failed",
+                "decode_limit_exceeded",
+                "unsafe_decoder_warning",
+                "unsupported_frame_count",
+                "non_opaque",
+                "unsupported_color_contract",
+                "dimension_mismatch"
+              ]
+            },
+            "measurements": { "$ref": "#/$defs/structuralMeasurements" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "structuralAuthority": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "input_digest",
+        "source_raster_sha256",
+        "output_content_sha256",
+        "output_raster_sha256",
+        "decoder_revision"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.verifier.raster-structure.v1" },
+        "input_digest": { "$ref": "#/$defs/digest" },
+        "source_raster_sha256": { "$ref": "#/$defs/digest" },
+        "output_content_sha256": { "$ref": "#/$defs/digest" },
+        "output_raster_sha256": {
+          "oneOf": [
+            { "$ref": "#/$defs/digest" },
+            { "type": "null" }
+          ]
+        },
+        "decoder_revision": { "type": "string", "minLength": 1, "maxLength": 256 }
+      },
+      "additionalProperties": false
+    },
+    "constraintJudgment": {
+      "allOf": [
+        { "$ref": "#/$defs/machineBase" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "constraint_verification" },
+            "subject": { "$ref": "#/$defs/selectableOutputSubject" }
+          },
+          "oneOf": [
+            {
+              "properties": {
+                "result": { "$ref": "#/$defs/measuredLocalityResult" },
+                "authority": { "$ref": "#/$defs/localityAuthority" }
+              }
+            },
+            {
+              "properties": {
+                "result": { "$ref": "#/$defs/localityNotRunResult" },
+                "authority": { "$ref": "#/$defs/localityNotRunAuthority" }
+              }
+            },
+            {
+              "properties": {
+                "result": { "$ref": "#/$defs/structuralResult" },
+                "authority": { "$ref": "#/$defs/structuralAuthority" }
+              }
+            }
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+
+    "comparisonSubject": {
+      "type": "object",
+      "required": [
+        "kind",
+        "serve_id",
+        "left_output_occurrence_id",
+        "right_output_occurrence_id",
+        "left_result_occurrence_id",
+        "right_result_occurrence_id"
+      ],
+      "properties": {
+        "kind": { "const": "comparison_pair" },
+        "serve_id": { "$ref": "#/$defs/canonicalUuid" },
+        "left_output_occurrence_id": { "$ref": "#/$defs/digest" },
+        "right_output_occurrence_id": { "$ref": "#/$defs/digest" },
+        "left_result_occurrence_id": { "$ref": "#/$defs/canonicalUuid" },
+        "right_result_occurrence_id": { "$ref": "#/$defs/canonicalUuid" }
+      },
+      "additionalProperties": false
+    },
+    "humanResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["state", "choice"],
+          "properties": {
+            "state": { "const": "recorded" },
+            "choice": { "enum": ["left", "right"] },
+            "reason_code": {
+              "type": ["string", "null"],
+              "enum": [null, "style", "palette", "tone", "composition", "other"]
+            },
+            "response_ms": { "type": "integer", "minimum": 0, "maximum": 3600000 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["state", "choice"],
+          "properties": {
+            "state": { "const": "recorded" },
+            "choice": { "const": "tie" },
+            "reason_code": {
+              "type": ["string", "null"],
+              "enum": [null, "equally_good", "equally_bad", "other"]
+            },
+            "response_ms": { "type": "integer", "minimum": 0, "maximum": 3600000 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["state", "choice", "reason_code"],
+          "properties": {
+            "state": { "const": "recorded" },
+            "choice": { "const": "abstain" },
+            "reason_code": {
+              "enum": ["insufficient_context", "both_unacceptable", "render_failure", "other"]
+            },
+            "response_ms": { "type": "integer", "minimum": 0, "maximum": 3600000 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "preferenceScope": {
+      "type": "object",
+      "required": [
+        "namespace",
+        "actor_kind",
+        "actor_id",
+        "board_entity_id",
+        "board_id",
+        "model_key",
+        "descriptor_fingerprint",
+        "feature_schema_id"
+      ],
+      "properties": {
+        "namespace": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "actor_kind": { "const": "actor" },
+        "actor_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "board_entity_id": { "$ref": "#/$defs/canonicalUuid" },
+        "board_id": { "$ref": "#/$defs/digest" },
+        "model_key": { "$ref": "#/$defs/modelKey" },
+        "descriptor_fingerprint": { "$ref": "#/$defs/digest" },
+        "feature_schema_id": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "humanAuthority": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "judgment_id",
+        "principal_id",
+        "evidence_class",
+        "presentation",
+        "scope"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.preference-judgment.v1" },
+        "judgment_id": { "$ref": "#/$defs/canonicalUuid" },
+        "principal_id": { "$ref": "#/$defs/canonicalUuid" },
+        "evidence_class": { "const": "human_explicit" },
+        "presentation": {
+          "type": "object",
+          "required": ["revision", "preference_probability_shown", "source_rank_shown"],
+          "properties": {
+            "revision": { "const": "moodboard.studio.blind-comparison.v1" },
+            "preference_probability_shown": { "const": false },
+            "source_rank_shown": { "const": false }
+          },
+          "additionalProperties": false
+        },
+        "scope": { "$ref": "#/$defs/preferenceScope" }
+      },
+      "additionalProperties": false
+    },
+    "humanJudgment": {
+      "allOf": [
+        { "$ref": "#/$defs/humanBase" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "human_comparison" },
+            "subject": { "$ref": "#/$defs/comparisonSubject" },
+            "result": { "$ref": "#/$defs/humanResult" },
+            "authority": { "$ref": "#/$defs/humanAuthority" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+
+    "predictionSubject": {
+      "type": "object",
+      "required": ["kind", "pair_id", "left_output_occurrence_id", "right_output_occurrence_id"],
+      "properties": {
+        "kind": { "const": "comparison_pair" },
+        "pair_id": { "$ref": "#/$defs/digest" },
+        "left_output_occurrence_id": { "$ref": "#/$defs/digest" },
+        "right_output_occurrence_id": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "predictedResult": {
+      "type": "object",
+      "required": [
+        "state",
+        "prediction_kind",
+        "conditional_on",
+        "probability_left_given_decisive",
+        "probability_right_given_decisive",
+        "raw_fann_logit",
+        "calibrated_temperature",
+        "indifference",
+        "conformal_evidence"
+      ],
+      "properties": {
+        "state": { "const": "predicted" },
+        "prediction_kind": { "const": "learned_pairwise_preference" },
+        "conditional_on": { "const": "decisive_judgment" },
+        "probability_left_given_decisive": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "probability_right_given_decisive": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "raw_fann_logit": { "type": "number", "minimum": -1e30, "maximum": 1e30 },
+        "calibrated_temperature": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1e30
+        },
+        "indifference": {
+          "type": "object",
+          "required": ["state"],
+          "properties": {
+            "state": { "enum": ["inside_calibrated_band", "outside_calibrated_band"] }
+          },
+          "additionalProperties": false
+        },
+        "conformal_evidence": {
+          "type": "object",
+          "required": ["state"],
+          "properties": { "state": { "const": "not_computed_by_this_verb" } },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "unavailablePredictionResult": {
+      "type": "object",
+      "required": ["state", "refusal"],
+      "properties": {
+        "state": { "const": "unavailable" },
+        "refusal": {
+          "enum": [
+            "no_active_snapshot",
+            "snapshot_scope_mismatch",
+            "candidate_pair_ineligible",
+            "substrate_refused"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "predictionAuthority": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "input_digest",
+        "preference_model_id",
+        "model_content_ref",
+        "model_fingerprint",
+        "source_report_sha256",
+        "principal_id",
+        "evidence_class",
+        "scope"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.preference.v1" },
+        "input_digest": { "$ref": "#/$defs/digest" },
+        "preference_model_id": { "$ref": "#/$defs/canonicalUuid" },
+        "model_content_ref": { "$ref": "#/$defs/digest" },
+        "model_fingerprint": { "$ref": "#/$defs/digest" },
+        "source_report_sha256": { "$ref": "#/$defs/digest" },
+        "principal_id": { "$ref": "#/$defs/canonicalUuid" },
+        "evidence_class": { "const": "human_explicit" },
+        "scope": { "$ref": "#/$defs/preferenceScope" }
+      },
+      "additionalProperties": false
+    },
+    "predictionUnavailableAuthority": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "input_digest",
+        "source_report_sha256",
+        "principal_id",
+        "evidence_class",
+        "scope"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.preference-availability.v1" },
+        "input_digest": { "$ref": "#/$defs/digest" },
+        "source_report_sha256": { "$ref": "#/$defs/digest" },
+        "principal_id": { "$ref": "#/$defs/canonicalUuid" },
+        "evidence_class": { "const": "human_explicit" },
+        "scope": { "$ref": "#/$defs/preferenceScope" }
+      },
+      "additionalProperties": false
+    },
+    "predictionJudgment": {
+      "allOf": [
+        { "$ref": "#/$defs/machineBase" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "preference_prediction" },
+            "subject": { "$ref": "#/$defs/predictionSubject" }
+          },
+          "oneOf": [
+            {
+              "properties": {
+                "result": { "$ref": "#/$defs/predictedResult" },
+                "authority": { "$ref": "#/$defs/predictionAuthority" }
+              }
+            },
+            {
+              "properties": {
+                "result": { "$ref": "#/$defs/unavailablePredictionResult" },
+                "authority": { "$ref": "#/$defs/predictionUnavailableAuthority" }
+              }
+            }
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

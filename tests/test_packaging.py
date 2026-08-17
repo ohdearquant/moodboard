@@ -118,6 +118,7 @@ def test_the_schema_the_report_validates_against_also_ships(tmp_path):
 
     with zipfile.ZipFile(wheel) as archive:
         members = set(archive.namelist())
+        judgment_schema_bytes = archive.read("moodboard/schema/judgment_v1.schema.json")
 
     assert "moodboard/schema/report_v1_0.schema.json" in members, (
         "the report schema is missing from the wheel, so report validation cannot run from an "
@@ -127,6 +128,9 @@ def test_the_schema_the_report_validates_against_also_ships(tmp_path):
         "the current report writer schema is missing from the wheel, so rank/report validation "
         "cannot run from an installed copy"
     )
+    assert judgment_schema_bytes == (
+        REPO_ROOT / "moodboard" / "schema" / "judgment_v1.schema.json"
+    ).read_bytes(), "the installed typed-judgment contract differs from the reviewed schema bytes"
 
 
 def test_the_demo_acquisition_catalog_and_manifest_contract_ship_byte_for_byte(tmp_path):
