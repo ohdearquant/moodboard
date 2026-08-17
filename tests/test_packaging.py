@@ -196,6 +196,12 @@ def test_installed_provider_artifact_validator_resolves_its_registry_offline(tmp
     wheel = _build_wheel(tmp_path / "dist")
     installed = tmp_path / "installed"
     with zipfile.ZipFile(wheel) as archive:
+        metadata_paths = [
+            name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
+        ]
+        assert len(metadata_paths) == 1
+        metadata = archive.read(metadata_paths[0]).decode("utf-8")
+        assert "Requires-Dist: pillow==12.3.0" in metadata
         archive.extractall(installed)
 
     document = {
@@ -209,10 +215,11 @@ def test_installed_provider_artifact_validator_resolves_its_registry_offline(tmp
         "created_at": "2026-08-16T20:30:02Z",
     }
     script = (
-        "import json, pathlib, sys\n"
+        "import base64, json, pathlib, sys\n"
         f"sys.path.insert(0, {str(installed)!r})\n"
         "import moodboard.attempt_state\n"
         "import moodboard.attempt_journal\n"
+        "import moodboard.locality\n"
         "import moodboard.locality_contracts\n"
         "from moodboard.provider_artifacts import validate_provider_artifact\n"
         f"document = json.loads({json.dumps(json.dumps(document))})\n"
@@ -248,6 +255,21 @@ def test_installed_provider_artifact_validator_resolves_its_registry_offline(tmp
         "    ),\n"
         "}\n"
         "moodboard.locality_contracts.validate_mask_artifact(mask_document, mask_bytes)\n"
+        "encoded_b64 = (\n"
+        "    'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjd'\n"
+        "    'AAAAD0lEQVR4nGNkZGJmZmYGAAA8ABHVfkbmAAAAAElFTkSuQmCC'\n"
+        ")\n"
+        "encoded = base64.b64decode(encoded_b64)\n"
+        "encoded_sha256 = (\n"
+        "    '0999c85bac983f785dbc678837371110'\n"
+        "    'ac90295a345e460a6e9e947b469831d7'\n"
+        ")\n"
+        "compiled = moodboard.locality.compile_canonical_raster(\n"
+        "    encoded,\n"
+        "    source_content_sha256=encoded_sha256,\n"
+        ")\n"
+        "measured = (compiled.width, compiled.height, compiled.rgb_bytes)\n"
+        "assert measured == (2, 1, bytes([1, 2, 3, 4, 5, 6]))\n"
         "module_path = pathlib.Path(sys.modules['moodboard.provider_artifacts'].__file__)\n"
         f"assert module_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
         "state_path = pathlib.Path(sys.modules['moodboard.attempt_state'].__file__)\n"
@@ -256,6 +278,8 @@ def test_installed_provider_artifact_validator_resolves_its_registry_offline(tmp
         f"assert journal_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
         "locality_path = pathlib.Path(sys.modules['moodboard.locality_contracts'].__file__)\n"
         f"assert locality_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
+        "runtime_path = pathlib.Path(sys.modules['moodboard.locality'].__file__)\n"
+        f"assert runtime_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
     )
     completed = subprocess.run(
         [sys.executable, "-c", script],

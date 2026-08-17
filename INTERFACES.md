@@ -203,6 +203,89 @@ This contract layer does not decode images, compile rectangle bytes, compare pix
 edit. Those runtime operations remain separate implementation concerns with their own golden
 fixtures; a valid descriptor is not evidence that any one decoder or verifier ran.
 
+## `locality.py`: pinned raster compiler and exact locality runtime
+
+`locality.py` is the first runtime consumer of the ADR-0016 descriptor contracts. Its public
+surface is deliberately pixel-only:
+
+```python
+compile_canonical_raster(payload, *, source_content_sha256, compiler_manifest=...)
+compile_rectangle_mask(source_raster, *, left, top, right, bottom)
+verify_output_structure(
+    source_raster,
+    *,
+    provider_receipt,
+    output_index,
+    output_bytes,
+    output_occurrence=None,
+    compiler_manifest=...,
+)
+build_locality_not_run(structural_judgment, mask)
+verify_outside_mask_rgb_exact(
+    source_raster,
+    output_raster,
+    mask,
+    *,
+    output_occurrence,
+    structural_pass,
+)
+```
+
+The registered compiler revision is
+`moodboard.raster-compiler.pillow-12.3.0-pngjpeg8-icc1.v1`. The project dependency, Python
+package, Pillow core, JPEG ABI, libjpeg-turbo, zlib/zlib-ng, LittleCMS, truncated-image policy,
+Pillow pixel guard, format limits, and ICC profile digest must all equal the frozen
+`RasterCompilerManifest`; drift fails operationally before an evidence judgment is minted.
+Pillow is therefore an exact dependency pin, not a compatible range. The first compiler call also
+runs embedded byte-level PNG, PNG+ICC, and progressive RGB JPEG+ICC+EXIF certificates. These pin
+the decoded RGB bytes and raster identities across an otherwise eligible platform wheel; a build
+with the same advertised versions but different measured behavior fails before user bytes run.
+Compiler calls are serialized because Python builds without context-aware warnings expose a
+process-global warning recorder; serialization prevents one decode from stealing another's
+warning or observing mutable Pillow policy between manifest check and decode.
+
+V1 accepts only fully decoded, verified 8-bit PNG or JPEG stills within the registered byte,
+dimension, pixel, RGB, PNG-chunk, JPEG-marker, and EXIF bounds. PNG CRCs and exact terminal IEND,
+JPEG exact terminal EOI, declared container signatures, one frame, and at most one EXIF block with
+explicit orientation 1..8 are checked along with effective opacity. The observed modes `L`, `LA`,
+`RGB`, and `RGBA` compile to RGB. Palette, CMYK, unsupported precision/profile/color declarations,
+animation/multi-picture data,
+trailing data, malformed orientation, and decoder warnings fail closed. No XMP orientation
+fallback is consulted. Post-scan JPEG application metadata and unregistered PNG color/HDR chunks
+are rejected rather than delegated to a decoder's first/last-chunk policy.
+
+The one accepted embedded profile is a 588-byte sRGB profile produced by LittleCMS 2.19's
+built-in sRGB constructor and normalized only by setting its ICC creation date to
+`2000-01-01T00:00:00`. Its SHA-256 is
+`6f6fe5cc53cd24ceeb7997fb24ce2889fdfb88d88ce4fdc5f8e25e0481294953`; its embedded copyright
+string is `No copyright, use freely`, and LittleCMS is MIT licensed. Runtime never creates a
+profile whose timestamp could drift. The exact profile is accepted only for RGB/RGBA and is used
+as both input and destination with relative-colorimetric intent, no black-point compensation, and
+no transform flags. Every other embedded profile, including grayscale-plus-ICC, is rejected.
+
+Structural verification hydrates one standalone immutable provider receipt and proves its exact
+output row's byte count, SHA-256, BLAKE3 ContentRef, output index, and MIME claim before decoding.
+Structurally invalid bytes must not have an output occurrence; they produce a provider-payload
+structural failure and a paired exact-locality `not_run`. A compiled pass or repairable dimension
+mismatch requires the complete eligible `generator_raw` output occurrence and cross-binds its
+receipt, original media, measured media, decoder revision, and occurrence identity. A bare
+occurrence id is never enough.
+
+`verify_outside_mask_rgb_exact` additionally requires the structural pass for the same eligible
+occurrence and the same source/output raster identities. It scans the complete protected set,
+counts one changed pixel when any of its three channels differs, and records the maximum absolute
+channel error. Editable pixels do not affect the result. There is no tolerance or perceptual
+threshold in this module. This slice exposes the receipt-bound `generator_raw` wrapper only;
+`deterministic_compositor` needs its separately reviewed occurrence union and producer-bound
+structural wrapper in the compositor PR. That later wrapper must reuse the same exact pixel
+operator rather than pretending a provider receipt produced the composite.
+
+This pixel-core runtime does not claim the higher-level packet join. Before persisting an invalid
+provider-payload receipt as run evidence, the integration layer must still prove
+`receipt.attempt_id -> generation attempt -> intent packet` and byte-compare the packet's source,
+mask, and integer rectangle to the validated artifacts. The completed-success bundle validator is
+not used for invalid payloads because those bytes correctly have no output occurrence.
+
 Human comparison is blind in v1: the authority must bind both
 `preference_probability_shown:false` and `source_rank_shown:false`, the enrolled principal, and
 the exact Khive namespace/actor/board/descriptor/feature scope. The choice-to-reason vocabulary
