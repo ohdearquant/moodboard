@@ -81,8 +81,12 @@ ordinary test depend on a real `kkernel`, a model checkpoint, or the network.
 | `viewer/dist-static/` | `npm --prefix viewer run build` |
 | `moodboard/viewer_dist/` | staged by the viewer build; never edited directly |
 
-Each generated artifact has a `--check` twin that CI or the build chain runs; a hand edit will
-be detected and rejected, so save yourself the round trip.
+The viewer build (`npm --prefix viewer run build`, which CI runs) verifies
+`report-validators.mjs`, the Firefly bridge, and the preference-replay bridge through their
+`*:check` scripts, and CI separately rejects any drift in `viewer/dist-static`. Two artifacts
+are not check-gated today: `pixel-rag-bridge.json` has a `pixel-rag:check` script that nothing
+invokes, and `report-validators.d.mts` has no drift check at all — hand edits there are
+unprotected, so verify those two yourself.
 
 ## Contracts and where they are decided
 
