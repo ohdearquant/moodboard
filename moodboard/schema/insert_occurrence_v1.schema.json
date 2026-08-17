@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/insert_occurrence_v1.schema.json",
+  "title": "Moodboard canonical RGB insert occurrence v1",
+  "description": "Closed descriptor for one deterministic raw-crop-nearest RGB insert. RGB bytes are stored separately and bound by insert_sha256.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "insert_sha256",
+    "compiler_revision",
+    "insert_compile_confirmation_id",
+    "intent_packet_id",
+    "raw_output_occurrence_id",
+    "raw_output_raster_sha256",
+    "raw_structural_evidence_id",
+    "raw_locality_evidence_id",
+    "crop",
+    "target_region_id",
+    "width",
+    "height",
+    "mode",
+    "byte_count"
+  ],
+  "properties": {
+    "schema_version": { "const": "moodboard.insert.rgb-u8.v1" },
+    "insert_sha256": { "$ref": "#/$defs/digest" },
+    "compiler_revision": {
+      "const": "moodboard.insert-compiler.raw-crop-nearest.v1"
+    },
+    "insert_compile_confirmation_id": { "$ref": "#/$defs/digest" },
+    "intent_packet_id": { "$ref": "#/$defs/digest" },
+    "raw_output_occurrence_id": { "$ref": "#/$defs/digest" },
+    "raw_output_raster_sha256": { "$ref": "#/$defs/digest" },
+    "raw_structural_evidence_id": { "$ref": "#/$defs/digest" },
+    "raw_locality_evidence_id": { "$ref": "#/$defs/digest" },
+    "crop": { "$ref": "#/$defs/bounds" },
+    "target_region_id": { "$ref": "#/$defs/digest" },
+    "width": { "$ref": "#/$defs/dimension" },
+    "height": { "$ref": "#/$defs/dimension" },
+    "mode": { "const": "RGB" },
+    "byte_count": { "$ref": "#/$defs/safePositiveCount" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "coordinate": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 32767
+    },
+    "exclusiveCoordinate": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32768
+    },
+    "dimension": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32768
+    },
+    "safePositiveCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50331648
+    },
+    "bounds": {
+      "type": "object",
+      "required": ["left", "top", "right", "bottom"],
+      "properties": {
+        "left": { "$ref": "#/$defs/coordinate" },
+        "top": { "$ref": "#/$defs/coordinate" },
+        "right": { "$ref": "#/$defs/exclusiveCoordinate" },
+        "bottom": { "$ref": "#/$defs/exclusiveCoordinate" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

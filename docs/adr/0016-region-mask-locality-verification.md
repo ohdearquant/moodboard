@@ -234,6 +234,24 @@ This compiler intentionally favors a reproducible P0 repair path over sophistica
 An alpha matting, segmentation, resampling, or feathering producer requires a later ADR with its own
 lineage and golden vectors; it cannot appear as an implicit preprocessing step.
 
+#### Registered compiler artifacts and replay identities
+
+The v1 implementation registers `moodboard.insert-compile-confirmation.v1`,
+`moodboard.insert.rgb-u8.v1`, `moodboard.canonical-png.v1`, and
+`moodboard.compositor-output-occurrence.v1` as four disjoint closed artifacts. It does not extend
+ADR-0014's provider-specific `moodboard.output-occurrence.v1` or its attempt/output-index identity.
+
+The target-region id binds the source-raster and mask identities plus the authoritative integer
+bounds. The confirmation key binds principal, Studio session, packet, and the complete preview
+projection while deliberately excluding confirmation time; the confirmation id binds the complete
+document including time. The insert id binds its exact metadata projection and row-major RGB bytes.
+
+The input-only compositor replay key binds packet, complete source/raw/insert/mask lineage, and
+producer/encoder revisions. The compositor occurrence id separately binds the complete output
+document. A durable store makes the replay key unique: an exact repeat returns the prior occurrence,
+while the same replay key with different output is a protocol conflict. These projections remove
+the ambiguity that an output-bound id alone cannot detect conflicting replay bytes.
+
 ### The v1 compositor is narrow and byte-deterministic
 
 `source_backed_rect_replace.v1` accepts exactly:
@@ -256,6 +274,14 @@ There is one layer and no hidden parameter. The resulting RGB raster is identifi
 contract. It is encoded with a versioned lossless PNG profile that fixes RGB8 color type, no
 interlace, filter byte zero per row, no ancillary chunks, and a pinned Deflate
 implementation/settings identity. Golden fixtures pin both raster and PNG bytes.
+The registered encoder is `moodboard.png-encoder.rgb8-filter0-deflate-stored.v1`; its Deflate
+profile is `moodboard.deflate.rfc1951-stored-blocks.v1`, which uses filter zero, a fixed zlib
+wrapper, stored blocks of at most 65,535 bytes, and no compressor heuristics.
+
+The canonical byte order is compose RGB, encode the registered PNG, then compile that PNG through
+the pinned raster compiler. The composite raster's `source_content_sha256` therefore names the
+canonical PNG bytes and its compiler revision remains the pinned raster-decoder revision. This
+ordering avoids a raster/PNG identity cycle while preserving the exact pixels specified above.
 
 The compositor occurrence uses a domain-separated digest of its closed identity projection rather
 than a random UUID. It records byte SHA-256, ContentRef, output-raster identity, producer/encoder

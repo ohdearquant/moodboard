@@ -279,16 +279,69 @@ occurrence id is never enough.
 occurrence and the same source/output raster identities. It scans the complete protected set,
 counts one changed pixel when any of its three channels differs, and records the maximum absolute
 channel error. Editable pixels do not affect the result. There is no tolerance or perceptual
-threshold in this module. This slice exposes the receipt-bound `generator_raw` wrapper only;
-`deterministic_compositor` needs its separately reviewed occurrence union and producer-bound
-structural wrapper in the compositor PR. That later wrapper must reuse the same exact pixel
-operator rather than pretending a provider receipt produced the composite.
+threshold in this module. The receipt-bound `generator_raw` arm remains provider-specific. The
+separate compositor contract below supplies the second selectable-output arm and a producer-bound
+structural pass without pretending a provider receipt produced the composite; both arms use the
+same exact protected-pixel operator.
 
 This pixel-core runtime does not claim the higher-level packet join. Before persisting an invalid
 provider-payload receipt as run evidence, the integration layer must still prove
 `receipt.attempt_id -> generation attempt -> intent packet` and byte-compare the packet's source,
 mask, and integer rectangle to the validated artifacts. The completed-success bundle validator is
 not used for invalid payloads because those bytes correctly have no output occurrence.
+
+## `compositor.py`: confirmed insert and source-backed composite
+
+The deterministic repair path is a separate producer, not a mutation of
+`moodboard.output-occurrence.v1`. That provider schema, its attempt/index identity, and
+`validate_artifact_bundle` remain exclusively `generator_raw`. The compositor registers four
+closed artifacts instead:
+
+- `moodboard.insert-compile-confirmation.v1`;
+- `moodboard.insert.rgb-u8.v1`;
+- `moodboard.canonical-png.v1`; and
+- `moodboard.compositor-output-occurrence.v1`.
+
+The confirmation's `target_region_id` is a domain-separated RFC 8785 projection of the exact
+source-raster/mask-bound integer rectangle. Its `confirmation_key` binds principal, Studio
+session, packet, and the complete preview projection but deliberately excludes confirmation time;
+an idempotency store can therefore return the first event for an exact retry. The confirmation id
+binds the whole document including that time. Crop, compiler, raw occurrence/raster, or either raw
+constraint-evidence id drift changes the preview and key.
+
+`raw_crop_nearest.v1` implements the ADR integer center mapping literally and emits an opaque RGB
+insert. The insert identity is SHA-256 over its schema domain, NUL, RFC 8785 of its exact metadata
+projection, NUL, and the row-major RGB bytes. It accepts only a complete eligible generator-raw
+occurrence with either structural-pass plus measured locality, or repairable
+`dimension_mismatch` plus its validated locality `not_run`. Both raw judgments remain separate
+immutable evidence and are carried through confirmation, insert, and composite lineage.
+
+`moodboard.png-encoder.rgb8-filter0-deflate-stored.v1` writes one RGB8, non-interlaced IHDR, one
+IDAT, and one IEND; every scanline uses filter zero and the zlib stream uses only RFC 1951 stored
+blocks of at most 65,535 bytes under `moodboard.deflate.rfc1951-stored-blocks.v1`. There are no
+ancillary chunks or compressor heuristics. Composition first creates row-major RGB, then encodes
+these canonical PNG bytes, then compiles those bytes through the pinned raster compiler. The
+composite raster's `source_content_sha256` is consequently the canonical PNG SHA-256, eliminating
+an otherwise circular raster/PNG identity.
+
+`source_backed_rect_replace.v1` byte-compares the supplied mask to a freshly compiled packet
+rectangle, copies the insert only where the mask is editable, and copies the source everywhere
+else. Before publication it validates the complete ADR-0014 provider bundle against the same
+intent packet, selects the exact eligible raw ancestor, and replays the retained provider bytes
+through the receipt-bound structural verifier; a shape-valid occurrence or caller-supplied raster
+by itself is not transitive admission evidence. The input-only `compositor_replay_key` binds packet, lineage,
+and producer/encoder revisions, while the output occurrence id binds the complete closed output
+document. Persistent storage must make the replay key unique: an identical replay returns the
+existing occurrence and the same key with different output is a protocol conflict.
+This slice provides the pure replay resolver and exact-byte conflict checks only; durable replay-key
+uniqueness remains an explicit prerequisite for the later Studio artifact-store PR and is not
+claimed by this in-memory compositor module.
+
+The compositor mints a producer-bound raster-structure pass and immediately runs
+`moodboard.verifier.outside-mask-rgb-exact.v1`. UI copy may say the source-backed compositor
+enforced protected-pixel preservation; it must not relabel that result as intrinsic generator
+locality. This module contains no provider network call, Studio widget, acceptance event,
+preference update, or Khive/Lattice verb.
 
 Human comparison is blind in v1: the authority must bind both
 `preference_probability_shown:false` and `source_rank_shown:false`, the enrolled principal, and
@@ -299,9 +352,9 @@ unavailable result uses the separate availability authority because no preferenc
 exists in the `no_active_snapshot` case.
 
 `to_json_dict` revalidates the frozen value before emitting it. Direct construction of a
-dataclass therefore cannot bypass the schema or serialize a class/kind mismatch. The full
-`selectable_output_occurrence` producer/admission/lineage union is intentionally not defined by
-this module; ADR-0014's contract supplies it before ADR-0012 acceptance condition 1 is complete.
+dataclass therefore cannot bypass the schema or serialize a class/kind mismatch. Provider raw and
+deterministic-compositor occurrences remain separately versioned producer contracts; the judgment
+subject names their common immutable occurrence identity without collapsing their lineage shapes.
 
 ## `intent_packet.py`: the frozen generation input
 

@@ -57,6 +57,15 @@ PROVIDER_ARTIFACT_SCHEMAS = {
         "output_occurrence_v1.schema.json",
     )
 }
+COMPOSITOR_SCHEMAS = {
+    REPO_ROOT / "moodboard" / "schema" / name: f"moodboard/schema/{name}"
+    for name in (
+        "insert_compile_confirmation_v1.schema.json",
+        "insert_occurrence_v1.schema.json",
+        "canonical_png_v1.schema.json",
+        "compositor_output_occurrence_v1.schema.json",
+    )
+}
 
 
 def _build_wheel(destination: Path) -> Path:
@@ -190,8 +199,24 @@ def test_the_provider_artifact_schema_registry_ships_byte_for_byte(tmp_path):
             )
 
 
-def test_installed_provider_artifact_validator_resolves_its_registry_offline(tmp_path):
-    """Import and execute the validator from wheel bytes, not from this source checkout."""
+def test_the_compositor_schema_registry_ships_byte_for_byte(tmp_path):
+    """Every compositor artifact branch must remain available to an offline install."""
+
+    wheel = _build_wheel(tmp_path / "dist")
+
+    with zipfile.ZipFile(wheel) as archive:
+        for source, packaged_path in COMPOSITOR_SCHEMAS.items():
+            assert packaged_path in archive.namelist(), (
+                f"{packaged_path} is missing from the wheel, so the installed compositor "
+                "cannot validate its closed artifact registry"
+            )
+            assert archive.read(packaged_path) == source.read_bytes(), (
+                f"the installed {packaged_path} differs from the reviewed contract bytes"
+            )
+
+
+def test_installed_artifact_validators_resolve_their_registries_offline(tmp_path):
+    """Import and execute provider, locality, and compositor code from wheel bytes."""
 
     wheel = _build_wheel(tmp_path / "dist")
     installed = tmp_path / "installed"
@@ -219,6 +244,7 @@ def test_installed_provider_artifact_validator_resolves_its_registry_offline(tmp
         f"sys.path.insert(0, {str(installed)!r})\n"
         "import moodboard.attempt_state\n"
         "import moodboard.attempt_journal\n"
+        "import moodboard.compositor\n"
         "import moodboard.locality\n"
         "import moodboard.locality_contracts\n"
         "from moodboard.provider_artifacts import validate_provider_artifact\n"
@@ -270,6 +296,12 @@ def test_installed_provider_artifact_validator_resolves_its_registry_offline(tmp
         ")\n"
         "measured = (compiled.width, compiled.height, compiled.rgb_bytes)\n"
         "assert measured == (2, 1, bytes([1, 2, 3, 4, 5, 6]))\n"
+        "canonical_png = moodboard.compositor.encode_canonical_png(\n"
+        "    width=2, height=1, rgb_bytes=bytes([1, 2, 3, 4, 5, 6])\n"
+        ")\n"
+        "assert canonical_png.content_sha256 == (\n"
+        "    '6c51b0237c26c450f73907fe73a1d48f68d6564bc5cbe8f4fce188194234d5b3'\n"
+        ")\n"
         "module_path = pathlib.Path(sys.modules['moodboard.provider_artifacts'].__file__)\n"
         f"assert module_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
         "state_path = pathlib.Path(sys.modules['moodboard.attempt_state'].__file__)\n"
@@ -280,6 +312,8 @@ def test_installed_provider_artifact_validator_resolves_its_registry_offline(tmp
         f"assert locality_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
         "runtime_path = pathlib.Path(sys.modules['moodboard.locality'].__file__)\n"
         f"assert runtime_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
+        "compositor_path = pathlib.Path(sys.modules['moodboard.compositor'].__file__)\n"
+        f"assert compositor_path.is_relative_to(pathlib.Path({str(installed)!r}))\n"
     )
     completed = subprocess.run(
         [sys.executable, "-c", script],
@@ -290,7 +324,7 @@ def test_installed_provider_artifact_validator_resolves_its_registry_offline(tmp
         env={**os.environ, "PYTHONNOUSERSITE": "1"},
     )
     assert completed.returncode == 0, (
-        "installed provider-artifact validator could not resolve its packaged schemas\n"
+        "installed artifact validators could not resolve their packaged schemas\n"
         f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
 
