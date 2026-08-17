@@ -3,7 +3,10 @@
 This project has two parts that build and test independently: a Python engine under
 `moodboard/` and a TypeScript/React viewer under `viewer/`. Both are covered below, along with
 what the continuous integration workflow actually runs and where the versioned contracts
-between the two parts live.
+between the two parts live. What the code and documents should look like — comment and
+docstring economy, source arrangement, commit and pull-request hygiene, document templates —
+is defined in [`docs/STYLE.md`](docs/STYLE.md); where the project is going is
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Python engine: the offline pytest lane
 
