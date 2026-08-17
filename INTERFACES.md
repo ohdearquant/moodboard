@@ -98,6 +98,82 @@ class Exemplar:
     similarity: float
 ```
 
+## `judgment.py`: the typed evidence envelope
+
+`moodboard.judgment.v1` is a Studio/evidence-artifact contract. It does not extend either
+closed report schema. Its structural authority is the committed Draft 2020-12 schema at
+`moodboard/schema/judgment_v1.schema.json`; `judgment.py` validates that raw JSON without
+coercion before returning one of six distinct frozen, slotted dataclass branches.
+
+Every document has exactly
+`{schema_version,evidence_id,kind,subject,result,authority,evidence_ref}`. `evidence_ref` is a
+tagged union: `{kind:"artifact",artifact_id:<SHA-256>}` or
+`{kind:"content_ref",content_ref:<BLAKE3-256 ContentRef>}`. A consumer must not infer which
+digest algorithm a bare 64-character string meant.
+
+| `kind` | subject | closed result states | registered authority |
+|---|---|---|---|
+| `intent_eligibility` | one asset id, ContentRef, and route-query occurrence | `eligible`, `excluded`, `not_computed` | `moodboard.intent-route.collection-gate.v1` |
+| `source_similarity` | query occurrence and ordered-result artifact | `computed`, `empty`, `not_computed`, `refused` | `moodboard.source-similarity.v1` |
+| `board_compatibility` | selectable-output occurrence id | `scored`, `abstained`, `not_computed` | `moodboard.board-compatibility.v1` |
+| `constraint_verification` | selectable-output occurrence id | `pass`, `fail`, `not_run` | `moodboard.verifier.raster-structure.v1` or `moodboard.verifier.outside-mask-rgb-exact.v1` |
+| `human_comparison` | serve plus exact left/right Moodboard and Khive occurrences | `recorded` with `left`, `right`, `tie`, or `abstain` | `moodboard.preference-judgment.v1` |
+| `preference_prediction` | declared pair plus exact left/right output occurrences | `predicted`, `unavailable` | `moodboard.preference.v1` or `moodboard.preference-availability.v1` |
+
+Machine evidence uses
+`sha256(UTF8("moodboard.judgment.v1\0") || RFC8785(document-without-evidence_id))`.
+Human comparison evidence uses the canonical judgment UUID returned by its serve authority.
+Both paths reject non-I-JSON values, unknown schema/kind/subject/result/authority tokens, and
+unknown fields at every object depth.
+
+The first registered intent authority is the already measured explicit collection gate. It binds
+the immutable corpus manifest, collection field/value, equality operator, policy id, and
+`no_ungated_fallback`; its interpretation remains
+`structural_routing_control_not_learned_retrieval_quality`. It does not claim the unmerged
+text/graph intent-router experiment as part of this contract.
+
+Computed source-similarity rows use the ADR-0014 wire names
+`routed_rank`, `source_search_rank`, and `source_similarity`. Routed ranks are contiguous array
+order; source ranks are strictly increasing; cosine is non-increasing and preserved at full
+precision. The authority fixes `source_image_cosine`, the exact descriptor/model identity,
+`preference_applied:false`, and `reranker:null`. It is not a style or board-fit score.
+
+Board results deliberately retain report wire names `score`, `interval`, and `rank`. Their
+authority binds the exact report SHA-256, schema version `1.1`, board id, and source report asset
+id. Abstention retains the existing `resolution|multi_modality|far_outlier` reason and measured
+shape; it never carries a score or rank.
+
+The exact-locality authority binds source/output canonical raster ids and the mask id. A measured
+result reports protected pixels, changed pixels, and maximum absolute channel error. Pass means
+both difference measurements are zero; fail means both are positive. If structural verification
+prevented a comparable output raster, locality is a distinct `not_run` result that binds the
+blocking structural evidence id instead of inventing an output-raster id. The structural
+verifier is a separate registered authority: it binds the source raster, original provider-output
+bytes, and decoder revision. `container_decoded` means bounded inspection succeeded; it does not
+claim that a canonical raster exists. `canonical_raster_compiled` and `output_raster_sha256` are
+present together only for a passing source-sized RGB output or an otherwise eligible RGB output
+whose sole structural mismatch is dimensions. Non-opaque, multi-frame, unsupported-color,
+unsafe-decoder, over-limit, and undecodable failures never invent a canonical output-raster id.
+An observed `RGB` channel mode does not prove that an embedded ICC/profile contract is supported;
+`unsupported_color_contract` may therefore report `output_mode:"RGB"` while canonical compilation
+remains false.
+Typed structural failures remain distinct from the locality result. A cross-receipt validator
+requires the structural failure and blocked locality result to name the same output occurrence,
+source raster, and structural evidence id.
+
+Human comparison is blind in v1: the authority must bind both
+`preference_probability_shown:false` and `source_rank_shown:false`, the enrolled principal, and
+the exact Khive namespace/actor/board/descriptor/feature scope. The choice-to-reason vocabulary
+matches the current Khive contract. Prediction preserves the Khive meaning “conditional on a
+decisive judgment” and keeps conformal evidence explicitly `not_computed_by_this_verb`. An
+unavailable result uses the separate availability authority because no preference-model identity
+exists in the `no_active_snapshot` case.
+
+`to_json_dict` revalidates the frozen value before emitting it. Direct construction of a
+dataclass therefore cannot bypass the schema or serialize a class/kind mismatch. The full
+`selectable_output_occurrence` producer/admission/lineage union is intentionally not defined by
+this module; ADR-0014's contract supplies it before ADR-0012 acceptance condition 1 is complete.
+
 ## `report.py`
 
 ### The axis vocabulary
