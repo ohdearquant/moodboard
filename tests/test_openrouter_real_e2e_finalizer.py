@@ -324,6 +324,76 @@ def test_finalize_invalid_media_exact_replay_does_not_sample_clock(
     assert _artifact_fingerprint(challenge_dir) == before
 
 
+def test_finalize_invalid_media_fails_closed_when_verification_raises_and_recovers_after(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A raised verification must not publish as not_run and must not wedge exact replay."""
+    challenge_dir = tmp_path / "invalid-media-verifier-raises"
+    challenge, journal = _stage_durable_response(
+        challenge_dir,
+        monkeypatch,
+        response=_invalid_media_response(),
+    )
+
+    real_verifier = real_e2e.verify_output_structure
+    calls = {"count": 0}
+
+    def flaky_verifier(*args: Any, **kwargs: Any) -> Any:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise MemoryError("decoder under memory pressure")
+        return real_verifier(*args, **kwargs)
+
+    monkeypatch.setattr(real_e2e, "verify_output_structure", flaky_verifier)
+
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _finalize(challenge_dir)
+    _assert_error_code(raised, "finalization_artifact_invalid")
+    assert not (challenge_dir / "result.json").exists()
+    assert journal.read_state(challenge["attempt_id"]).state == "response_received"
+
+    recovered = _finalize(challenge_dir)
+    assert recovered.raw_structural_result == "fail"
+    assert recovered.raw_structural_reason == "unsupported_format"
+    report = _read_json(challenge_dir / "result.json")
+    assert report["raw_structural_judgment"]["result"]["state"] == "fail"
+
+
+def test_finalize_replays_a_completed_invalid_media_execute_run(tmp_path: Path) -> None:
+    """The production recovery sequence: execute completes its rejected-media branch and
+    writes result.json; a later finalize on the same directory converges byte-identically."""
+    challenge_dir = tmp_path / "completed-invalid-media"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+    executed = _execute(
+        challenge_dir, context_path, transport=lambda **_: _invalid_media_response()
+    )
+    before = _artifact_fingerprint(challenge_dir)
+
+    finalized = _finalize(challenge_dir)
+
+    assert finalized == executed
+    assert _artifact_fingerprint(challenge_dir) == before
+
+
+def test_execute_fails_conflict_on_a_divergent_preexisting_result_artifact(
+    tmp_path: Path,
+) -> None:
+    challenge_dir = tmp_path / "planted-divergent-result"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+    planted = challenge_dir / "result.json"
+    planted.write_bytes(b'{"forged": true}')
+    planted.chmod(0o600)
+
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _execute(
+            challenge_dir, context_path, transport=lambda **_: _invalid_media_response()
+        )
+    _assert_error_code(raised, "finalization_artifact_conflict")
+
+
 def test_invalid_media_finalizer_detects_concurrent_terminal_writer_before_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -689,7 +689,8 @@ A 200 response is strict, bounded UTF-8 JSON with only `created`, `data`, and op
 exactly one `data` item. Base64 is decoded strictly and bounded to the registered 16 MiB
 encoded-image limit. The receipt
 records exact raw-response and output BLAKE3/SHA-256/count identities, optional provider media-type
-claim, reported finite nonnegative USD cost when present, and measured adapter latency. The Image
+claim, cost telemetry when it conforms to the receipt contract (explicit unavailability otherwise,
+never response rejection), and measured adapter latency. The Image
 response does not attest the actual model or upstream provider, so receipts honestly record
 `actual_model:undisclosed` and `upstream_route:unknown`; a request pin is not rewritten as response
 provenance.
@@ -789,7 +790,13 @@ This first finalizer slice deliberately accepts only these durable journal heads
 
 Derived-file publication is exact no-clobber. The output is written before `result.json`, which is
 the completion marker for that locally derived journal snapshot; an exact existing file is accepted, but different bytes fail
-`finalization_artifact_conflict` and are never overwritten. Once all derived files exist, exact
+`finalization_artifact_conflict` and are never overwritten. The live execute path shares this
+materialization contract for the same derived files: a byte-identical pre-existing artifact is
+adopted rather than failing the previous `artifact_write_failed` exclusivity, and divergent bytes
+surface as `finalization_artifact_conflict` from execute as well. A structural/locality
+verification that raises is never published as `not_run`: the finalizer fails
+`finalization_artifact_invalid` and the execute path fails the run, so a degraded document can
+never wedge exact replay. Once all derived files exist, exact
 replay returns the same result without changing any file identity, content, mode, or timestamp.
 Failures that are not a closed validation/readiness/conflict outcome collapse to the stable
 `finalization_failed` error. This recovery contract closes the local post-response crash and lost

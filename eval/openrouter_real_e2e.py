@@ -1547,8 +1547,13 @@ def _validate_authority_document(document: Mapping[str, Any]) -> JsonObject:
     ):
         _fail("authority_invalid")
     # IntentPacket validation remains the authority for the closed per-reference shape.  Here we
-    # only reject values that could make projection or copying unsafe before that validation.
-    if any(not isinstance(reference, dict) for reference in references):
+    # only reject values that could make projection or copying unsafe before that validation,
+    # including the one key _build_packet indexes before IntentPacket validation runs.
+    if any(
+        not isinstance(reference, dict)
+        or not isinstance(reference.get("reference_occurrence_id"), str)
+        for reference in references
+    ):
         _fail("authority_invalid")
     return copy.deepcopy(dict(document))
 
@@ -2395,6 +2400,12 @@ def _receipt_cost_telemetry(receipt_value: object | None) -> tuple[Decimal | Non
         receipt = provider_to_json(receipt_value)  # type: ignore[arg-type]
         cost = receipt.get("cost")
         if (
+            isinstance(cost, dict)
+            and cost.get("state") == "unavailable"
+            and cost.get("provenance") == "reported_uncertifiable"
+        ):
+            return None, "reported_uncertifiable"
+        if (
             not isinstance(cost, dict)
             or cost.get("state") != "reported"
             or not isinstance(cost.get("amount"), str)
@@ -2501,12 +2512,13 @@ def _finalized_provider_evidence(
                 locality = build_locality_not_run(structural.judgment, inputs.mask)
                 locality_document = judgment_to_json(locality)
                 locality_state = str(locality_document["result"]["state"])
+            except OpenRouterRealE2EError:
+                raise
             except Exception:
-                structural_document = None
-                locality_document = None
-                structural_state = "not_run"
-                structural_reason = None
-                locality_state = "not_run"
+                # Fail closed, matching the success branch: publishing "not_run" for a
+                # verification that was attempted and raised would be a false report, and the
+                # degraded bytes would wedge exact replay behind an artifact conflict.
+                _fail("finalization_artifact_invalid")
         journal.verify_integrity()
         result = OpenRouterRealE2EResult(
             generation_run_id=inputs.run.generation_run_id,
@@ -2799,6 +2811,10 @@ def _execute_with_token(
             return "ok", result
 
         if dispatch.state.head_event_id is None:
+            # Provider evidence is already on disk past this point, so every exit scans the
+            # private artifacts: the frozen invariant is that credentials cannot survive
+            # local artifacts on any path, not only the returning ones.
+            _scan_private_artifacts(target, token)
             return "response_state_invalid", None
         stored_response = journal.read_provider_response(attempt.attempt_id)
         terminal_at = clock()
@@ -2818,27 +2834,23 @@ def _execute_with_token(
             structural_reason: str | None = None
             locality_state = "not_run"
             if len(stored_response.output_bytes) == 1:
-                try:
-                    structural = verify_output_structure(
-                        source_raster,
-                        provider_receipt=stored_response.receipt,
-                        output_index=0,
-                        output_bytes=stored_response.output_bytes[0],
-                        output_occurrence=None,
-                    )
-                    structural_document = judgment_to_json(structural.judgment)
-                    structural_state = str(structural_document["result"]["state"])
-                    reason = structural_document["result"].get("reason")
-                    structural_reason = reason if isinstance(reason, str) else None
-                    locality = build_locality_not_run(structural.judgment, mask)
-                    locality_document = judgment_to_json(locality)
-                    locality_state = str(locality_document["result"]["state"])
-                except Exception:
-                    structural_document = None
-                    locality_document = None
-                    structural_state = "not_run"
-                    structural_reason = None
-                    locality_state = "not_run"
+                # A verification that raises fails the run closed rather than being published
+                # as "not_run". The journal keeps the durable evidence at response_received,
+                # and the credential-free finalizer is the recovery path.
+                structural = verify_output_structure(
+                    source_raster,
+                    provider_receipt=stored_response.receipt,
+                    output_index=0,
+                    output_bytes=stored_response.output_bytes[0],
+                    output_occurrence=None,
+                )
+                structural_document = judgment_to_json(structural.judgment)
+                structural_state = str(structural_document["result"]["state"])
+                reason = structural_document["result"].get("reason")
+                structural_reason = reason if isinstance(reason, str) else None
+                locality = build_locality_not_run(structural.judgment, mask)
+                locality_document = judgment_to_json(locality)
+                locality_state = str(locality_document["result"]["state"])
             # ADR-0014 keeps media/provenance rejection at response_received.  The structural
             # judgment and locality not_run evidence remain visible without forging a terminal
             # provider failure or a selectable output occurrence.
@@ -2881,9 +2893,11 @@ def _execute_with_token(
         if len(success.occurrences) != 1 or not isinstance(
             success.occurrences[0], OutputOccurrence
         ):
+            _scan_private_artifacts(target, token)
             return "terminal_occurrence_invalid", None
         occurrence = success.occurrences[0]
         if len(stored_response.output_bytes) != 1:
+            _scan_private_artifacts(target, token)
             return "terminal_occurrence_invalid", None
         output_bytes = stored_response.output_bytes[0]
         structural = verify_output_structure(
@@ -2898,6 +2912,7 @@ def _execute_with_token(
         structural_reason: str | None = None
         if structural_state == "pass":
             if structural.output_raster is None:
+                _scan_private_artifacts(target, token)
                 return "structural_verification_invalid", None
             locality_judgment = verify_outside_mask_rgb_exact(
                 source_raster,
@@ -2952,7 +2967,17 @@ def _execute_with_token(
         _scan_private_artifacts(target, token)
         return "ok", result
     except OpenRouterRealE2EError as error:
-        return (error.code if error.code == "clock_invalid" else "execution_failed"), None
+        # The clock diagnostic, the secret-scan verdicts, and the artifact-materialization
+        # conflict are built to be unambiguous; every other failure still collapses to the
+        # generic code so no detail can carry a secret. All four are static literal strings.
+        if error.code in {
+            "clock_invalid",
+            "credential_material_persisted",
+            "artifact_secret_scan_failed",
+            "finalization_artifact_conflict",
+        }:
+            return error.code, None
+        return "execution_failed", None
     except BaseException:
         return "execution_failed", None
     finally:
@@ -3163,7 +3188,14 @@ def execute_openrouter_real_e2e(
     ):
         _fail("challenge_expired")
     credential_ok, token_value = _call_sanitized(lambda: _credential_loader(CREDENTIAL_PROFILE_ID))
-    if not credential_ok or not isinstance(token_value, str):
+    # The injected seam honors the same token shape the production loader enforces; an empty
+    # or non-ASCII token would otherwise make the artifact secret scan vacuous.
+    if (
+        not credential_ok
+        or not isinstance(token_value, str)
+        or not 16 <= len(token_value) <= 4096
+        or any(ord(character) < 33 or ord(character) > 126 for character in token_value)
+    ):
         _fail("credential_unavailable")
     token = token_value
     status, result = _execute_with_token(
