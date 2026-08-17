@@ -203,11 +203,10 @@ def _write_context(
         os.close(descriptor)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     if register_confirmation:
-        try:
-            _register_confirmation(challenge_dir, path)
-        except StudioConfirmationLedgerError:
-            if not overrides:
-                raise
+        # Registration failures always raise: silently skipping the grant would change what a
+        # tamper test exercises. A caller building a context the ledger must reject passes
+        # register_confirmation=False explicitly.
+        _register_confirmation(challenge_dir, path)
     return path
 
 

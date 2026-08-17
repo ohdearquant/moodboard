@@ -749,7 +749,10 @@ The ledger must be deployed outside challenge directories under a Studio-owned o
 directory. The durable consume CAS precedes local `consumed.json`/plan evidence, Keychain access,
 the AttemptJournal claim, and provider I/O. Because the Studio ledger and AttemptJournal are two
 databases, a crash between them may permanently spend a confirmation without sending; this is an
-intentional availability loss and never permits replay. SQLite integrity, immutable triggers, and
+intentional availability loss and never permits replay. A crash during first bootstrap can leave a
+zero-byte database file; that remnant is treated exactly like a missing file — constructible,
+denied on reads, and adopted and re-initialized by the next bootstrap under the init lock — so an
+interrupted bootstrap never needs out-of-band deletion. SQLite integrity, immutable triggers, and
 file modes do not resist a malicious same-UID process restoring an older complete ledger. That
 threat requires a different-UID service or external monotonic authority and remains outside this
 local substrate's claim.

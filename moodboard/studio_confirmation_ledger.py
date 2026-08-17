@@ -584,7 +584,10 @@ def _safe_path(value: str | os.PathLike[str]) -> Path:
         _fail("ledger_security_error")
     path = Path(raw)
     _validate_secure_parent(path)
-    _validate_private_file(path, allow_missing=True)
+    # allow_empty: a zero-byte remnant of an interrupted bootstrap is constructible and is
+    # adopted by the next initialize, exactly like a missing file — both require the same
+    # owner-only write access and neither holds recorded history.
+    _validate_private_file(path, allow_missing=True, allow_empty=True)
     for suffix in ("-wal", "-shm", "-journal", ".init.lock"):
         _validate_private_file(Path(f"{path}{suffix}"), allow_missing=True, allow_empty=True)
     return path
@@ -632,8 +635,11 @@ class StudioConfirmationLedger:
         try:
             descriptor = os.open(self._path, flags, 0o600)
         except FileExistsError:
-            self._validate_file(self._path)
-            return False
+            self._validate_file(self._path, allow_empty=True)
+            # A zero-byte remnant of an interrupted bootstrap is adopted and re-initialized.
+            # Serialized by the bootstrap lock; once the schema commits the file is
+            # non-empty, so a later opener takes the verify path instead.
+            return _file_metadata(self._path).st_size == 0
         except OSError:
             failed = True
             descriptor = None

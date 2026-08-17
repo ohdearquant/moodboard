@@ -487,3 +487,28 @@ def test_symlink_and_hardlink_paths_are_rejected(tmp_path: Path) -> None:
         lambda: ledger.inspect_confirmation(context, challenge, inspected_at=_INSPECTED_AT),
         "ledger_security_error",
     )
+
+
+def test_zero_byte_bootstrap_remnant_is_adopted_by_the_next_bootstrap(tmp_path: Path) -> None:
+    """An interrupted first bootstrap must not require out-of-band deletion to recover."""
+    parent = tmp_path / "studio-state"
+    parent.mkdir(mode=0o700)
+    remnant = parent / "confirmations.sqlite3"
+    descriptor = os.open(remnant, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(descriptor)
+    assert remnant.stat().st_size == 0
+
+    ledger = StudioConfirmationLedger(remnant)
+    challenge = _challenge_document()
+    context = _context_document(challenge)
+    # Reads on the remnant deny exactly like a missing file.
+    _assert_code(
+        lambda: ledger.inspect_confirmation(context, challenge, inspected_at=_INSPECTED_AT),
+        "ledger_security_error",
+    )
+    # The next bootstrap adopts and re-initializes it in place.
+    assert ledger.record_session_authority(_authority()) is True
+    assert remnant.stat().st_size > 0
+    recorded = ledger.record_explicit_confirmation(context, challenge, authority_epoch=1)
+    assert recorded.created is True
+    ledger.verify_integrity()
