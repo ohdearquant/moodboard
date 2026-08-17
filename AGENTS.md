@@ -75,9 +75,9 @@ ordinary test depend on a real `kkernel`, a model checkpoint, or the network.
 |---|---|
 | `viewer/src/generated/report-validators.mjs` | `npm --prefix viewer run validators:write` |
 | `viewer/src/generated/report-validators.d.mts` | edited alongside the generator; `validators:write` does not emit it |
-| `viewer/src/generated/pixel-rag-bridge.json` | `npm --prefix viewer run pixel-rag:write` |
-| `viewer/src/generated/preference-replay-bridge.json` | `npm --prefix viewer run preference-replay:write` |
-| `viewer/src/generated/firefly-bridge.json` | `uv run python -m moodboard.firefly_viewer` (no npm write script; `firefly:check` verifies) |
+| `viewer/src/generated/pixel-rag-bridge.json` | `npm --prefix viewer run pixel-rag:write -- --input <artifact.json> --manifest <manifest.json> --write src/generated/pixel-rag-bridge.json` (full form: `docs/pixel-rag.md`) |
+| `viewer/src/generated/preference-replay-bridge.json` | `npm --prefix viewer run preference-replay:write -- --input <replay.json> --features <features.json> --write src/generated/preference-replay-bridge.json` (full form: `docs/demo-preference.md`) |
+| `viewer/src/generated/firefly-bridge.json` | `uv run python eval/showcase_firefly_projection.py --write viewer/src/generated/firefly-bridge.json` (`firefly:check` verifies; `moodboard.firefly_viewer` is check-only) |
 | `viewer/dist-static/` | `npm --prefix viewer run build` |
 | `moodboard/viewer_dist/` | staged by the viewer build; never edited directly |
 
