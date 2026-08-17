@@ -606,6 +606,77 @@ enough. This change closes the durable CAS portion of ADR-0014 acceptance condit
 non-idempotent local authorization portion of condition 4; provider I/O, reconciliation,
 retry/fallback attempts, and evidence-gated success remain open single-concern changes.
 
+## `openrouter.py`: bounded Image API adapter through `response_received`
+
+`openrouter.py` registers adapter revision `moodboard.openrouter.v1` against the dedicated
+OpenRouter Image API. It never uses `chat/completions`. Endpoint discovery consumes the exact
+bytes from `/api/v1/images/models/{author}/{slug}/endpoints`, rejects duplicate-key or unbounded
+JSON, selects one exact `provider_tag`, and seals the response ContentRef, SHA-256, and byte count
+into a provider capability snapshot. The current Qwen Image 3 profile intersects the endpoint's
+advertised `n`, `input_references`, resolution, aspect-ratio, seed, streaming, and passthrough
+descriptors with Moodboard's closed options. `outputs.mime_types`, `max_width`, and `max_height`
+are explicitly **Moodboard adapter admission limits** because the discovery response does not
+attest those facts. The encoded-output ceiling is fixed by this adapter revision rather than
+silently configurable under one capability identity.
+
+`prepare_openrouter_request` freezes the validated intent packet alongside the normalized request,
+resolves the frozen source and attached-reference ContentRefs, checks BLAKE3, SHA-256, declared
+byte count, and sniffed PNG/JPEG/WebP media, then emits padded data URLs in one exact order:
+source first, followed by attached references in packet order.
+Prompt-only reference text is flattened by `moodboard.openrouter-prompt.v1`; not-sent references
+and the locality mask never enter the provider body. The actual wire body is RFC 8785 JSON for
+exactly `model`, `prompt`, `n`, `seed`, `resolution`, `aspect_ratio`, `input_references`, and the
+provider pin. The non-secret normalized artifact stores hashes of the exact URL strings rather
+than their large payloads. This P0 revision requires `n=1`, `provider.only` equal to the confirmed
+upstream tag, and `allow_fallbacks:false`. Per-image and cumulative data-URL bounds are checked
+before Base64 amplification; credential-like material in the packet, prompt, or resolved input
+bytes is rejected before sealing or dispatch.
+
+`dispatch_openrouter_attempt` rehydrates the frozen packet, validates the attempt's canonical
+normalized-request byte reference, closes packet-to-normalized-to-body source/reference/route
+joins, reruns the operation-input capability intersection, resolves the credential profile in
+memory, and uses the journal to commit the permanent claim plus `submitted` before invoking
+transport. The first claim winner
+may send once. A concurrent or exact replay returns `not_sent`; it never resends or guesses that a
+currently submitted owner has crashed. A complete non-200 response becomes `failed(provider)`.
+An exception after authorization without a complete HTTP response becomes `outcome_unknown` and
+is never automatically retransmitted. This adapter exposes no cancellation or reconciliation
+claim: the Image response has no documented authoritative job handle, and generic generation
+metadata is not treated as job-status reconciliation.
+
+A 200 response is strict, bounded UTF-8 JSON with only `created`, `data`, and optional `usage`, and
+exactly one `data` item. Base64 is decoded strictly and bounded to the registered 16 MiB
+encoded-image limit. The receipt
+records exact raw-response and output BLAKE3/SHA-256/count identities, optional provider media-type
+claim, reported finite nonnegative USD cost when present, and measured adapter latency. The Image
+response does not attest the actual model or upstream provider, so receipts honestly record
+`actual_model:undisclosed` and `upstream_route:unknown`; a request pin is not rewritten as response
+provenance.
+
+Before publication, the adapter scans the semantic response tree, exact raw bytes, and decoded
+outputs for the active credential and high-confidence credential forms, including Base64,
+URL-safe Base64, hexadecimal, and JSON-escaped spellings. A match produces only a stable failure
+code; those bytes never reach the publisher. Evidence timestamps cannot regress behind the
+prepared/submitted head. Production callers may provide a timestamp callable so receipt time is
+sampled after transport rather than guessed before the request.
+
+The response publisher is a required trust boundary: before it returns, it must durably and
+no-clobber store the private raw response bytes, every output payload, and the canonical receipt.
+Only then does the adapter append `response_received`. The adapter never appends `succeeded` and
+never mints an output occurrence. The current attempt journal has no receipt/blob/output tables,
+and the current media API still needs a non-circular output-occurrence constructor plus atomic
+terminal evidence gate. Consequently this slice advances ADR-0014 conditions 1, 4, 6, and 8 but
+does not claim condition 7, completed provider lifecycle, retry/fallback, or repository-wide
+secret scanning. Khive and Lattice are unchanged.
+
+`openrouter_https_transport` is the production fixed-origin helper for
+`https://openrouter.ai/api/v1/images`. It sets only the application-controlled Authorization,
+Content-Type, and Accept headers; the HTTP stack supplies ordinary protocol headers. It refuses
+redirects so the bearer cannot cross origins, bounds the buffered response, verifies a declared
+Content-Length before treating an envelope as complete, and returns no headers. The token, prompt,
+data URLs, request bytes, response headers/body, and decoded output
+bytes are excluded from adapter representations and stable errors.
+
 ## `report.py`
 
 ### The axis vocabulary
