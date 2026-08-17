@@ -84,6 +84,14 @@ _RUN_ID = "20000000-0000-4000-8000-000000000001"
 _ATTEMPT_ID = "20000000-0000-4000-8000-000000000002"
 _CLAIM_ID = "20000000-0000-4000-8000-000000000003"
 
+_TIMESTAMP_FIELDS = (
+    (RUN_VERSION, "created_at"),
+    (ATTEMPT_VERSION, "created_at"),
+    (EVENT_VERSION, "recorded_at"),
+    (CAPABILITY_VERSION, "captured_at"),
+    (RECEIPT_VERSION, "received_at"),
+)
+
 
 def _digest(character: str) -> str:
     assert len(character) == 1 and character in "0123456789abcdef"
@@ -690,6 +698,68 @@ def test_all_provider_artifact_schemas_are_closed_draft_2020_12_contracts() -> N
 
     for document in artifacts:
         validate_provider_artifact(document)
+
+
+@pytest.mark.parametrize(("schema_version", "field"), _TIMESTAMP_FIELDS)
+def test_every_provider_artifact_timestamp_field_rejects_an_impossible_date(
+    schema_version: str,
+    field: str,
+) -> None:
+    _, artifacts = _valid_artifact_chain()
+    document = copy.deepcopy(_first_artifact(artifacts, schema_version))
+    document[field] = "2026-02-30T20:30:02Z"
+    _refresh_if_content_addressed(document)
+
+    with pytest.raises(
+        ProviderArtifactError,
+        match=rf"^{field} must be a real canonical UTC timestamp$",
+    ):
+        validate_provider_artifact(document)
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    (
+        "0000-01-01T00:00:00Z",
+        "2025-02-29T20:30:02Z",
+        "2026-04-31T20:30:02Z",
+        "2026-13-01T20:30:02Z",
+        "2026-08-16T24:00:00Z",
+        "2026-08-16T20:60:00Z",
+        "2026-08-16T20:30:60Z",
+        "2026-08-16T20:30:02+00:00",
+        "2026-08-16T16:30:02-04:00",
+        "2026-08-16t20:30:02z",
+        "2026-08-16T20:30:02.1234567890Z",
+    ),
+)
+def test_provider_artifact_timestamps_reject_impossible_or_noncanonical_values(
+    timestamp: str,
+) -> None:
+    document = _valid_run(_valid_packet())
+    document["created_at"] = timestamp
+
+    with pytest.raises(
+        ProviderArtifactError,
+        match=r"^created_at must be a real canonical UTC timestamp$",
+    ):
+        validate_provider_artifact(document)
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    (
+        "2024-02-29T00:00:00Z",
+        "2026-08-16T20:30:02Z",
+        "2026-08-16T20:30:02.1Z",
+        "2026-08-16T20:30:02.123456789Z",
+    ),
+)
+def test_provider_artifact_timestamps_accept_real_canonical_utc_forms(timestamp: str) -> None:
+    document = _valid_run(_valid_packet())
+    document["created_at"] = timestamp
+
+    validate_provider_artifact(document)
 
 
 def test_every_provider_artifact_object_is_recursively_closed() -> None:

@@ -266,6 +266,12 @@ intent-packet dependencies. Nested objects are closed and bounded. Python values
 construction. This is in-process value immutability; this module does not provide append-only or
 immutable durable storage.
 
+Every provider-artifact timestamp uses one canonical UTC spelling:
+`YYYY-MM-DDTHH:MM:SS[.fraction]Z`, with one to nine fractional digits when present. Validation
+checks the real Gregorian date and clock fields;
+offset aliases, leap seconds, and `24:00:00` fail closed so content identities cannot encode
+timezone or case aliases.
+
 Run and attempt ids are caller-supplied canonical UUIDs because deliberately repeating a packet
 creates new occurrences. Event, capability, normalized-request, and receipt ids are
 domain-separated RFC 8785 SHA-256 identities over their complete documents minus the identity
@@ -279,8 +285,8 @@ derives the registered identity for an event, capability, normalized request, re
 then validates and freezes it. It rejects prefilled identities and never signs run/attempt UUIDs.
 `build_normalized_request_ref` derives the exact SHA-256, BLAKE3 ContentRef, and byte count of the
 canonical request artifact. `compute_provider_request_key` is the only public implementation of
-the request-key projection. Network dispatch, timestamps, UUID allocation, retry policy, and
-storage remain outside these helpers.
+the request-key projection. Network dispatch, timestamp allocation, UUID allocation, retry policy,
+and storage remain outside these helpers.
 
 `validate_artifact_bundle` validates one bounded, complete P0 response/output bundle: exactly one
 run, one ordinal-one attempt, one capability snapshot, one normalized request, one receipt, the
