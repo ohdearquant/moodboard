@@ -313,6 +313,78 @@ def test_prepare_requires_exactly_one_authority_source_before_external_io(tmp_pa
     assert calls == []
 
 
+def test_injected_credential_seam_enforces_the_production_token_shape(tmp_path: Path) -> None:
+    """An empty or non-ASCII token would make the artifact secret scan vacuous."""
+    for bad_token in ("", "short", "token with spaces padded to length!!", "秘密" * 16):
+        challenge_dir = tmp_path / f"bad-token-{len(bad_token)}"
+        _prepare(challenge_dir)
+        context_path = _write_context(challenge_dir)
+        with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+            _execute(
+                challenge_dir,
+                context_path,
+                credential_loader=lambda _, token=bad_token: token,
+            )
+        _assert_error_code(raised, "credential_unavailable")
+
+
+def test_artifact_secret_scan_detects_a_persisted_token(tmp_path: Path) -> None:
+    scan_dir = tmp_path / "artifacts"
+    scan_dir.mkdir()
+    scan_dir.chmod(0o700)
+    clean = scan_dir / "result.json"
+    clean.write_bytes(b'{"ok": true}')
+    clean.chmod(0o600)
+    real_e2e._scan_private_artifacts(scan_dir, _TOKEN)
+
+    leaky = scan_dir / "leak.json"
+    leaky.write_bytes(json.dumps({"token": _TOKEN}).encode("utf-8"))
+    leaky.chmod(0o600)
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        real_e2e._scan_private_artifacts(scan_dir, _TOKEN)
+    _assert_error_code(raised, "credential_material_persisted")
+
+
+def test_execution_reports_the_secret_scan_verdict_as_its_own_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The one diagnostic built to be unambiguous must survive the generic failure collapse."""
+    challenge_dir = tmp_path / "scan-verdict"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+
+    def planted_scan(output_dir: Path, token: str) -> None:
+        raise real_e2e.OpenRouterRealE2EError("credential_material_persisted")
+
+    monkeypatch.setattr(real_e2e, "_scan_private_artifacts", planted_scan)
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _execute(challenge_dir, context_path)
+    _assert_error_code(raised, "credential_material_persisted")
+
+
+def test_prepare_rejects_a_reference_missing_its_occurrence_id(tmp_path: Path) -> None:
+    """A wrong-key reference fails at the stable boundary, not as a KeyError in packet build."""
+    document = json.loads(_AUTHORITY_BYTES.decode("utf-8"))
+    del document["references"][0]["reference_occurrence_id"]
+    document["authority_id"] = "0" * 64
+    document["authority_id"] = compute_document_identity(
+        document,
+        schema_version="moodboard.openrouter-real-e2e-authority.v1",
+        identity_field="authority_id",
+    )
+    prepare = _REAL_E2E.prepare_openrouter_real_e2e
+
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        prepare(
+            tmp_path / "wrong-key-reference",
+            _discovery_fetcher=lambda: _DISCOVERY_BODY,
+            _source_fetcher=lambda: _SOURCE_BYTES,
+            _authority_bundle=_json_bytes(document),
+            _clock=lambda: _PREPARED_AT,
+        )
+    _assert_error_code(raised, "authority_invalid")
+
+
 def test_default_direct_transport_preflight_fails_before_authorization_or_key(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

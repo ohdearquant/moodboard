@@ -417,6 +417,55 @@ def test_reported_cost_preserves_an_explicit_provider_currency(tmp_path: Path) -
     }
 
 
+def test_nonconforming_cost_telemetry_degrades_to_unavailable_without_stranding(
+    tmp_path: Path,
+) -> None:
+    """Telemetry shape must never reject the paid response carrying it (eval/README.md).
+
+    A cost the provider did send but the adapter cannot certify is recorded as
+    reported_uncertifiable, never as not_reported: the receipt must not invert what the
+    provider did.
+    """
+    _journal, attempt, _capability, prepared = _seed_dispatch(tmp_path)
+    for usage, provenance in (
+        ({"cost": 0.033, "currency": "usd"}, "reported_uncertifiable"),
+        ({"cost": 0.033, "currency": "USDC"}, "reported_uncertifiable"),
+        ({"cost": "0.033", "currency": "USD"}, "reported_uncertifiable"),
+        ({"cost": -0.033}, "reported_uncertifiable"),
+        ("not-a-telemetry-object", "reported_uncertifiable"),
+        ({"note": "usage without a cost key"}, "not_reported"),
+    ):
+        body = json.dumps(
+            {
+                "created": 1_786_930_000,
+                "data": [{"b64_json": base64.b64encode(_OUTPUT_BYTES).decode("ascii")}],
+                "usage": usage,
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+        decoded = decode_openrouter_response(
+            attempt,
+            prepared,
+            OpenRouterHttpResponse(
+                status=200,
+                headers={"content-type": "application/json"},
+                body=body,
+                elapsed_milliseconds=2450,
+            ),
+            received_at=_RECORDED_AT,
+        )
+
+        receipt = provider_to_json(decoded.receipt)
+        assert receipt["cost"] == {
+            "state": "unavailable",
+            "amount": None,
+            "currency": None,
+            "provenance": provenance,
+        }
+        validate_provider_artifact(receipt)
+
+
 def test_concurrent_and_exact_dispatch_replay_send_the_attempt_at_most_once(
     tmp_path: Path,
 ) -> None:
@@ -1099,24 +1148,40 @@ def test_dispatch_rejects_retrograde_evidence_time_before_claim(tmp_path: Path) 
     assert [event.state for event in journal.read_events(attempt.attempt_id)] == ["prepared"]
 
 
-@pytest.mark.parametrize("cost_lexeme", ("1e2000000", "0." + "1" * 1_000))
-def test_cost_number_is_bounded_before_decimal_expansion(tmp_path: Path, cost_lexeme: str) -> None:
+def test_cost_number_is_bounded_before_decimal_expansion(tmp_path: Path) -> None:
     _, attempt, _, prepared = _seed_dispatch(tmp_path)
-    response = OpenRouterHttpResponse(
-        200,
-        {},
-        (
-            '{"created":1786930000,"data":[{"b64_json":'
-            '"Z2VuZXJhdGVkLWltYWdlLXYx"}],"usage":{"cost":'
-            f"{cost_lexeme}" + "}}"
-        ).encode(),
-        1,
-    )
 
+    def _response(cost_lexeme: str) -> OpenRouterHttpResponse:
+        return OpenRouterHttpResponse(
+            200,
+            {},
+            (
+                '{"created":1786930000,"data":[{"b64_json":'
+                '"Z2VuZXJhdGVkLWltYWdlLXYx"}],"usage":{"cost":'
+                f"{cost_lexeme}" + "}}"
+            ).encode(),
+            1,
+        )
+
+    # An oversized number lexeme dies at the bounded JSON parse, before any Decimal exists.
     with pytest.raises(OpenRouterAdapterError) as raised:
-        decode_openrouter_response(attempt, prepared, response, received_at=_RECORDED_AT)
-
+        decode_openrouter_response(
+            attempt, prepared, _response("0." + "1" * 1_000), received_at=_RECORDED_AT
+        )
     assert raised.value.code == "invalid_provider_response"
+
+    # A compact lexeme with a huge exponent is cost telemetry, not media: the digit bound
+    # degrades it to explicit unavailability before format() could expand it, and the paid
+    # response is not stranded.
+    decoded = decode_openrouter_response(
+        attempt, prepared, _response("1e2000000"), received_at=_RECORDED_AT
+    )
+    assert provider_to_json(decoded.receipt)["cost"] == {
+        "state": "unavailable",
+        "amount": None,
+        "currency": None,
+        "provenance": "reported_uncertifiable",
+    }
 
 
 def test_json_structural_budget_rejects_before_materializing_pairs(

@@ -139,6 +139,11 @@ The fixed `$0.05` value is a **quote-admission limit**, not a provider-enforced 
 checked against the exact live discovery pricing before source access. Reported cost is post-hoc
 telemetry: missing, differently reported, or unexpectedly high telemetry cannot undo a charge and
 therefore does not strand an otherwise valid provider response before terminal media admission.
+A receipt distinguishes a provider that sent no cost (`not_reported`) from one that sent a cost
+the adapter could not certify (`reported_uncertifiable`); the raw response bytes always retain the
+original. This covers telemetry the adapter could parse: a response whose JSON number lexemes
+exceed the adapter's structural budgets is rejected as a malformed document by the bounded parse,
+which is a document-integrity bound, not a telemetry judgment.
 Reports distinguish provider lifecycle state, media admission, raw structural/locality evidence,
 localized-edit gate status, workflow acceptance (`not_recorded`), semantic/aesthetic judgment
 (`not_run`), and compositor execution (`not_run`).
@@ -161,6 +166,7 @@ The executable acceptance map for this slice is:
 | One injected in-process consumption winner can reach one fake POST | replay, ambiguity, and concurrent-executor tests |
 | Quote arithmetic is exact and `$0.05` is pre-dispatch only | ambient-Decimal and over-quote tests |
 | Missing post-paid cost telemetry does not strand valid media evidence | `test_missing_reported_cost_remains_terminal_success_after_paid_response` |
+| Non-conforming cost telemetry degrades to explicit unavailability, never rejection | `test_nonconforming_cost_telemetry_degrades_to_unavailable_without_stranding` |
 | Credentials cannot survive public exceptions or local artifacts | real-E2E transport exception-graph tests |
 | Real board/retrieval identities are derived, never label hashes | `test_openrouter_real_e2e_authority.py` |
 | Finalization has no confirmation, discovery, credential, or transport boundary | `test_finalize_api_is_credential_free_and_has_no_external_boundary_parameters` and `test_finalize_never_reenters_discovery_confirmation_credential_or_transport` |
