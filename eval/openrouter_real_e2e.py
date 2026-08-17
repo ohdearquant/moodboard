@@ -107,6 +107,11 @@ from moodboard.provider_media import (  # noqa: E402
     ProviderMediaAdmissionError,
     build_provider_success_candidates,
 )
+from moodboard.studio_confirmation_ledger import (  # noqa: E402
+    ConfirmationConsumptionResult,
+    ConfirmationLedgerEntry,
+    StudioConfirmationLedger,
+)
 
 JsonObject = dict[str, Any]
 
@@ -1153,6 +1158,29 @@ def _directory_identity(path: Path, *, code: str) -> JsonObject:
         "device": metadata.st_dev,
         "inode": metadata.st_ino,
     }
+
+
+def _ledger_is_outside_challenge_roots(ledger_path: Path, challenge_dir: Path) -> bool:
+    try:
+        target = challenge_dir.resolve(strict=True)
+        ledger_path.relative_to(target)
+    except ValueError:
+        pass
+    except BaseException:
+        return False
+    else:
+        return False
+    for ancestor in ledger_path.parents:
+        marker = ancestor / "challenge.json"
+        try:
+            marker.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return False
+        else:
+            return False
+    return True
 
 
 def _secure_read_private_file(path: Path, *, limit: int, code: str) -> bytes:
@@ -2959,14 +2987,14 @@ def _execute_with_token(
         # The secret-scan verdicts are produced by the scan itself, so returning them without
         # rescanning is sound. Every other exit runs the terminal scan first and its verdict
         # outranks the collapse; only when the scan is clean may an unambiguous diagnostic
-        # (the artifact-materialization conflict) survive verbatim. All codes are static
-        # literal strings, so no detail can carry a secret.
+        # (the clock regression or the artifact-materialization conflict) survive verbatim.
+        # All codes are static literal strings, so no detail can carry a secret.
         if error.code in {"credential_material_persisted", "artifact_secret_scan_failed"}:
             return error.code, None
         status = _terminal_scan_status(target, token)
         if status != "execution_failed":
             return status, None
-        if error.code == "finalization_artifact_conflict":
+        if error.code in {"clock_invalid", "finalization_artifact_conflict"}:
             return error.code, None
         return "execution_failed", None
     except BaseException:
@@ -2983,7 +3011,7 @@ def execute_openrouter_real_e2e(
     _discovery_fetcher: Callable[[], bytes] = fetch_live_discovery,
     _credential_loader: Callable[[str], str] = load_openrouter_keychain_token,
     _transport: Callable[..., OpenRouterHttpResponse] = direct_openrouter_https_transport,
-    _confirmation_consumer: Callable[[Mapping[str, Any], Mapping[str, Any]], bool] | None = None,
+    _confirmation_ledger: StudioConfirmationLedger | None = None,
     _clock: Callable[[], str] = _canonical_timestamp,
     _uuid4: Callable[[], str | uuid.UUID] = uuid.uuid4,
 ) -> OpenRouterRealE2EResult:
@@ -3003,9 +3031,38 @@ def execute_openrouter_real_e2e(
     if not ok or not isinstance(now_value, str):
         _fail("clock_invalid")
     now = now_value
+    last_clock_key = _timestamp_value(now, code="clock_invalid")
+
+    def checked_clock() -> str:
+        nonlocal last_clock_key
+        sampled_ok, sampled_value = _call_sanitized(_clock)
+        if not sampled_ok or not isinstance(sampled_value, str):
+            _fail("clock_invalid")
+        sampled_key = _timestamp_value(sampled_value, code="clock_invalid")
+        if sampled_key < last_clock_key:
+            _fail("clock_invalid")
+        last_clock_key = sampled_key
+        return sampled_value
+
     context, context_bytes = _confirmation_snapshot(context_path, challenge=challenge, now=now)
-    if _confirmation_consumer is None:
+    if type(_confirmation_ledger) is not StudioConfirmationLedger:
         _fail("confirmation_authority_unavailable")
+    if not _ledger_is_outside_challenge_roots(_confirmation_ledger.path, target):
+        _fail("confirmation_authority_invalid")
+    inspected_ok, inspected_value = _call_sanitized(
+        lambda: StudioConfirmationLedger.inspect_confirmation(
+            _confirmation_ledger,
+            context,
+            challenge,
+            inspected_at=now,
+        )
+    )
+    if (
+        not inspected_ok
+        or not isinstance(inspected_value, ConfirmationLedgerEntry)
+        or inspected_value.state != "available"
+    ):
+        _fail("confirmation_authority_invalid")
 
     ok, fresh_discovery = _call_sanitized(_discovery_fetcher)
     if not ok or type(fresh_discovery) is not bytes:
@@ -3099,7 +3156,7 @@ def execute_openrouter_real_e2e(
         "generation_run": provider_to_json(run),
         "generation_attempt": provider_to_json(attempt),
     }
-    ok, preclaim_now_value = _call_sanitized(_clock)
+    ok, preclaim_now_value = _call_sanitized(checked_clock)
     if not ok or not isinstance(preclaim_now_value, str):
         _fail("clock_invalid")
     preclaim_now = preclaim_now_value
@@ -3107,12 +3164,24 @@ def execute_openrouter_real_e2e(
         challenge["expires_at"], code="challenge_artifact_drift"
     ):
         _fail("challenge_expired")
-    authority_ok, consumed = _call_sanitized(
-        lambda: _confirmation_consumer(copy.deepcopy(context), copy.deepcopy(challenge))
+    authority_ok, consumed_value = _call_sanitized(
+        lambda: StudioConfirmationLedger.consume_confirmation(
+            _confirmation_ledger,
+            context,
+            challenge,
+            consumed_at=preclaim_now,
+        )
     )
-    if not authority_ok or consumed is not True:
+    if (
+        not authority_ok
+        or not isinstance(consumed_value, ConfirmationConsumptionResult)
+        or consumed_value.created is not True
+        or consumed_value.generation_post_authorized is not True
+        or consumed_value.entry.state != "consumed"
+        or consumed_value.entry.consumed_at != preclaim_now
+    ):
         _fail("confirmation_authority_invalid")
-    ok, post_authority_now_value = _call_sanitized(_clock)
+    ok, post_authority_now_value = _call_sanitized(checked_clock)
     if not ok or not isinstance(post_authority_now_value, str):
         _fail("clock_invalid")
     post_authority_now = post_authority_now_value
@@ -3124,13 +3193,13 @@ def execute_openrouter_real_e2e(
         target,
         challenge=challenge,
         context=context,
-        consumed_at=post_authority_now,
+        consumed_at=preclaim_now,
     )
     _write_private_json(target / "plan.json", plan)
     _write_private_bytes(target / "confirmation-context.snapshot.json", context_bytes)
 
     _enforce_no_core_dumps()
-    ok, credential_boundary_now_value = _call_sanitized(_clock)
+    ok, credential_boundary_now_value = _call_sanitized(checked_clock)
     if not ok or not isinstance(credential_boundary_now_value, str):
         _fail("clock_invalid")
     if _timestamp_value(credential_boundary_now_value, code="clock_invalid") > _timestamp_value(
@@ -3164,7 +3233,7 @@ def execute_openrouter_real_e2e(
         expires_at=str(challenge["expires_at"]),
         directory_binding=challenge["directory_binding"],
         transport=_transport,
-        clock=_clock,
+        clock=checked_clock,
         uuid4_factory=_uuid4,
     )
     token = ""

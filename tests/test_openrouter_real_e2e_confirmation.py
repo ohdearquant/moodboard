@@ -39,6 +39,12 @@ from moodboard.attempt_journal import AttemptJournal
 from moodboard.contracts import compute_document_identity, verify_document_identity
 from moodboard.locality import compile_canonical_raster, compile_rectangle_mask
 from moodboard.openrouter import OpenRouterHttpResponse
+from moodboard.studio_confirmation_ledger import (
+    ConfirmationConsumptionResult,
+    StudioConfirmationLedger,
+    StudioConfirmationLedgerError,
+    StudioSessionAuthority,
+)
 from tests.test_openrouter_discovery import _DISCOVERY_BODY
 from tests.test_openrouter_real_e2e import (
     _SOURCE_BYTES,
@@ -59,8 +65,9 @@ _EXECUTED_AT = "2026-08-17T03:17:00Z"
 _CREATIVE_SESSION_ID = "10000000-0000-4000-8000-000000000001"
 _PRINCIPAL_ID = "20000000-0000-4000-8000-000000000002"
 _STUDIO_SESSION_ID = "30000000-0000-4000-8000-000000000003"
-_CONFIRMATION_LEDGER_LOCK = threading.Lock()
-_CONSUMED_CONFIRMATIONS: set[tuple[str, str]] = set()
+_AUTHORITY_EPOCH = 1
+_SESSION_ACTIVE_FROM = "2026-08-17T03:00:00Z"
+_SESSION_EXPIRES_AT = "2026-08-17T05:00:00Z"
 
 
 def _digest(character: str) -> str:
@@ -181,6 +188,7 @@ def _write_context(
     challenge_dir: Path,
     *,
     name: str = "confirmation-context.json",
+    register_confirmation: bool = True,
     **overrides: Any,
 ) -> Path:
     path = challenge_dir / name
@@ -194,7 +202,45 @@ def _write_context(
     finally:
         os.close(descriptor)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if register_confirmation:
+        # Registration failures always raise: silently skipping the grant would change what a
+        # tamper test exercises. A caller building a context the ledger must reject passes
+        # register_confirmation=False explicitly.
+        _register_confirmation(challenge_dir, path)
     return path
+
+
+def _ledger_path(challenge_dir: Path) -> Path:
+    state_dir = challenge_dir.parent / ".studio-confirmation-ledgers"
+    state_dir.mkdir(mode=0o700, exist_ok=True)
+    state_dir.chmod(0o700)
+    return (state_dir / f"{challenge_dir.name}.sqlite3").resolve()
+
+
+def _ledger_for(challenge_dir: Path) -> StudioConfirmationLedger:
+    return StudioConfirmationLedger(_ledger_path(challenge_dir))
+
+
+def _register_confirmation(
+    challenge_dir: Path,
+    context_path: Path,
+) -> StudioConfirmationLedger:
+    ledger = _ledger_for(challenge_dir)
+    authority = StudioSessionAuthority(
+        principal_id=_PRINCIPAL_ID,
+        studio_session_id=_STUDIO_SESSION_ID,
+        creative_session_id=_CREATIVE_SESSION_ID,
+        authority_epoch=_AUTHORITY_EPOCH,
+        active_from=_SESSION_ACTIVE_FROM,
+        expires_at=_SESSION_EXPIRES_AT,
+    )
+    ledger.record_session_authority(authority)
+    ledger.record_explicit_confirmation(
+        _read_json(context_path),
+        _read_json(challenge_dir / "challenge.json"),
+        authority_epoch=_AUTHORITY_EPOCH,
+    )
+    return ledger
 
 
 def _rewrite_context(path: Path, mutate: Callable[[JsonObject], None]) -> None:
@@ -216,17 +262,9 @@ def _execute(
     discovery_fetcher: Callable[[], bytes] | None = None,
     credential_loader: Callable[[str], str] | None = None,
     transport: Callable[..., OpenRouterHttpResponse] | None = None,
-    confirmation_consumer: Callable[[JsonObject, JsonObject], bool] | None = None,
+    confirmation_ledger: StudioConfirmationLedger | None = None,
     clock: Callable[[], str] | None = None,
 ) -> Any:
-    def consume_once(context: JsonObject, challenge: JsonObject) -> bool:
-        key = (str(context["confirmation_context_id"]), str(challenge["challenge_id"]))
-        with _CONFIRMATION_LEDGER_LOCK:
-            if key in _CONSUMED_CONFIRMATIONS:
-                return False
-            _CONSUMED_CONFIRMATIONS.add(key)
-            return True
-
     execute = _REAL_E2E.execute_openrouter_real_e2e
     return execute(
         challenge_dir,
@@ -234,7 +272,7 @@ def _execute(
         _discovery_fetcher=discovery_fetcher or (lambda: _DISCOVERY_BODY),
         _credential_loader=credential_loader or (lambda _: _TOKEN),
         _transport=transport or (lambda **_: _http_response()),
-        _confirmation_consumer=confirmation_consumer or consume_once,
+        _confirmation_ledger=confirmation_ledger or _ledger_for(challenge_dir),
         _clock=clock or (lambda: _EXECUTED_AT),
         _uuid4=_uuid_supplier(),
     )
@@ -287,6 +325,118 @@ def test_prepare_api_has_no_credential_or_transport_and_returns_frozen_challenge
     assert frozen_challenge.compact_summary_id == stored["compact_summary_id"]
     with pytest.raises(FrozenInstanceError):
         frozen_challenge.challenge_id = _digest("f")
+
+
+def test_execute_requires_a_durable_ledger_and_has_no_callable_authority_seam() -> None:
+    parameters = inspect.signature(_REAL_E2E.execute_openrouter_real_e2e).parameters
+
+    assert "_confirmation_ledger" in parameters
+    assert "_confirmation_consumer" not in parameters
+
+
+def test_execute_rejects_a_ledger_subclass_before_discovery_or_key(tmp_path: Path) -> None:
+    challenge_dir = tmp_path / "ledger-subclass"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+    calls, unexpected = _unexpected_calls()
+
+    class ForgedLedger(StudioConfirmationLedger):
+        pass
+
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _execute(
+            challenge_dir,
+            context_path,
+            confirmation_ledger=ForgedLedger(_ledger_path(challenge_dir)),
+            discovery_fetcher=unexpected("discovery"),
+            credential_loader=unexpected("credential"),
+            transport=unexpected("transport"),
+        )
+
+    _assert_error_code(raised, "confirmation_authority_unavailable")
+    assert calls == []
+
+
+def test_execute_rejects_a_ledger_inside_the_challenge_directory_before_discovery(
+    tmp_path: Path,
+) -> None:
+    challenge_dir = tmp_path / "embedded-ledger"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+    state_dir = challenge_dir / "studio-state"
+    state_dir.mkdir(mode=0o700)
+    embedded = StudioConfirmationLedger((state_dir / "confirmations.sqlite3").resolve())
+    embedded.record_session_authority(
+        StudioSessionAuthority(
+            principal_id=_PRINCIPAL_ID,
+            studio_session_id=_STUDIO_SESSION_ID,
+            creative_session_id=_CREATIVE_SESSION_ID,
+            authority_epoch=_AUTHORITY_EPOCH,
+            active_from=_SESSION_ACTIVE_FROM,
+            expires_at=_SESSION_EXPIRES_AT,
+        )
+    )
+    embedded.record_explicit_confirmation(
+        _read_json(context_path),
+        _read_json(challenge_dir / "challenge.json"),
+        authority_epoch=_AUTHORITY_EPOCH,
+    )
+    calls, unexpected = _unexpected_calls()
+
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _execute(
+            challenge_dir,
+            context_path,
+            confirmation_ledger=embedded,
+            discovery_fetcher=unexpected("discovery"),
+            credential_loader=unexpected("credential"),
+            transport=unexpected("transport"),
+        )
+
+    _assert_error_code(raised, "confirmation_authority_invalid")
+    assert calls == []
+
+
+def test_execute_rejects_a_ledger_nested_in_a_sibling_challenge_root(
+    tmp_path: Path,
+) -> None:
+    sibling = tmp_path / "sibling-challenge"
+    _prepare(sibling)
+    challenge_dir = tmp_path / "target-challenge"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+    state_dir = sibling / "studio-state"
+    state_dir.mkdir(mode=0o700)
+    embedded = StudioConfirmationLedger((state_dir / "confirmations.sqlite3").resolve())
+    embedded.record_session_authority(
+        StudioSessionAuthority(
+            principal_id=_PRINCIPAL_ID,
+            studio_session_id=_STUDIO_SESSION_ID,
+            creative_session_id=_CREATIVE_SESSION_ID,
+            authority_epoch=_AUTHORITY_EPOCH,
+            active_from=_SESSION_ACTIVE_FROM,
+            expires_at=_SESSION_EXPIRES_AT,
+        )
+    )
+    embedded.record_explicit_confirmation(
+        _read_json(context_path),
+        _read_json(challenge_dir / "challenge.json"),
+        authority_epoch=_AUTHORITY_EPOCH,
+    )
+    calls, unexpected = _unexpected_calls()
+
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _execute(
+            challenge_dir,
+            context_path,
+            confirmation_ledger=embedded,
+            discovery_fetcher=unexpected("discovery"),
+            credential_loader=unexpected("credential"),
+            transport=unexpected("transport"),
+        )
+
+    _assert_error_code(raised, "confirmation_authority_invalid")
+    assert calls == []
 
 
 def test_prepare_requires_exactly_one_authority_source_before_external_io(tmp_path: Path) -> None:
@@ -439,7 +589,7 @@ def test_default_direct_transport_preflight_fails_before_authorization_or_key(
             _discovery_fetcher=unexpected("discovery"),
             _credential_loader=unexpected("credential"),
             _transport=real_e2e.direct_openrouter_https_transport,
-            _confirmation_consumer=unexpected("confirmation"),
+            _confirmation_ledger=_ledger_for(challenge_dir),
             _clock=lambda: _EXECUTED_AT,
             _uuid4=_uuid_supplier(),
         )
@@ -656,7 +806,7 @@ def test_production_default_rejects_self_minted_context_before_discovery_or_key(
 ) -> None:
     challenge_dir = tmp_path / "untrusted-context"
     _prepare(challenge_dir)
-    context_path = _write_context(challenge_dir)
+    context_path = _write_context(challenge_dir, register_confirmation=False)
     calls, unexpected = _unexpected_calls()
 
     with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
@@ -862,7 +1012,212 @@ def test_context_values_are_projected_exactly_and_never_generated(tmp_path: Path
     assert result.generation_post_count == context["authorized_generation_post_count"] == 1
 
 
-def test_expiry_crossed_inside_trusted_consumer_stops_before_credential(tmp_path: Path) -> None:
+def test_durable_ledger_cas_precedes_local_evidence_key_journal_and_post(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    challenge_dir = tmp_path / "durable-order"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+    ledger = _ledger_for(challenge_dir)
+    calls: list[str] = []
+    original_inspect = StudioConfirmationLedger.inspect_confirmation
+    original_consume = StudioConfirmationLedger.consume_confirmation
+    original_claim = real_e2e._claim_challenge_consumption
+    original_journal_init = AttemptJournal.__init__
+
+    def inspect_confirmation(*args: Any, **kwargs: Any) -> Any:
+        calls.append("ledger_inspect")
+        assert "discovery" not in calls
+        return original_inspect(*args, **kwargs)
+
+    def consume_confirmation(*args: Any, **kwargs: Any) -> Any:
+        calls.append("ledger_consume")
+        assert "discovery" in calls
+        assert not (challenge_dir / "consumed.json").exists()
+        assert not (challenge_dir / "plan.json").exists()
+        assert not (challenge_dir / "attempts.sqlite3").exists()
+        result = original_consume(*args, **kwargs)
+        assert result.created is True
+        assert result.generation_post_authorized is True
+        return result
+
+    def claim(*args: Any, **kwargs: Any) -> None:
+        calls.append("local_consumed")
+        assert "ledger_consume" in calls
+        original_claim(*args, **kwargs)
+
+    def journal_init(self: AttemptJournal, *args: Any, **kwargs: Any) -> None:
+        calls.append("journal")
+        assert "credential" in calls
+        original_journal_init(self, *args, **kwargs)
+
+    def discovery() -> bytes:
+        calls.append("discovery")
+        assert "ledger_inspect" in calls
+        return _DISCOVERY_BODY
+
+    def credential(_profile: str) -> str:
+        calls.append("credential")
+        assert (challenge_dir / "consumed.json").is_file()
+        assert (challenge_dir / "plan.json").is_file()
+        assert not (challenge_dir / "attempts.sqlite3").exists()
+        return _TOKEN
+
+    def transport(*, body: bytes, bearer_token: str) -> OpenRouterHttpResponse:
+        assert body and bearer_token == _TOKEN
+        calls.append("post")
+        assert (challenge_dir / "attempts.sqlite3").is_file()
+        return _http_response()
+
+    monkeypatch.setattr(
+        StudioConfirmationLedger,
+        "inspect_confirmation",
+        inspect_confirmation,
+    )
+    monkeypatch.setattr(
+        StudioConfirmationLedger,
+        "consume_confirmation",
+        consume_confirmation,
+    )
+    monkeypatch.setattr(real_e2e, "_claim_challenge_consumption", claim)
+    monkeypatch.setattr(AttemptJournal, "__init__", journal_init)
+
+    result = _execute(
+        challenge_dir,
+        context_path,
+        confirmation_ledger=ledger,
+        discovery_fetcher=discovery,
+        credential_loader=credential,
+        transport=transport,
+    )
+
+    assert result.generation_post_count == 1
+    assert calls.index("ledger_inspect") < calls.index("discovery")
+    assert calls.index("discovery") < calls.index("ledger_consume")
+    assert calls.index("ledger_consume") < calls.index("local_consumed")
+    assert calls.index("local_consumed") < calls.index("credential")
+    assert calls.index("credential") < calls.index("journal") < calls.index("post")
+
+
+def test_clock_regression_after_inspection_stops_before_ledger_consume_or_key(
+    tmp_path: Path,
+) -> None:
+    challenge_dir = tmp_path / "clock-regression"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+    ledger = _ledger_for(challenge_dir)
+    samples = iter((_EXECUTED_AT, "2026-08-17T03:16:30Z"))
+    calls, unexpected = _unexpected_calls()
+
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _execute(
+            challenge_dir,
+            context_path,
+            confirmation_ledger=ledger,
+            discovery_fetcher=lambda: calls.append("discovery") or _DISCOVERY_BODY,
+            credential_loader=unexpected("credential"),
+            transport=unexpected("transport"),
+            clock=lambda: next(samples),
+        )
+
+    _assert_error_code(raised, "clock_invalid")
+    assert calls == ["discovery"]
+    assert (
+        ledger.inspect_confirmation(
+            _read_json(context_path),
+            _read_json(challenge_dir / "challenge.json"),
+            inspected_at=_EXECUTED_AT,
+        ).state
+        == "available"
+    )
+    assert not (challenge_dir / "consumed.json").exists()
+    assert not (challenge_dir / "attempts.sqlite3").exists()
+
+
+@pytest.mark.parametrize("failure_kind", ["lost_race", "ambiguous_commit"])
+def test_non_authorizing_consume_outcome_never_reaches_local_key_journal_or_post(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failure_kind: str,
+) -> None:
+    challenge_dir = tmp_path / failure_kind
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+    ledger = _ledger_for(challenge_dir)
+    original_consume = StudioConfirmationLedger.consume_confirmation
+    calls: list[str] = []
+
+    def consume(
+        self: StudioConfirmationLedger,
+        context: JsonObject,
+        challenge: JsonObject,
+        *,
+        consumed_at: str,
+    ) -> ConfirmationConsumptionResult:
+        calls.append("consume")
+        if failure_kind == "lost_race":
+            original_consume(
+                StudioConfirmationLedger(self.path),
+                context,
+                challenge,
+                consumed_at=consumed_at,
+            )
+            return original_consume(
+                self,
+                context,
+                challenge,
+                consumed_at=consumed_at,
+            )
+        result = original_consume(
+            self,
+            context,
+            challenge,
+            consumed_at=consumed_at,
+        )
+        assert result.generation_post_authorized is True
+        raise StudioConfirmationLedgerError("confirmation_persistence_ambiguous")
+
+    def discovery() -> bytes:
+        calls.append("discovery")
+        return _DISCOVERY_BODY
+
+    monkeypatch.setattr(StudioConfirmationLedger, "consume_confirmation", consume)
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _execute(
+            challenge_dir,
+            context_path,
+            confirmation_ledger=ledger,
+            discovery_fetcher=discovery,
+            credential_loader=lambda _profile: calls.append("credential") or _TOKEN,
+            transport=lambda **_kwargs: calls.append("post") or _http_response(),
+        )
+
+    _assert_error_code(raised, "confirmation_authority_invalid")
+    assert calls == ["discovery", "consume"]
+    assert not (challenge_dir / "consumed.json").exists()
+    assert not (challenge_dir / "plan.json").exists()
+    assert not (challenge_dir / "attempts.sqlite3").exists()
+
+    monkeypatch.setattr(StudioConfirmationLedger, "consume_confirmation", original_consume)
+    replay_calls, unexpected = _unexpected_calls()
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as replay:
+        _execute(
+            challenge_dir,
+            context_path,
+            confirmation_ledger=StudioConfirmationLedger(ledger.path),
+            discovery_fetcher=unexpected("discovery"),
+            credential_loader=unexpected("credential"),
+            transport=unexpected("transport"),
+        )
+    _assert_error_code(replay, "confirmation_authority_invalid")
+    assert replay_calls == []
+
+
+def test_expiry_crossed_inside_trusted_ledger_stops_before_credential(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     challenge_dir = tmp_path / "consumer-crosses-expiry"
     _prepare(challenge_dir)
     context_path = _write_context(challenge_dir)
@@ -872,21 +1227,37 @@ def test_expiry_crossed_inside_trusted_consumer_stops_before_credential(tmp_path
     def clock() -> str:
         return measured_now
 
-    def consumer(_context: JsonObject, _challenge: JsonObject) -> bool:
+    ledger = _ledger_for(challenge_dir)
+    original_consume = StudioConfirmationLedger.consume_confirmation
+
+    def consume(
+        self: StudioConfirmationLedger,
+        context: JsonObject,
+        challenge: JsonObject,
+        *,
+        consumed_at: str,
+    ) -> ConfirmationConsumptionResult:
         nonlocal measured_now
+        result = original_consume(
+            self,
+            context,
+            challenge,
+            consumed_at=consumed_at,
+        )
         measured_now = "2026-08-17T04:00:00Z"
-        return True
+        return result
 
     def credential(_profile: str) -> str:
         nonlocal credential_calls
         credential_calls += 1
         return _TOKEN
 
+    monkeypatch.setattr(StudioConfirmationLedger, "consume_confirmation", consume)
     with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
         _execute(
             challenge_dir,
             context_path,
-            confirmation_consumer=consumer,
+            confirmation_ledger=ledger,
             credential_loader=credential,
             clock=clock,
         )
@@ -1032,6 +1403,12 @@ def test_trusted_confirmation_ledger_blocks_replay_after_local_rollback(tmp_path
     context_path = _write_context(challenge_dir)
     sends = 0
     credential_calls = 0
+    discovery_calls = 0
+
+    def discovery() -> bytes:
+        nonlocal discovery_calls
+        discovery_calls += 1
+        return _DISCOVERY_BODY
 
     def credential(_profile: str) -> str:
         nonlocal credential_calls
@@ -1047,6 +1424,7 @@ def test_trusted_confirmation_ledger_blocks_replay_after_local_rollback(tmp_path
     first = _execute(
         challenge_dir,
         context_path,
+        discovery_fetcher=discovery,
         credential_loader=credential,
         transport=transport,
     )
@@ -1069,11 +1447,13 @@ def test_trusted_confirmation_ledger_blocks_replay_after_local_rollback(tmp_path
         _execute(
             challenge_dir,
             context_path,
+            discovery_fetcher=discovery,
             credential_loader=credential,
             transport=transport,
         )
 
     _assert_error_code(replay, "confirmation_authority_invalid")
+    assert discovery_calls == 1
     assert credential_calls == sends == 1
 
 
@@ -1358,3 +1738,72 @@ def test_concurrent_executors_atomically_admit_only_one_credential_and_send(
     assert len(successful) == 1
     assert successful[0].states[-1] == "succeeded"
     assert credential_calls == sends == 1
+
+
+def _post_pot_regressing_clock() -> tuple[dict[str, Any], Any]:
+    """Canonical increasing samples; the second sample after the POST regresses."""
+    state: dict[str, Any] = {"posted": False, "tick": 0, "post_samples": 0}
+
+    def clock() -> str:
+        if state["posted"]:
+            state["post_samples"] += 1
+            if state["post_samples"] >= 2:
+                return "2026-08-17T03:00:01Z"
+        state["tick"] += 1
+        minute, second = divmod(state["tick"], 60)
+        return f"2026-08-17T03:{17 + minute:02d}:{second:02d}Z"
+
+    return state, clock
+
+
+def test_a_post_response_clock_regression_still_scans_the_private_artifacts(
+    tmp_path: Path,
+) -> None:
+    """A clock diagnostic raised after the paid POST must not mask a persisted credential."""
+    challenge_dir = tmp_path / "post-response-clock-leak"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+    ledger = _ledger_for(challenge_dir)
+    leak = challenge_dir / "leak.bin"
+    leak.write_bytes(_TOKEN.encode("utf-8"))
+    leak.chmod(0o600)
+    state, clock = _post_pot_regressing_clock()
+
+    def marked_transport(**kwargs: Any) -> OpenRouterHttpResponse:
+        state["posted"] = True
+        return _http_response()
+
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _execute(
+            challenge_dir,
+            context_path,
+            confirmation_ledger=ledger,
+            transport=marked_transport,
+            clock=clock,
+        )
+    assert state["posted"] is True
+    _assert_error_code(raised, "credential_material_persisted")
+
+
+def test_a_clean_post_response_clock_regression_keeps_its_own_code(tmp_path: Path) -> None:
+    """After a clean terminal scan the clock diagnostic survives the collapse verbatim."""
+    challenge_dir = tmp_path / "post-response-clock-clean"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+    ledger = _ledger_for(challenge_dir)
+    state, clock = _post_pot_regressing_clock()
+
+    def marked_transport(**kwargs: Any) -> OpenRouterHttpResponse:
+        state["posted"] = True
+        return _http_response()
+
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _execute(
+            challenge_dir,
+            context_path,
+            confirmation_ledger=ledger,
+            transport=marked_transport,
+            clock=clock,
+        )
+    assert state["posted"] is True
+    _assert_error_code(raised, "clock_invalid")
