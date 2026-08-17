@@ -77,7 +77,7 @@ ordinary test depend on a real `kkernel`, a model checkpoint, or the network.
 | `viewer/src/generated/report-validators.d.mts` | edited alongside the generator; `validators:write` does not emit it |
 | `viewer/src/generated/pixel-rag-bridge.json` | `npm --prefix viewer run pixel-rag:write -- --input <artifact.json> --manifest <manifest.json> --write src/generated/pixel-rag-bridge.json` (full form: `docs/pixel-rag.md`) |
 | `viewer/src/generated/preference-replay-bridge.json` | `npm --prefix viewer run preference-replay:write -- --input <replay.json> --features <features.json> --write src/generated/preference-replay-bridge.json` (full form: `docs/demo-preference.md`) |
-| `viewer/src/generated/firefly-bridge.json` | `uv run python eval/showcase_firefly_projection.py --write viewer/src/generated/firefly-bridge.json` (`firefly:check` verifies; `moodboard.firefly_viewer` is check-only) |
+| `viewer/src/generated/firefly-bridge.json` | `uv run python eval/showcase_firefly_projection.py --write <fresh path>` — needs recorded-run inputs; see note below |
 | `viewer/dist-static/` | `npm --prefix viewer run build` |
 | `moodboard/viewer_dist/` | staged by the viewer build; never edited directly |
 
@@ -87,6 +87,12 @@ The viewer build (`npm --prefix viewer run build`, which CI runs) verifies
 are not check-gated today: `pixel-rag-bridge.json` has a `pixel-rag:check` script that nothing
 invokes, and `report-validators.d.mts` has no drift check at all — hand edits there are
 unprotected, so verify those two yourself.
+
+`firefly-bridge.json` is a projection of a recorded measured run: the script reads
+`.cache/showcase-firefly-v1*` inputs that are not in the repository and refuses to overwrite
+an existing bridge file. Regenerating it requires that cache plus a fresh `--write` path moved
+into place. Without the cache, the committed copy is the recorded artifact — verify it with
+`firefly:check`; do not delete it expecting to rebuild it.
 
 ## Contracts and where they are decided
 
