@@ -103,6 +103,38 @@ local `O_EXCL` concurrency behavior only. Credential-bearing work is contained i
 inner scope, core dumps are disabled before Keychain access, and private response and output bytes
 remain in the owner-only journal/run directory.
 
+`finalize_openrouter_real_e2e(challenge_dir: Path, *, _clock=_canonical_timestamp) ->
+OpenRouterRealE2EResult` is a separate local recovery operation after exact provider-response
+evidence is already durable. Its public boundary has no confirmation, discovery/source fetcher,
+credential, transport, or UUID parameter; it performs none of that external I/O and cannot
+authorize a generation POST. It verifies the historical consumption proof and rederives the frozen
+packet, capability, request, wire, run, and attempt before consulting the existing journal.
+
+The first recovery slice is intentionally narrow:
+
+| Durable journal head | Result |
+| --- | --- |
+| `response_received`, media admitted | Idempotently publish `succeeded`, then materialize output and report. |
+| `response_received`, media rejected | Keep `response_received`; report structural failure and `locality:not_run`, with no occurrence or output file. |
+| `succeeded` | Read the committed success package and recover missing output/report after a lost commit acknowledgement; do not republish success. |
+| `submitted` or any other unsupported head | Fail `finalization_not_ready`; do not guess, reconcile, mutate the journal, or resend. |
+
+The provider output is created before `result.json`, and `result.json` is the completion marker for
+that locally derived journal snapshot.
+Both writes are exact no-clobber: byte-identical artifacts replay without mutation, while an
+existing conflicting artifact fails `finalization_artifact_conflict` and is not replaced. Missing
+or drifted frozen evidence fails locally before finalization. Absolute-path/device/inode checks
+reject copied or moved challenge directories at their checkpoints, but this remains a pathname-
+based, owner-only trust boundary. Descriptor-relative anchoring against a malicious same-UID
+rename/replacement race—including the already disclosed dispatch-time window—remains P2. Each hard
+kill before an fsynced staging file is linked can leave an owner-only, at-most-16-MiB
+`.openrouter-finalize-*` orphan, so repeated interrupted publications can accumulate them; clean
+them only after proving no finalizer is live.
+The journal remains authoritative: rejected media intentionally leaves `response_received`, and a
+later legal terminal event can supersede that report snapshot. The finalizer rechecks the event
+sequence before file publication, but SQLite and the filesystem are not atomically committed
+together, so consumers must re-read the journal head before relying on a rejected-media result.
+
 The fixed `$0.05` value is a **quote-admission limit**, not a provider-enforced spending cap. It is
 checked against the exact live discovery pricing before source access. Reported cost is post-hoc
 telemetry: missing, differently reported, or unexpectedly high telemetry cannot undo a charge and
@@ -113,9 +145,10 @@ localized-edit gate status, workflow acceptance (`not_recorded`), semantic/aesth
 
 No paid call is currently authorized. The available local Pixel-RAG evidence uses a retired
 projection and fails the current public reader when supplied explicitly. A separately governed
-evidence republication, a trusted authority-to-creative-session integration, a durable Studio
-confirmation consumer, and a credential-free idempotent post-response finalizer are prerequisites
-to a live run. Until those exist, the two-stage functions are an injected offline contract harness.
+evidence republication, a trusted authority-to-creative-session integration, and a durable Studio
+confirmation consumer remain prerequisites to a live run. The credential-free finalizer closes
+the local post-response recovery prerequisite only; it does not relax this live HOLD. Until the
+remaining authorities exist, the two-stage functions are an injected offline contract harness.
 
 The executable acceptance map for this slice is:
 
@@ -130,3 +163,7 @@ The executable acceptance map for this slice is:
 | Missing post-paid cost telemetry does not strand valid media evidence | `test_missing_reported_cost_remains_terminal_success_after_paid_response` |
 | Credentials cannot survive public exceptions or local artifacts | real-E2E transport exception-graph tests |
 | Real board/retrieval identities are derived, never label hashes | `test_openrouter_real_e2e_authority.py` |
+| Finalization has no confirmation, discovery, credential, or transport boundary | `test_finalize_api_is_credential_free_and_has_no_external_boundary_parameters` and `test_finalize_never_reenters_discovery_confirmation_credential_or_transport` |
+| Durable `response_received` and lost-ACK `succeeded` recover without another POST | response-crash, invalid-media, and lost-success-ack finalizer tests |
+| Exact replay is no-clobber and conflicting derived bytes are preserved | finalizer exact-replay and conflicting-derived-artifact tests |
+| A copied directory, drifted frozen plan/challenge, or missing journal fails locally | finalizer binding, tamper, and missing-journal tests |
