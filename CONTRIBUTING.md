@@ -78,9 +78,8 @@ suite. Run `npm --prefix viewer run test` yourself before pushing, or use
 
 ## What continuous integration actually runs
 
-The workflow is `.github/workflows/ci.yml`. It triggers on pull requests and manual dispatch,
-not on pushes to `main` (`main` does not currently carry the Python project, so a push trigger
-would fail at `uv sync` for reasons unrelated to the change being pushed). It has two jobs:
+The workflow is `.github/workflows/ci.yml`. It triggers on pull requests, on pushes to
+`main`, and on manual dispatch. It has two jobs:
 
 - **`lint`**: `uv sync --locked`, then `uv run ruff check .`.
 - **`test`** (matrix: Python 3.11 and 3.13): `uv sync --locked --python <version>`, then

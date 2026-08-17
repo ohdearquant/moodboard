@@ -3,23 +3,25 @@ name: CI
 # Runs on every pull request and on pushes to main. The suite needs no network and no
 # downloaded model weights: ClassicalEncoder computes its representation from the axes in
 # axes.py, which is why the whole engine is exercisable on a bare runner.
-# PULL REQUESTS ONLY, DELIBERATELY, AND THIS IS NOT AN OVERSIGHT. main does not yet contain
-# the Python project at all: no pyproject.toml, no uv.lock, no tests/ directory. A push trigger
-# would therefore fail at `uv sync` on every push to main and paint the default branch red for
-# a reason that is not a defect, which is how a badge stops meaning anything. A pull_request run
-# tests the merge of head into base, so the project IS present there and the run is real.
 #
-# ADD `push: branches: [main]` IN THE SAME CHANGE THAT LANDS THE ENGINE ON main, not later:
-# until then main has nothing to test, and afterwards it has everything and no trigger.
+# This file originally ran on pull requests only, because main did not yet contain the Python
+# project and a push trigger would have painted the default branch red at `uv sync` for a
+# reason that was not a defect. The same comment ordered the push trigger added in the change
+# that landed the engine on main. The engine has landed; this is that trigger, so the default
+# branch's green is a statement about main itself and not only about the last merged PR.
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 # A second push to a PR makes the first run's result meaningless, so cancel it rather than
-# leaving two runs whose greens refer to different code.
+# leaving two runs whose greens refer to different code. On main the opposite holds: every
+# pushed merge commit deserves its own completed run, because a cancelled run on an earlier
+# merge leaves that merge unverified forever, so main runs queue instead of cancelling.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
