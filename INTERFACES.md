@@ -330,7 +330,42 @@ This change implements the provider-artifact schema and identity portion of ADR-
 condition 1 and tests relational prerequisites for conditions 6 and 7. It does not by itself prove
 dispatched request-byte equality, inspect or decode provider output bytes, enforce
 validation-before-success in a durable transition system, or establish terminal immutability.
-Those portions remain for the adapter, media verifier, state-machine, and storage changes.
+Those portions remain for the adapter, media verifier, durable terminal-state, and storage changes.
+
+## `attempt_state.py`: pure provider-attempt transition reduction
+
+`reduce_attempt_events(attempt, events)` validates an immutable generation-attempt descriptor and
+reduces its supplied append-order `moodboard.generation-attempt-event.v1` history. It does not sort
+events: sequences must already be exactly contiguous from one in the order supplied. Empty history
+is valid before the initial `prepared` event, and the longest legal v1 history is bounded to five
+events.
+
+The reducer implements the closed ADR-0014 graph:
+
+```text
+prepared -> failed | cancelled | submitted
+submitted -> response_received | failed | cancelled | outcome_unknown
+outcome_unknown -> response_received | failed | cancelled
+response_received -> succeeded | failed
+```
+
+`succeeded`, `failed`, and `cancelled` are terminal. An `outcome_unknown` reconciliation that
+remains unknown does not append a self-transition. Cancellation directly after `prepared` requires
+`local_pre_dispatch`; cancellation after `submitted` or `outcome_unknown` requires
+`provider_confirmed_no_output`. The closed `failure_stage` and `cancellation_stage` values remain
+evidence rather than an unwritten predecessor-state policy. A non-null provider handle may first
+appear after a null handle, but it cannot change within one attempt.
+
+The frozen result exposes current state, terminal status, last event/time, retained provider
+handle, and `(attempt_id, head_event_id, next_sequence)`. That tuple is only a precondition token
+for a later durable compare-and-append operation. This module neither creates a dispatch claim nor
+makes a write atomic. It also does not prove that a topological `succeeded` event references an
+eligible receipt/output set; provider relational validation and the later durable terminal gate own
+that check.
+
+This change supplies the pure transition and terminal-immutability portion of ADR-0014 acceptance
+condition 3. Durable append-only storage, reconciliation I/O, dispatch idempotency, retry/fallback
+policy, and crash/race tests remain separate concerns.
 
 ## `report.py`
 
