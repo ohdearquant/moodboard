@@ -1191,6 +1191,34 @@ def test_non_usd_cost_is_never_mislabeled_as_reported_usd(tmp_path: Path) -> Non
     assert real_e2e.provider_to_json(stored.receipt)["cost"]["currency"] == "EUR"
 
 
+def test_uncertifiable_cost_reaches_the_summary_as_its_own_status(tmp_path: Path) -> None:
+    """A reported cost the adapter cannot certify must not read as absent telemetry."""
+    challenge_dir = tmp_path / "uncertifiable-cost"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+
+    result = _execute(
+        challenge_dir,
+        context_path,
+        transport=lambda **_: _http_response(cost=Decimal("12.50"), currency="usd"),
+    )
+
+    assert result.states[-1] == "succeeded"
+    assert result.reported_cost_usd is None
+    assert result.cost_telemetry_status == "reported_uncertifiable"
+    report = _read_json(challenge_dir / "result.json")
+    assert report["reported_cost_usd"] is None
+    assert report["cost_telemetry_status"] == "reported_uncertifiable"
+    journal = AttemptJournal((challenge_dir / "attempts.sqlite3").resolve())
+    stored = journal.read_provider_response(result.attempt_id)
+    assert real_e2e.provider_to_json(stored.receipt)["cost"] == {
+        "state": "unavailable",
+        "amount": None,
+        "currency": None,
+        "provenance": "reported_uncertifiable",
+    }
+
+
 def test_ambiguous_transport_consumes_challenge_and_can_never_retry(tmp_path: Path) -> None:
     challenge_dir = tmp_path / "ambiguous"
     _prepare(challenge_dir)

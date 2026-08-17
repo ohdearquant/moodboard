@@ -432,7 +432,8 @@ def test_nonconforming_cost_telemetry_degrades_to_unavailable_without_stranding(
         ({"cost": 0.033, "currency": "USDC"}, "reported_uncertifiable"),
         ({"cost": "0.033", "currency": "USD"}, "reported_uncertifiable"),
         ({"cost": -0.033}, "reported_uncertifiable"),
-        ("not-a-telemetry-object", "reported_uncertifiable"),
+        ("not-a-telemetry-object", "not_reported"),
+        ([], "not_reported"),
         ({"note": "usage without a cost key"}, "not_reported"),
     ):
         body = json.dumps(

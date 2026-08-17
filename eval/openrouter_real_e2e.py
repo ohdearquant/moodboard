@@ -2783,6 +2783,10 @@ def _execute_with_token(
             return "ok", result
 
         if dispatch.state.head_event_id is None:
+            # Provider evidence is already on disk past this point, so every exit scans the
+            # private artifacts: the frozen invariant is that credentials cannot survive
+            # local artifacts on any path, not only the returning ones.
+            _scan_private_artifacts(target, token)
             return "response_state_invalid", None
         stored_response = journal.read_provider_response(attempt.attempt_id)
         terminal_at = clock()
@@ -2861,9 +2865,11 @@ def _execute_with_token(
         if len(success.occurrences) != 1 or not isinstance(
             success.occurrences[0], OutputOccurrence
         ):
+            _scan_private_artifacts(target, token)
             return "terminal_occurrence_invalid", None
         occurrence = success.occurrences[0]
         if len(stored_response.output_bytes) != 1:
+            _scan_private_artifacts(target, token)
             return "terminal_occurrence_invalid", None
         output_bytes = stored_response.output_bytes[0]
         structural = verify_output_structure(
@@ -2878,6 +2884,7 @@ def _execute_with_token(
         structural_reason: str | None = None
         if structural_state == "pass":
             if structural.output_raster is None:
+                _scan_private_artifacts(target, token)
                 return "structural_verification_invalid", None
             locality_judgment = verify_outside_mask_rgb_exact(
                 source_raster,
