@@ -80,13 +80,15 @@ jobs:
           cache: npm
           cache-dependency-path: viewer/package-lock.json
 
-      - name: Stage verified viewer package data
+      - name: Stage and test the viewer
         # The Python inliner deliberately consumes only the manifest-verified package-data copy.
-        # Rebuild it from the locked frontend inputs and prove that the committed static output is
-        # byte-identical before the Python matrix exercises the HTML command.
+        # test:ci is a superset of build (fixture/validator drift checks, typecheck, the vitest
+        # suite, then the same build), so the viewer's own tests run here and the committed
+        # static output is proven byte-identical before the Python matrix exercises the HTML
+        # command.
         run: |
           npm --prefix viewer ci
-          npm --prefix viewer run build
+          npm --prefix viewer run test:ci
           git diff --exit-code -- viewer/dist-static
 
       - name: Tests

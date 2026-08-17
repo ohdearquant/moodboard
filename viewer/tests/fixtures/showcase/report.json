@@ -7,7 +7,7 @@
     "n_eff": 12.0,
     "requested_alpha": 0.1,
     "supported_alpha": 0.07692307692307693,
-    "built_at": "2026-08-14T18:47:35Z",
+    "built_at": "2026-08-17T18:58:58Z",
     "representation": {
       "style": {
         "model": "classical-v1",
@@ -650,7 +650,7 @@
       "name": "moodboard",
       "version": "0.1.0",
       "source_repository": "https://github.com/ohdearquant/moodboard.git",
-      "source_revision": "24babdf5215d1590a1fa3d238ceda1a000494edd",
+      "source_revision": "58674e9b0999d690b5f8d97de28158d837059f23",
       "source_dirty": false
     },
     "model": {
@@ -679,7 +679,7 @@
       "20260808"
     ],
     "seed": 20260808,
-    "created_at": "2026-08-14T18:47:37Z",
+    "created_at": "2026-08-17T18:59:02Z",
     "schema": {
       "id": "https://github.com/ohdearquant/moodboard/schema/report_v1_1.schema.json",
       "sha256": "5eb8a20e865612676e89f2cd58ab17108c715102e66d66680a5ceb1cd7626ed8"
