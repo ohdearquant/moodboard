@@ -12,7 +12,8 @@ was measured.
 
 ## Now: close the contract layer (ADR-0012 through ADR-0016)
 
-The five records accepted into `docs/adr/` in August 2026 define the typed judgment vocabulary,
+The five records added to `docs/adr/` in August 2026 (each still `Status: Proposed`, open for
+challenge under the ADR index's rules) define the typed judgment vocabulary,
 the Studio/viewer trust boundary, the frozen intent packet and provider boundary, the human
 comparison lifecycle, and locality verification. Each carries numbered acceptance conditions;
 the current work is the implementation ladder that satisfies them:

@@ -7,7 +7,10 @@ backs the claim and the template for the notes that publish it.
 
 Every box is checked against the exact commit being released, in order.
 
-- [ ] Version bumped in `pyproject.toml`; the version appears nowhere else by hand
+- [ ] Version bumped in `pyproject.toml` and `viewer/package.json` to the same value, with
+      `viewer/package-lock.json` re-synced (`npm --prefix viewer install --package-lock-only`);
+      the version appears nowhere else by hand. One release version is shared by the Python
+      project and the viewer package (ADR-0007)
 - [ ] `uv sync --locked` succeeds from clean; `uv.lock` is current with `pyproject.toml`
 - [ ] `uv run pytest -q -rA` passes in full; xfails are read, not just counted
 - [ ] `uv run ruff check .` is clean
@@ -15,6 +18,8 @@ Every box is checked against the exact commit being released, in order.
 - [ ] Committed `viewer/dist-static` is byte-identical to a fresh build (CI proves this; a
       release re-checks it locally)
 - [ ] A wheel builds from clean and `tests/test_packaging.py` passes against it
+- [ ] The packaged viewer manifest's `viewer_version` equals the Python project version; a
+      release with disagreeing versions is not shippable
 - [ ] Schema versions shipped match the schemas documented; no schema file changed without a
       version change
 - [ ] `CHANGELOG` / release notes drafted from the template below, and every claim in them
