@@ -746,12 +746,71 @@ non-gating telemetry. A terminal provider occurrence is not an aesthetic judgmen
 result separately reports media admission, raw structure/locality, localized-edit gate status,
 workflow acceptance `not_recorded`, semantic/aesthetic `not_run`, and compositor `not_run`.
 
+`finalize_openrouter_real_e2e(challenge_dir: Path, *, _clock=_canonical_timestamp) ->
+OpenRouterRealE2EResult` is the credential-free recovery boundary after the paid operation has
+produced durable provider-response evidence. It has no
+confirmation-context, confirmation-consumer, discovery/source fetcher, credential loader,
+transport, or UUID parameter, and it performs none of those operations. Instead it treats the
+consumed authorization as historical evidence and rederives the exact packet, capability,
+normalized request, wire, run, and attempt from the frozen challenge, plan, confirmation context,
+and artifact bytes before it reads or mutates the journal. A missing journal or drift in that
+closed local evidence fails as `finalization_artifact_invalid` before a new journal or result is
+created.
+
+This first finalizer slice deliberately accepts only these durable journal heads:
+
+| Journal head | Finalizer behavior |
+| --- | --- |
+| `response_received` with admissible media | Publish the success gate through the journal's idempotent CAS, then materialize the provider output and sanitized result. |
+| `response_received` with rejected media | Preserve `response_received`, record the structural failure and `locality:not_run`, and materialize only the sanitized result. |
+| `succeeded` | Read the already committed success package without republishing it, then recover any missing derived output/result after a lost commit acknowledgement. |
+| Any other head, including `submitted` | Fail `finalization_not_ready` without inferring whether the provider observed a request, changing journal state, or authorizing another send. |
+
+Derived-file publication is exact no-clobber. The output is written before `result.json`, which is
+the completion marker for that locally derived journal snapshot; an exact existing file is accepted, but different bytes fail
+`finalization_artifact_conflict` and are never overwritten. A concurrent exact publisher that is
+still between linking its staged file and removing its staging link is not a conflict: the
+reconciliation re-samples the link count a bounded number of times, so only a link that persists
+is reported as a conflict. A staging or filesystem I/O failure (no space, I/O error) fails
+`finalization_artifact_io_failed`; the conflict code is reserved for divergent bytes that were
+found and deliberately preserved. The live execute path shares this
+materialization contract for the same derived files: a byte-identical pre-existing artifact is
+adopted rather than failing the previous `artifact_write_failed` exclusivity, and divergent bytes
+surface as `finalization_artifact_conflict` from execute as well. A structural/locality
+verification that raises is never published as `not_run`: the finalizer fails
+`finalization_artifact_invalid` and the execute path fails the run, so a degraded document can
+never wedge exact replay. Once all derived files exist, exact
+replay returns the same result without changing any file identity, content, mode, or timestamp.
+Failures that are not a closed validation/readiness/conflict outcome collapse to the stable
+`finalization_failed` error. This recovery contract closes the local post-response crash and lost
+acknowledgement window; it is not reconciliation for `submitted` or `outcome_unknown` and is not a
+retry mechanism.
+
+The SQLite journal remains the lifecycle authority. In particular, media rejection deliberately
+leaves the attempt at `response_received`, so a later legal terminal journal writer may supersede
+that sanitized snapshot. The finalizer rechecks the event sequence immediately before publishing
+derived files, but SQLite and filesystem publication are not one atomic transaction; consumers of
+a rejected-media result must re-read the journal head rather than treat `result.json` as a terminal
+provider-state lock.
+
+Challenge-directory binding to its normalized absolute path, device, and inode rejects a copied or
+moved directory at validation checkpoints. It remains a pathname-based owner-only boundary, not a
+descriptor-relative evidence store: this slice does not claim resistance to a malicious same-UID
+process racing a directory rename/replacement between checks, and it does not close the existing
+same-UID rename window during transport dispatch. Descriptor-relative anchoring remains a P2
+hardening item. Each hard process kill after a derived staging file is fsynced but before it is
+linked can leave an owner-only `.openrouter-finalize-*` orphan bounded by the 16 MiB output limit;
+repeated interrupted publications can accumulate multiple such files. Safe cleanup requires
+proving no finalizer is live, so the background disk monitor alerts rather than deleting them
+automatically.
+
 The offline authority helper reads explicitly supplied board and Pixel-RAG artifacts through public validators
 and derives content-bound collection-gate identities. It never repairs stale bytes. The current
 local evidence belongs to a retired projection and fails when explicitly supplied to the current
-reader. Evidence republication, trusted authority-to-session integration, a durable Studio
-confirmation boundary, and a credential-free idempotent post-response finalizer are explicit
-prerequisites to any paid run; this slice performs no provider call and makes no real-run claim.
+reader. Evidence republication, trusted authority-to-session integration, and a durable Studio
+confirmation boundary remain explicit prerequisites to any paid run. The local finalizer removes
+the post-response recovery blocker but does not supply any of those live authorities; this slice
+performs no provider call and makes no real-run claim.
 
 The helper's identity domains are evaluation-local. `eligible_corpus_sha256` hashes RFC 8785 of
 `{schema_version, source_manifest:{catalog_sha256,dataset_id,manifest_sha256}, field, operator,

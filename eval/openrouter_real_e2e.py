@@ -24,6 +24,7 @@ import ssl
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -46,7 +47,7 @@ from eval.openrouter_real_e2e_authority import (  # noqa: E402
     OpenRouterRealE2EAuthority,
     OpenRouterRealE2EAuthorityError,
 )
-from moodboard.attempt_journal import AttemptJournal  # noqa: E402
+from moodboard.attempt_journal import AttemptJournal, AttemptJournalError  # noqa: E402
 from moodboard.contracts import (  # noqa: E402
     compute_document_identity,
     compute_projection_identity,
@@ -102,11 +103,15 @@ from moodboard.provider_artifacts import (  # noqa: E402
 from moodboard.provider_artifacts import (  # noqa: E402
     to_json_dict as provider_to_json,
 )
-from moodboard.provider_media import ProviderMediaAdmissionError  # noqa: E402
+from moodboard.provider_media import (  # noqa: E402
+    ProviderMediaAdmissionError,
+    build_provider_success_candidates,
+)
 
 JsonObject = dict[str, Any]
 
 QUOTE_ADMISSION_LIMIT_USD: Final = Decimal("0.05")
+_STAGING_RECONCILE_ATTEMPTS: Final = 16
 # Compatibility alias for the first RED contract.  This is a quote-admission threshold, never a
 # provider-enforced spending limit.
 MAX_COST_USD: Final = QUOTE_ADMISSION_LIMIT_USD
@@ -220,6 +225,29 @@ class _AuthoritySnapshot:
     payload: bytes = field(repr=False)
     board_artifact_bytes: bytes | None = field(default=None, repr=False)
     pixel_rag_artifact_bytes: bytes | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class _FinalizationInputs:
+    challenge: JsonObject
+    packet: IntentPacket
+    capability: ProviderCapabilitySnapshot
+    prepared: OpenRouterPreparedRequest
+    run: GenerationRun
+    attempt: GenerationAttempt
+    source_bytes: bytes = field(repr=False)
+    source_raster: CanonicalRasterArtifact
+    mask: CanonicalMaskArtifact
+    quote: Decimal
+    discovery_body: bytes = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class _FinalizedProviderEvidence:
+    result: OpenRouterRealE2EResult
+    document: JsonObject
+    output_bytes: bytes | None = field(default=None, repr=False)
+    output_suffix: str | None = None
 
 
 def _fail(code: str) -> NoReturn:
@@ -1252,6 +1280,167 @@ def _write_private_json(path: Path, document: Mapping[str, Any]) -> None:
     _write_private_bytes(path, _json_bytes(document))
 
 
+def _compatible_private_artifact(path: Path, payload: bytes) -> bool:
+    """Return whether an existing derived artifact is byte-identical and owner-private."""
+
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        _fail("finalization_artifact_io_failed")
+    for _ in range(_STAGING_RECONCILE_ATTEMPTS):
+        if metadata.st_nlink <= 1:
+            break
+        # Recover the narrow crash window between atomically linking a staged file at its final
+        # no-clobber name and removing our private staging link.
+        staged_links: list[Path] = []
+        try:
+            for candidate in path.parent.iterdir():
+                if not candidate.name.startswith(".openrouter-finalize-"):
+                    continue
+                try:
+                    candidate_metadata = candidate.lstat()
+                except FileNotFoundError:
+                    # A live peer publisher unlinked its staging link mid-enumeration.
+                    continue
+                if (candidate_metadata.st_dev, candidate_metadata.st_ino) == (
+                    metadata.st_dev,
+                    metadata.st_ino,
+                ):
+                    staged_links.append(candidate)
+            if metadata.st_nlink == len(staged_links) + 1 and staged_links:
+                for candidate in staged_links:
+                    # Another exact replay may have claimed the same crash-window cleanup.
+                    with contextlib.suppress(FileNotFoundError):
+                        candidate.unlink()
+                directory_descriptor = os.open(
+                    path.parent,
+                    os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+                )
+                try:
+                    os.fsync(directory_descriptor)
+                finally:
+                    os.close(directory_descriptor)
+                break
+            # The link count and the enumeration are sampled at different instants, and a live
+            # peer publisher legitimately unlinks its staging link between them. Re-sample;
+            # only a link that persists across every attempt is a conflict.
+            metadata = path.lstat()
+        except OpenRouterRealE2EError:
+            raise
+        except FileNotFoundError:
+            return False
+        except OSError:
+            _fail("finalization_artifact_io_failed")
+    else:
+        _fail("finalization_artifact_conflict")
+    measured = _secure_read_private_file(
+        path,
+        limit=max(1, len(payload)),
+        code="finalization_artifact_conflict",
+    )
+    if measured != payload:
+        _fail("finalization_artifact_conflict")
+    return True
+
+
+def _write_compatible_private_artifact(path: Path, payload: bytes) -> None:
+    """Stage, fsync, and atomically no-clobber-link one derived artifact."""
+
+    if _compatible_private_artifact(path, payload):
+        return
+    descriptor: int | None = None
+    staged_path: Path | None = None
+    try:
+        descriptor, staged_name = tempfile.mkstemp(
+            prefix=".openrouter-finalize-",
+            dir=path.parent,
+        )
+        staged_path = Path(staged_name)
+        os.fchmod(descriptor, 0o600)
+        view = memoryview(payload)
+        written = 0
+        while written < len(view):
+            count = os.write(descriptor, view[written:])
+            if count <= 0:
+                _fail("finalization_artifact_io_failed")
+            written += count
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        try:
+            os.link(staged_path, path, follow_symlinks=False)
+        except FileExistsError:
+            if not _compatible_private_artifact(path, payload):
+                _fail("finalization_artifact_conflict")
+            return
+        try:
+            staged_path.unlink()
+        except FileNotFoundError:
+            # A concurrent exact reader may have completed this crash-window cleanup after the
+            # no-clobber link became visible. The final bytes remain the authority.
+            if not _compatible_private_artifact(path, payload):
+                _fail("finalization_artifact_conflict")
+        staged_path = None
+        directory_descriptor = os.open(
+            path.parent,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except OpenRouterRealE2EError:
+        raise
+    except BaseException:
+        # A staging/link failure here is an I/O condition; the conflict code is reserved for
+        # divergent bytes that were found and deliberately preserved.
+        _fail("finalization_artifact_io_failed")
+    finally:
+        if descriptor is not None:
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+        if staged_path is not None:
+            with contextlib.suppress(OSError):
+                staged_path.unlink()
+
+
+def _materialize_finalized_evidence(
+    target: Path,
+    evidence: _FinalizedProviderEvidence,
+) -> None:
+    """No-clobber the private output first and the sanitized result index last."""
+
+    result_payload = _json_bytes(evidence.document)
+    output_path: Path | None = None
+    if (evidence.output_bytes is None) != (evidence.output_suffix is None):
+        _fail("finalization_artifact_invalid")
+    if evidence.output_bytes is not None and evidence.output_suffix is not None:
+        output_path = target / f"provider-output-0{evidence.output_suffix}"
+
+    expected_output_name = output_path.name if output_path is not None else None
+    try:
+        observed_outputs = tuple(
+            path for path in target.iterdir() if path.name.startswith("provider-output-0.")
+        )
+    except OSError:
+        _fail("finalization_artifact_io_failed")
+    if any(path.name != expected_output_name for path in observed_outputs):
+        _fail("finalization_artifact_conflict")
+
+    output_exists = False
+    if output_path is not None and evidence.output_bytes is not None:
+        output_exists = _compatible_private_artifact(output_path, evidence.output_bytes)
+    result_path = target / "result.json"
+    result_exists = _compatible_private_artifact(result_path, result_payload)
+
+    if output_path is not None and evidence.output_bytes is not None and not output_exists:
+        _write_compatible_private_artifact(output_path, evidence.output_bytes)
+    if not result_exists:
+        _write_compatible_private_artifact(result_path, result_payload)
+
+
 def _artifact_descriptor(payload: bytes, relative_path: str) -> JsonObject:
     if type(payload) is not bytes or not payload or not relative_path:
         _fail("challenge_artifact_invalid")
@@ -1715,9 +1904,13 @@ def prepare_openrouter_real_e2e(
     )
 
 
-def _challenge_snapshot(target: Path) -> tuple[JsonObject, dict[str, bytes], JsonObject]:
+def _challenge_snapshot(
+    target: Path,
+    *,
+    require_unconsumed: bool = True,
+) -> tuple[JsonObject, dict[str, bytes], JsonObject]:
     consumed = target / "consumed.json"
-    if consumed.exists() or consumed.is_symlink():
+    if require_unconsumed and (consumed.exists() or consumed.is_symlink()):
         _fail("challenge_consumed")
     try:
         current_binding = _directory_identity(target, code="challenge_binding_mismatch")
@@ -1930,13 +2123,270 @@ def _confirmation_snapshot(
     return context, payload
 
 
-def _reported_cost_telemetry(dispatch: OpenRouterDispatchResult) -> tuple[Decimal | None, str]:
-    """Return honest post-hoc USD telemetry without turning it into an admission gate."""
+def _historical_confirmation_snapshot(
+    target: Path,
+    *,
+    challenge: Mapping[str, Any],
+) -> JsonObject:
+    """Validate the frozen confirmation identity without applying a new expiry gate."""
 
-    if dispatch.decoded is None:
+    payload = _secure_read_private_file(
+        target / "confirmation-context.snapshot.json",
+        limit=64 * 1024,
+        code="finalization_artifact_invalid",
+    )
+    context = _strict_json_object(
+        payload,
+        limit=64 * 1024,
+        code="finalization_artifact_invalid",
+    )
+    expected_keys = {
+        "schema_version",
+        "confirmation_context_id",
+        "challenge_id",
+        "compact_summary_id",
+        "decision",
+        "authorized_generation_post_count",
+        "principal_id",
+        "studio_session_id",
+        "creative_session_id",
+        "confirmed_at",
+    }
+    if (
+        set(context) != expected_keys
+        or context.get("schema_version") != _CONFIRMATION_CONTEXT_VERSION
+        or context.get("challenge_id") != challenge.get("challenge_id")
+        or context.get("compact_summary_id") != challenge.get("compact_summary_id")
+        or context.get("decision") != "approve_one_paid_call"
+        or type(context.get("authorized_generation_post_count")) is not int
+        or context.get("authorized_generation_post_count") != 1
+        or context.get("creative_session_id") != challenge.get("creative_session_id")
+    ):
+        _fail("finalization_artifact_invalid")
+    _verify_document_identity(
+        context,
+        schema_version=_CONFIRMATION_CONTEXT_VERSION,
+        identity_field="confirmation_context_id",
+        code="finalization_artifact_invalid",
+    )
+    for name in ("principal_id", "studio_session_id", "creative_session_id"):
+        _canonical_uuid(context.get(name), code="finalization_artifact_invalid")
+    prepared_at = _timestamp_value(
+        challenge.get("prepared_at"), code="finalization_artifact_invalid"
+    )
+    expires_at = _timestamp_value(challenge.get("expires_at"), code="finalization_artifact_invalid")
+    confirmed_at = _timestamp_value(
+        context.get("confirmed_at"), code="finalization_artifact_invalid"
+    )
+    if confirmed_at < prepared_at or confirmed_at > expires_at:
+        _fail("finalization_artifact_invalid")
+    return context
+
+
+def _consumption_snapshot(
+    target: Path,
+    *,
+    challenge: Mapping[str, Any],
+    context: Mapping[str, Any],
+) -> JsonObject:
+    payload = _secure_read_private_file(
+        target / "consumed.json",
+        limit=64 * 1024,
+        code="finalization_artifact_invalid",
+    )
+    consumed = _strict_json_object(
+        payload,
+        limit=64 * 1024,
+        code="finalization_artifact_invalid",
+    )
+    if (
+        set(consumed)
+        != {
+            "schema_version",
+            "challenge_id",
+            "confirmation_context_id",
+            "consumed_at",
+        }
+        or consumed.get("schema_version") != "moodboard.openrouter-real-e2e-consumption.v1"
+        or consumed.get("challenge_id") != challenge.get("challenge_id")
+        or consumed.get("confirmation_context_id") != context.get("confirmation_context_id")
+    ):
+        _fail("finalization_artifact_invalid")
+    confirmed_at = _timestamp_value(
+        context.get("confirmed_at"), code="finalization_artifact_invalid"
+    )
+    consumed_at = _timestamp_value(
+        consumed.get("consumed_at"), code="finalization_artifact_invalid"
+    )
+    expires_at = _timestamp_value(challenge.get("expires_at"), code="finalization_artifact_invalid")
+    if consumed_at < confirmed_at or consumed_at > expires_at:
+        _fail("finalization_artifact_invalid")
+    return consumed
+
+
+def _rebuild_finalization_inputs(
+    target: Path,
+    *,
+    challenge: JsonObject,
+    payloads: Mapping[str, bytes],
+) -> _FinalizationInputs:
+    """Rebuild every plan authority solely from the frozen paid-call artifacts."""
+
+    context = _historical_confirmation_snapshot(target, challenge=challenge)
+    _consumption_snapshot(target, challenge=challenge, context=context)
+    plan_payload = _secure_read_private_file(
+        target / "plan.json",
+        limit=16 * 1024 * 1024,
+        code="finalization_artifact_invalid",
+    )
+    plan = _strict_json_object(
+        plan_payload,
+        limit=16 * 1024 * 1024,
+        code="finalization_artifact_invalid",
+    )
+    plan_keys = {
+        "schema_version",
+        "challenge_id",
+        "confirmation_context_id",
+        "quoted_cost_usd",
+        "quote_admission_limit_usd",
+        "spend_limit_kind",
+        "intent_packet",
+        "capability",
+        "normalized_request",
+        "generation_run",
+        "generation_attempt",
+    }
+    if (
+        set(plan) != plan_keys
+        or plan.get("schema_version") != "moodboard.openrouter-real-e2e-plan.v2"
+        or plan.get("challenge_id") != challenge.get("challenge_id")
+        or plan.get("confirmation_context_id") != context.get("confirmation_context_id")
+    ):
+        _fail("finalization_artifact_invalid")
+
+    discovery_body = payloads["discovery"]
+    quote = parse_openrouter_quote(
+        discovery_body,
+        input_count=1,
+        output_count=OUTPUT_COUNT,
+        resolution=RESOLUTION,
+    )
+    if (
+        str(quote) != challenge.get("quoted_cost_usd")
+        or plan.get("quoted_cost_usd") != str(quote)
+        or plan.get("quote_admission_limit_usd") != str(QUOTE_ADMISSION_LIMIT_USD)
+        or plan.get("spend_limit_kind") != "quote_only_not_provider_enforced"
+    ):
+        _fail("finalization_artifact_invalid")
+    with localcontext(_QUOTE_CONTEXT):
+        if quote > QUOTE_ADMISSION_LIMIT_USD:
+            _fail("finalization_artifact_invalid")
+
+    prepared_at = challenge.get("prepared_at")
+    if not isinstance(prepared_at, str):
+        _fail("finalization_artifact_invalid")
+    capability = _build_capability(discovery_body, captured_at=prepared_at)
+    if capability.capability_snapshot_id != challenge.get("capability_snapshot_id"):
+        _fail("finalization_artifact_invalid")
+
+    source_bytes = payloads["source"]
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    try:
+        source_raster = compile_canonical_raster(
+            source_bytes,
+            source_content_sha256=source_sha256,
+        )
+        bounds = _mask_bounds(source_raster)
+        mask = compile_rectangle_mask(
+            source_raster,
+            left=bounds[0],
+            top=bounds[1],
+            right=bounds[2],
+            bottom=bounds[3],
+        )
+    except Exception:
+        _fail("finalization_artifact_invalid")
+    if (
+        mask.mask_bytes != payloads["mask"]
+        or _render_mask_overlay(source_raster, bounds) != payloads["overlay"]
+    ):
+        _fail("finalization_artifact_invalid")
+    authority = _validate_authority_document(
+        _strict_json_object(
+            payloads["authority"],
+            limit=4 * 1024 * 1024,
+            code="finalization_artifact_invalid",
+        )
+    )
+    confirmation_identity = {
+        "compact_summary_id": context["compact_summary_id"],
+        "confirmed_at": context["confirmed_at"],
+        "studio_session_id": context["studio_session_id"],
+        "principal_id": context["principal_id"],
+    }
+    packet = _build_packet(
+        source_bytes=source_bytes,
+        source_raster=source_raster,
+        mask=mask,
+        capability=capability,
+        authority=authority,
+        creative_session_id=str(context["creative_session_id"]),
+        confirmation_identity=confirmation_identity,
+    )
+    if _packet_projection(packet) != challenge.get("packet_projection"):
+        _fail("finalization_artifact_invalid")
+    prepared = _prepare_request(packet, capability, source_bytes)
+    if prepared.wire_body_sha256 != challenge.get(
+        "wire_body_sha256"
+    ) or prepared.wire_body_byte_count != challenge.get("wire_body_byte_count"):
+        _fail("finalization_artifact_invalid")
+    run, attempt = _build_run_and_attempt(
+        packet=packet,
+        capability=capability,
+        prepared=prepared,
+        timestamp=prepared_at,
+        uuid4=uuid.uuid4,
+        generation_run_id=str(challenge.get("generation_run_id")),
+        attempt_id=str(challenge.get("attempt_id")),
+    )
+    expected_plan: JsonObject = {
+        "schema_version": "moodboard.openrouter-real-e2e-plan.v2",
+        "challenge_id": challenge["challenge_id"],
+        "confirmation_context_id": context["confirmation_context_id"],
+        "quoted_cost_usd": str(quote),
+        "quote_admission_limit_usd": str(QUOTE_ADMISSION_LIMIT_USD),
+        "spend_limit_kind": "quote_only_not_provider_enforced",
+        "intent_packet": intent_to_json(packet),
+        "capability": provider_to_json(capability),
+        "normalized_request": provider_to_json(prepared.normalized_request),
+        "generation_run": provider_to_json(run),
+        "generation_attempt": provider_to_json(attempt),
+    }
+    if plan != expected_plan:
+        _fail("finalization_artifact_invalid")
+    return _FinalizationInputs(
+        challenge=challenge,
+        packet=packet,
+        capability=capability,
+        prepared=prepared,
+        run=run,
+        attempt=attempt,
+        source_bytes=source_bytes,
+        source_raster=source_raster,
+        mask=mask,
+        quote=quote,
+        discovery_body=discovery_body,
+    )
+
+
+def _receipt_cost_telemetry(receipt_value: object | None) -> tuple[Decimal | None, str]:
+    """Read honest post-hoc USD telemetry from one immutable provider receipt."""
+
+    if receipt_value is None:
         return None, "not_reported"
     try:
-        receipt = provider_to_json(dispatch.decoded.receipt)
+        receipt = provider_to_json(receipt_value)  # type: ignore[arg-type]
         cost = receipt.get("cost")
         if (
             isinstance(cost, dict)
@@ -1958,6 +2408,211 @@ def _reported_cost_telemetry(dispatch: OpenRouterDispatchResult) -> tuple[Decima
         return measured, "reported"
     except Exception:
         return None, "not_reported"
+
+
+def _reported_cost_telemetry(dispatch: OpenRouterDispatchResult) -> tuple[Decimal | None, str]:
+    """Return honest post-hoc USD telemetry without turning it into an admission gate."""
+
+    receipt = dispatch.decoded.receipt if dispatch.decoded is not None else None
+    return _receipt_cost_telemetry(receipt)
+
+
+def _finalized_provider_evidence(
+    inputs: _FinalizationInputs,
+    journal: AttemptJournal,
+    *,
+    succeeded_at: str | None,
+) -> _FinalizedProviderEvidence:
+    """Derive terminal/local judgments from the journal's immutable response package."""
+
+    attempt_id = inputs.attempt.attempt_id
+    state = journal.read_state(attempt_id)
+    if state.state not in {"response_received", "succeeded"}:
+        _fail("finalization_not_ready")
+    stored_response = journal.read_provider_response(attempt_id)
+    reported_cost, cost_telemetry_status = _receipt_cost_telemetry(stored_response.receipt)
+
+    admission_error: ProviderMediaAdmissionError | None = None
+    if state.state == "response_received":
+        if succeeded_at is None:
+            # A completed invalid-media report must replay without inventing a new timestamp.
+            # Run the same pure candidate derivation used by the journal; valid media still needs
+            # the journal CAS path and therefore reports not-ready to this read-only branch.
+            try:
+                build_provider_success_candidates(
+                    intent_packet=inputs.packet,
+                    generation_run=inputs.run,
+                    attempt=inputs.attempt,
+                    capability=inputs.capability,
+                    normalized_request=inputs.prepared.normalized_request,
+                    receipt=stored_response.receipt,
+                    prior_events=journal.read_events(attempt_id),
+                    output_bytes=stored_response.output_bytes,
+                    succeeded_at=stored_response.event.recorded_at,
+                )
+            except ProviderMediaAdmissionError as error:
+                admission_error = error
+            else:
+                _fail("finalization_not_ready")
+        else:
+            if state.head_event_id is None:
+                _fail("finalization_artifact_invalid")
+            try:
+                journal.publish_provider_success(
+                    attempt_id,
+                    inputs.packet,
+                    inputs.prepared.normalized_request,
+                    succeeded_at=succeeded_at,
+                    expected_head_event_id=state.head_event_id,
+                    expected_next_sequence=state.next_sequence,
+                )
+            except ProviderMediaAdmissionError as error:
+                admission_error = error
+            except BaseException:
+                # A commit may be durable even when its acknowledgement is lost. Re-read the
+                # journal in this same call; only a complete success package authorizes recovery.
+                recovered = journal.read_state(attempt_id)
+                if recovered.state == "succeeded":
+                    pass
+                elif recovered.state != "response_received":
+                    _fail("finalization_not_ready")
+                else:
+                    raise
+
+    if admission_error is not None:
+        structural_document: JsonObject | None = None
+        locality_document: JsonObject | None = None
+        structural_state = "not_run"
+        structural_reason: str | None = None
+        locality_state = "not_run"
+        if len(stored_response.output_bytes) == 1:
+            try:
+                structural = verify_output_structure(
+                    inputs.source_raster,
+                    provider_receipt=stored_response.receipt,
+                    output_index=0,
+                    output_bytes=stored_response.output_bytes[0],
+                    output_occurrence=None,
+                )
+                structural_document = judgment_to_json(structural.judgment)
+                structural_state = str(structural_document["result"]["state"])
+                reason = structural_document["result"].get("reason")
+                structural_reason = reason if isinstance(reason, str) else None
+                locality = build_locality_not_run(structural.judgment, inputs.mask)
+                locality_document = judgment_to_json(locality)
+                locality_state = str(locality_document["result"]["state"])
+            except OpenRouterRealE2EError:
+                raise
+            except Exception:
+                # Fail closed, matching the success branch: publishing "not_run" for a
+                # verification that was attempted and raised would be a false report, and the
+                # degraded bytes would wedge exact replay behind an artifact conflict.
+                _fail("finalization_artifact_invalid")
+        journal.verify_integrity()
+        result = OpenRouterRealE2EResult(
+            generation_run_id=inputs.run.generation_run_id,
+            attempt_id=attempt_id,
+            provider_receipt_id=stored_response.receipt.provider_receipt_id,
+            output_occurrence_id=None,
+            quoted_cost_usd=inputs.quote,
+            reported_cost_usd=reported_cost,
+            cost_telemetry_status=cost_telemetry_status,
+            states=tuple(event.state for event in journal.read_events(attempt_id)),
+            generation_post_count=1,
+            provider_media_admission_result=admission_error.code,
+            raw_structural_result=structural_state,
+            raw_structural_reason=structural_reason,
+            raw_locality_result=locality_state,
+        )
+        return _FinalizedProviderEvidence(
+            result=result,
+            document=_result_document(
+                result,
+                source_sha256=hashlib.sha256(inputs.source_bytes).hexdigest(),
+                source_content_ref=blake3(inputs.source_bytes).hexdigest(),
+                mask_sha256=inputs.mask.mask_sha256,
+                discovery_sha256=hashlib.sha256(inputs.discovery_body).hexdigest(),
+                wire_sha256=inputs.prepared.wire_body_sha256,
+                wire_byte_count=inputs.prepared.wire_body_byte_count,
+                structural=structural_document,
+                locality=locality_document,
+            ),
+        )
+
+    success = journal.read_provider_success(attempt_id)
+    journal.verify_integrity()
+    if len(success.occurrences) != 1 or not isinstance(success.occurrences[0], OutputOccurrence):
+        _fail("finalization_artifact_invalid")
+    occurrence = success.occurrences[0]
+    if len(stored_response.output_bytes) != 1:
+        _fail("finalization_artifact_invalid")
+    output_bytes = stored_response.output_bytes[0]
+    try:
+        structural = verify_output_structure(
+            inputs.source_raster,
+            provider_receipt=stored_response.receipt,
+            output_index=0,
+            output_bytes=output_bytes,
+            output_occurrence=occurrence,
+        )
+        structural_document = judgment_to_json(structural.judgment)
+        structural_state = str(structural_document["result"]["state"])
+        structural_reason: str | None = None
+        if structural_state == "pass":
+            if structural.output_raster is None:
+                _fail("finalization_artifact_invalid")
+            locality_judgment = verify_outside_mask_rgb_exact(
+                inputs.source_raster,
+                structural.output_raster,
+                inputs.mask,
+                output_occurrence=occurrence,
+                structural_pass=structural.judgment,
+            )
+        else:
+            locality_judgment = build_locality_not_run(structural.judgment, inputs.mask)
+            reason = structural_document["result"].get("reason")
+            structural_reason = reason if isinstance(reason, str) else None
+        locality_document = judgment_to_json(locality_judgment)
+        locality_state = str(locality_document["result"]["state"])
+    except OpenRouterRealE2EError:
+        raise
+    except Exception:
+        _fail("finalization_artifact_invalid")
+    result = OpenRouterRealE2EResult(
+        generation_run_id=inputs.run.generation_run_id,
+        attempt_id=attempt_id,
+        provider_receipt_id=stored_response.receipt.provider_receipt_id,
+        output_occurrence_id=occurrence.output_occurrence_id,
+        quoted_cost_usd=inputs.quote,
+        reported_cost_usd=reported_cost,
+        cost_telemetry_status=cost_telemetry_status,
+        states=tuple(event.state for event in journal.read_events(attempt_id)),
+        generation_post_count=1,
+        provider_media_admission_result="pass",
+        raw_structural_result=structural_state,
+        raw_structural_reason=structural_reason,
+        raw_locality_result=locality_state,
+    )
+    output_mime = occurrence.original.get("mime")
+    if output_mime not in {"image/png", "image/jpeg"}:
+        _fail("finalization_artifact_invalid")
+    output_suffix = ".png" if output_mime == "image/png" else ".jpg"
+    return _FinalizedProviderEvidence(
+        result=result,
+        document=_result_document(
+            result,
+            source_sha256=hashlib.sha256(inputs.source_bytes).hexdigest(),
+            source_content_ref=blake3(inputs.source_bytes).hexdigest(),
+            mask_sha256=inputs.mask.mask_sha256,
+            discovery_sha256=hashlib.sha256(inputs.discovery_body).hexdigest(),
+            wire_sha256=inputs.prepared.wire_body_sha256,
+            wire_byte_count=inputs.prepared.wire_body_byte_count,
+            structural=structural_document,
+            locality=locality_document,
+        ),
+        output_bytes=output_bytes,
+        output_suffix=output_suffix,
+    )
 
 
 def _claim_challenge_consumption(
@@ -2126,16 +2781,19 @@ def _execute_with_token(
                 reported_cost=reported_cost,
                 cost_telemetry_status=cost_telemetry_status,
             )
-            _write_private_json(
-                target / "result.json",
-                _result_document(
-                    result,
-                    source_sha256=hashlib.sha256(source_bytes).hexdigest(),
-                    source_content_ref=blake3(source_bytes).hexdigest(),
-                    mask_sha256=mask.mask_sha256,
-                    discovery_sha256=hashlib.sha256(discovery_body).hexdigest(),
-                    wire_sha256=prepared.wire_body_sha256,
-                    wire_byte_count=prepared.wire_body_byte_count,
+            _materialize_finalized_evidence(
+                target,
+                _FinalizedProviderEvidence(
+                    result=result,
+                    document=_result_document(
+                        result,
+                        source_sha256=hashlib.sha256(source_bytes).hexdigest(),
+                        source_content_ref=blake3(source_bytes).hexdigest(),
+                        mask_sha256=mask.mask_sha256,
+                        discovery_sha256=hashlib.sha256(discovery_body).hexdigest(),
+                        wire_sha256=prepared.wire_body_sha256,
+                        wire_byte_count=prepared.wire_body_byte_count,
+                    ),
                 ),
             )
             _scan_private_artifacts(target, token)
@@ -2165,27 +2823,23 @@ def _execute_with_token(
             structural_reason: str | None = None
             locality_state = "not_run"
             if len(stored_response.output_bytes) == 1:
-                try:
-                    structural = verify_output_structure(
-                        source_raster,
-                        provider_receipt=stored_response.receipt,
-                        output_index=0,
-                        output_bytes=stored_response.output_bytes[0],
-                        output_occurrence=None,
-                    )
-                    structural_document = judgment_to_json(structural.judgment)
-                    structural_state = str(structural_document["result"]["state"])
-                    reason = structural_document["result"].get("reason")
-                    structural_reason = reason if isinstance(reason, str) else None
-                    locality = build_locality_not_run(structural.judgment, mask)
-                    locality_document = judgment_to_json(locality)
-                    locality_state = str(locality_document["result"]["state"])
-                except Exception:
-                    structural_document = None
-                    locality_document = None
-                    structural_state = "not_run"
-                    structural_reason = None
-                    locality_state = "not_run"
+                # A verification that raises fails the run closed rather than being published
+                # as "not_run". The journal keeps the durable evidence at response_received,
+                # and the credential-free finalizer is the recovery path.
+                structural = verify_output_structure(
+                    source_raster,
+                    provider_receipt=stored_response.receipt,
+                    output_index=0,
+                    output_bytes=stored_response.output_bytes[0],
+                    output_occurrence=None,
+                )
+                structural_document = judgment_to_json(structural.judgment)
+                structural_state = str(structural_document["result"]["state"])
+                reason = structural_document["result"].get("reason")
+                structural_reason = reason if isinstance(reason, str) else None
+                locality = build_locality_not_run(structural.judgment, mask)
+                locality_document = judgment_to_json(locality)
+                locality_state = str(locality_document["result"]["state"])
             # ADR-0014 keeps media/provenance rejection at response_received.  The structural
             # judgment and locality not_run evidence remain visible without forging a terminal
             # provider failure or a selectable output occurrence.
@@ -2205,18 +2859,21 @@ def _execute_with_token(
                 raw_structural_reason=structural_reason,
                 raw_locality_result=locality_state,
             )
-            _write_private_json(
-                target / "result.json",
-                _result_document(
-                    result,
-                    source_sha256=hashlib.sha256(source_bytes).hexdigest(),
-                    source_content_ref=blake3(source_bytes).hexdigest(),
-                    mask_sha256=mask.mask_sha256,
-                    discovery_sha256=hashlib.sha256(discovery_body).hexdigest(),
-                    wire_sha256=prepared.wire_body_sha256,
-                    wire_byte_count=prepared.wire_body_byte_count,
-                    structural=structural_document,
-                    locality=locality_document,
+            _materialize_finalized_evidence(
+                target,
+                _FinalizedProviderEvidence(
+                    result=result,
+                    document=_result_document(
+                        result,
+                        source_sha256=hashlib.sha256(source_bytes).hexdigest(),
+                        source_content_ref=blake3(source_bytes).hexdigest(),
+                        mask_sha256=mask.mask_sha256,
+                        discovery_sha256=hashlib.sha256(discovery_body).hexdigest(),
+                        wire_sha256=prepared.wire_body_sha256,
+                        wire_byte_count=prepared.wire_body_byte_count,
+                        structural=structural_document,
+                        locality=locality_document,
+                    ),
                 ),
             )
             _scan_private_artifacts(target, token)
@@ -2277,29 +2934,41 @@ def _execute_with_token(
         )
         output_mime = str(occurrence.original["mime"])
         output_suffix = ".png" if output_mime == "image/png" else ".jpg"
-        _write_private_bytes(target / f"provider-output-0{output_suffix}", output_bytes)
-        _write_private_json(
-            target / "result.json",
-            _result_document(
-                result,
-                source_sha256=hashlib.sha256(source_bytes).hexdigest(),
-                source_content_ref=blake3(source_bytes).hexdigest(),
-                mask_sha256=mask.mask_sha256,
-                discovery_sha256=hashlib.sha256(discovery_body).hexdigest(),
-                wire_sha256=prepared.wire_body_sha256,
-                wire_byte_count=prepared.wire_body_byte_count,
-                structural=structural_document,
-                locality=locality_document,
+        _materialize_finalized_evidence(
+            target,
+            _FinalizedProviderEvidence(
+                result=result,
+                document=_result_document(
+                    result,
+                    source_sha256=hashlib.sha256(source_bytes).hexdigest(),
+                    source_content_ref=blake3(source_bytes).hexdigest(),
+                    mask_sha256=mask.mask_sha256,
+                    discovery_sha256=hashlib.sha256(discovery_body).hexdigest(),
+                    wire_sha256=prepared.wire_body_sha256,
+                    wire_byte_count=prepared.wire_body_byte_count,
+                    structural=structural_document,
+                    locality=locality_document,
+                ),
+                output_bytes=output_bytes,
+                output_suffix=output_suffix,
             ),
         )
         _scan_private_artifacts(target, token)
         return "ok", result
     except OpenRouterRealE2EError as error:
-        # The secret-scan verdicts are the one diagnostic built to be unambiguous; every
-        # other failure still collapses to the generic code so no detail can carry a secret.
+        # The secret-scan verdicts are produced by the scan itself, so returning them without
+        # rescanning is sound. Every other exit runs the terminal scan first and its verdict
+        # outranks the collapse; only when the scan is clean may an unambiguous diagnostic
+        # (the artifact-materialization conflict) survive verbatim. All codes are static
+        # literal strings, so no detail can carry a secret.
         if error.code in {"credential_material_persisted", "artifact_secret_scan_failed"}:
             return error.code, None
-        return _terminal_scan_status(target, token), None
+        status = _terminal_scan_status(target, token)
+        if status != "execution_failed":
+            return status, None
+        if error.code == "finalization_artifact_conflict":
+            return error.code, None
+        return "execution_failed", None
     except BaseException:
         return _terminal_scan_status(target, token), None
     finally:
@@ -2500,6 +3169,151 @@ def execute_openrouter_real_e2e(
     )
     token = ""
     token_value = None
+    if status != "ok" or result is None:
+        _fail(status)
+    return result
+
+
+def _finalize_openrouter_real_e2e_local_scope(
+    target: Path,
+    *,
+    clock: Callable[[], str],
+) -> tuple[str, OpenRouterRealE2EResult | None]:
+    """Contain local provider evidence so public failures retain only a stable code."""
+
+    try:
+        challenge, payloads, _summary = _challenge_snapshot(
+            target,
+            require_unconsumed=False,
+        )
+        try:
+            inputs = _rebuild_finalization_inputs(
+                target,
+                challenge=challenge,
+                payloads=payloads,
+            )
+        except OpenRouterRealE2EError as error:
+            if error.code in {"challenge_artifact_drift", "challenge_binding_mismatch"}:
+                raise
+            _fail("finalization_artifact_invalid")
+
+        journal_path = target / "attempts.sqlite3"
+        try:
+            journal_metadata = journal_path.lstat()
+        except OSError:
+            _fail("finalization_artifact_invalid")
+        if (
+            not stat.S_ISREG(journal_metadata.st_mode)
+            or journal_metadata.st_uid != os.getuid()
+            or journal_metadata.st_nlink != 1
+            or stat.S_IMODE(journal_metadata.st_mode) != 0o600
+            or journal_metadata.st_size <= 0
+        ):
+            _fail("finalization_artifact_invalid")
+        try:
+            journal = AttemptJournal(journal_path.resolve())
+            if (
+                journal.read_run(inputs.run.generation_run_id) != inputs.run
+                or journal.read_attempt(inputs.attempt.attempt_id) != inputs.attempt
+            ):
+                _fail("finalization_artifact_invalid")
+            state = journal.read_state(inputs.attempt.attempt_id)
+            if state.state == "succeeded":
+                evidence = _finalized_provider_evidence(inputs, journal, succeeded_at=None)
+            elif state.state == "response_received":
+                result_path = target / "result.json"
+                try:
+                    observed_outputs = tuple(
+                        path
+                        for path in target.iterdir()
+                        if path.name.startswith("provider-output-0.")
+                    )
+                except OSError:
+                    _fail("finalization_artifact_io_failed")
+                if observed_outputs:
+                    refreshed = journal.read_state(inputs.attempt.attempt_id)
+                    if refreshed.state == "succeeded":
+                        evidence = _finalized_provider_evidence(
+                            inputs,
+                            journal,
+                            succeeded_at=None,
+                        )
+                    elif refreshed.state == "response_received":
+                        _fail("finalization_artifact_conflict")
+                    else:
+                        _fail("finalization_not_ready")
+                elif result_path.exists() or result_path.is_symlink():
+                    refreshed = journal.read_state(inputs.attempt.attempt_id)
+                    if refreshed.state == "succeeded":
+                        evidence = _finalized_provider_evidence(
+                            inputs,
+                            journal,
+                            succeeded_at=None,
+                        )
+                    elif refreshed.state != "response_received":
+                        _fail("finalization_not_ready")
+                    else:
+                        try:
+                            evidence = _finalized_provider_evidence(
+                                inputs,
+                                journal,
+                                succeeded_at=None,
+                            )
+                        except OpenRouterRealE2EError as error:
+                            if error.code == "finalization_not_ready":
+                                _fail("finalization_artifact_conflict")
+                            raise
+                else:
+                    ok, succeeded_at_value = _call_sanitized(clock)
+                    if not ok or not isinstance(succeeded_at_value, str):
+                        _fail("clock_invalid")
+                    succeeded_at_time = _timestamp_value(
+                        succeeded_at_value,
+                        code="clock_invalid",
+                    )
+                    if state.last_recorded_at is None or succeeded_at_time < _timestamp_value(
+                        state.last_recorded_at,
+                        code="finalization_artifact_invalid",
+                    ):
+                        _fail("clock_invalid")
+                    evidence = _finalized_provider_evidence(
+                        inputs,
+                        journal,
+                        succeeded_at=succeeded_at_value,
+                    )
+            else:
+                _fail("finalization_not_ready")
+            fresh_states = tuple(
+                event.state for event in journal.read_events(inputs.attempt.attempt_id)
+            )
+            if fresh_states != evidence.result.states:
+                _fail("finalization_not_ready")
+            _materialize_finalized_evidence(target, evidence)
+            return "ok", evidence.result
+        except AttemptJournalError:
+            _fail("finalization_artifact_invalid")
+    except OpenRouterRealE2EError as error:
+        return error.code, None
+    except BaseException:
+        return "finalization_failed", None
+
+
+def finalize_openrouter_real_e2e(
+    challenge_dir: Path,
+    *,
+    _clock: Callable[[], str] = _canonical_timestamp,
+) -> OpenRouterRealE2EResult:
+    """Finish a paid response using only frozen local artifacts and the durable journal."""
+
+    if not callable(_clock):
+        _fail("evaluation_callable_invalid")
+    path_ok, target = _call_sanitized(lambda: Path(challenge_dir))
+    if not path_ok or not isinstance(target, Path):
+        _fail("finalization_artifact_invalid")
+    status, result = _finalize_openrouter_real_e2e_local_scope(
+        target,
+        clock=_clock,
+    )
     if status != "ok" or result is None:
         _fail(status)
     return result
