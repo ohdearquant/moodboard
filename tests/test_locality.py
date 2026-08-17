@@ -305,6 +305,41 @@ def test_manifest_drift_fails_before_compilation() -> None:
     assert captured.value.code == "compiler_manifest_mismatch"
 
 
+def test_registered_linux_zlib_compatibility_label_uses_the_same_zlib_ng_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = locality_module._runtime_manifest()
+    monkeypatch.setattr(
+        locality_module,
+        "_runtime_manifest",
+        lambda: replace(runtime, zlib_version="1.3"),
+    )
+    payload = base64.b64decode(_PNG_GOLDEN, validate=True)
+    raster = compile_canonical_raster(
+        payload,
+        source_content_sha256=hashlib.sha256(payload).hexdigest(),
+    )
+    assert raster.rgb_bytes == bytes((1, 2, 3, 4, 5, 6))
+
+
+def test_unregistered_zlib_compatibility_label_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = locality_module._runtime_manifest()
+    monkeypatch.setattr(
+        locality_module,
+        "_runtime_manifest",
+        lambda: replace(runtime, zlib_version="1.2.13"),
+    )
+    payload = base64.b64decode(_PNG_GOLDEN, validate=True)
+    with pytest.raises(LocalityError, match="manifest") as captured:
+        compile_canonical_raster(
+            payload,
+            source_content_sha256=hashlib.sha256(payload).hexdigest(),
+        )
+    assert captured.value.code == "compiler_manifest_mismatch"
+
+
 def test_registered_compiler_calls_are_serialized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -236,6 +236,10 @@ The registered compiler revision is
 package, Pillow core, JPEG ABI, libjpeg-turbo, zlib/zlib-ng, LittleCMS, truncated-image policy,
 Pillow pixel guard, format limits, and ICC profile digest must all equal the frozen
 `RasterCompilerManifest`; drift fails operationally before an evidence judgment is minted.
+Pillow's macOS wheel reports the zlib-ng 2.3.3 compatibility API as `1.3.1.zlib-ng`, while its
+manylinux wheel reports the same registered zlib-ng build as `1.3`. Those are the only two accepted
+compatibility labels; zlib-ng itself, every other linked component, and the byte certificates remain
+exact. Any third label fails closed.
 Pillow is therefore an exact dependency pin, not a compatible range. The first compiler call also
 runs embedded byte-level PNG, PNG+ICC, and progressive RGB JPEG+ICC+EXIF certificates. These pin
 the decoded RGB bytes and raster identities across an otherwise eligible platform wheel; a build

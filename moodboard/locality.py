@@ -17,7 +17,7 @@ import threading
 import warnings
 import zlib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cache
 from io import BytesIO
 from typing import Any
@@ -143,6 +143,7 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _JPEG_SIGNATURE = b"\xff\xd8"
 _DIGEST_CHARS = frozenset("0123456789abcdef")
 _COMPILER_LOCK = threading.RLock()
+_ACCEPTED_ZLIB_COMPATIBILITY_VERSIONS = frozenset({"1.3", "1.3.1.zlib-ng"})
 _PNG_ALLOWED_CRITICAL_CHUNKS = frozenset({b"IHDR", b"PLTE", b"IDAT", b"IEND"})
 _PNG_UNSUPPORTED_COLOR_CHUNKS = frozenset({b"sBIT", b"cICP", b"mDCv", b"cLLi"})
 _PNG_SRGB_CHROMATICITIES = (31270, 32900, 64000, 33000, 30000, 60000, 15000, 6000)
@@ -302,7 +303,14 @@ def _require_manifest(manifest: RasterCompilerManifest) -> None:
             "compiler manifest does not equal the registered raster compiler manifest",
         )
     runtime_manifest = _runtime_manifest()
-    if runtime_manifest != DEFAULT_COMPILER_MANIFEST:
+    normalized_runtime_manifest = replace(
+        runtime_manifest,
+        zlib_version=DEFAULT_COMPILER_MANIFEST.zlib_version,
+    )
+    if (
+        runtime_manifest.zlib_version not in _ACCEPTED_ZLIB_COMPATIBILITY_VERSIONS
+        or normalized_runtime_manifest != DEFAULT_COMPILER_MANIFEST
+    ):
         raise LocalityError(
             "compiler_manifest_mismatch",
             "runtime Pillow codec build does not equal the registered compiler manifest: "
