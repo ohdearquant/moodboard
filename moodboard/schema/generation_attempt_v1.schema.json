@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/generation_attempt_v1.schema.json",
+  "title": "Moodboard generation attempt v1",
+  "description": "Immutable provider-call attempt descriptor. Runtime state is represented by append-only event artifacts.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "attempt_id",
+    "generation_run_id",
+    "intent_packet_id",
+    "ordinal",
+    "retry_of",
+    "fallback_of",
+    "requested_provider",
+    "requested_model",
+    "provider_route_policy_id",
+    "selected_route_id",
+    "adapter_revision",
+    "capability_snapshot_id",
+    "normalized_request_id",
+    "normalized_request_ref",
+    "request_key_sha256",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": { "const": "moodboard.generation-attempt.v1" },
+    "attempt_id": { "$ref": "#/$defs/canonicalUuid" },
+    "generation_run_id": { "$ref": "#/$defs/canonicalUuid" },
+    "intent_packet_id": { "$ref": "#/$defs/digest" },
+    "ordinal": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "retry_of": { "$ref": "#/$defs/nullableUuid" },
+    "fallback_of": { "$ref": "#/$defs/nullableUuid" },
+    "requested_provider": { "$ref": "#/$defs/boundedToken" },
+    "requested_model": { "$ref": "#/$defs/boundedToken" },
+    "provider_route_policy_id": { "$ref": "#/$defs/digest" },
+    "selected_route_id": { "$ref": "#/$defs/boundedToken" },
+    "adapter_revision": { "$ref": "#/$defs/versionToken" },
+    "capability_snapshot_id": { "$ref": "#/$defs/digest" },
+    "normalized_request_id": { "$ref": "#/$defs/digest" },
+    "normalized_request_ref": { "$ref": "#/$defs/artifactReference" },
+    "request_key_sha256": { "$ref": "#/$defs/digest" },
+    "created_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "not": {
+        "properties": {
+          "retry_of": { "$ref": "#/$defs/canonicalUuid" },
+          "fallback_of": { "$ref": "#/$defs/canonicalUuid" }
+        },
+        "required": ["retry_of", "fallback_of"]
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "canonicalUuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "nullableUuid": {
+      "oneOf": [
+        { "$ref": "#/$defs/canonicalUuid" },
+        { "type": "null" }
+      ]
+    },
+    "boundedToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "versionToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+    },
+    "safePositiveCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "minLength": 20,
+      "maxLength": 40
+    },
+    "artifactReference": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "artifact_id",
+        "content_ref",
+        "content_sha256",
+        "byte_count"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.normalized-provider-request.v1" },
+        "artifact_id": { "$ref": "#/$defs/digest" },
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "content_sha256": { "$ref": "#/$defs/digest" },
+        "byte_count": { "$ref": "#/$defs/safePositiveCount" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

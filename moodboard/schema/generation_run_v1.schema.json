@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/generation_run_v1.schema.json",
+  "title": "Moodboard generation run v1",
+  "description": "Immutable user-invoked generation-run occurrence for ADR-0014.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generation_run_id",
+    "creative_session_id",
+    "intent_packet_id",
+    "requested_provider",
+    "requested_model",
+    "provider_route_policy_id",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": { "const": "moodboard.generation-run.v1" },
+    "generation_run_id": { "$ref": "#/$defs/canonicalUuid" },
+    "creative_session_id": { "$ref": "#/$defs/canonicalUuid" },
+    "intent_packet_id": { "$ref": "#/$defs/digest" },
+    "requested_provider": { "$ref": "#/$defs/boundedToken" },
+    "requested_model": { "$ref": "#/$defs/boundedToken" },
+    "provider_route_policy_id": { "$ref": "#/$defs/digest" },
+    "created_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "canonicalUuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "boundedToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "minLength": 20,
+      "maxLength": 40
+    }
+  }
+}

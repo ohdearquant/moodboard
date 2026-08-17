@@ -243,6 +243,95 @@ normalized provider requests, provider receipts, output occurrences, dispatch/re
 actual provider I/O. Those remain separate contracts and PRs. In particular, it does not complete
 ADR-0012's `selectable_output_occurrence` union or claim that a provider-backed run occurred.
 
+## `provider_artifacts.py`: closed provider artifacts and P0 relational validation
+
+ADR-0014's provider handoff uses seven independent, closed Draft 2020-12 wire artifacts:
+
+- `moodboard.generation-run.v1` records one user-invoked run UUID;
+- `moodboard.generation-attempt.v1` records one Moodboard-initiated provider-call UUID;
+- `moodboard.generation-attempt-event.v1` records one event intended for a later append-only
+  attempt stream;
+- `moodboard.provider-capability-snapshot.v1` records one declared capability projection and its
+  evidence reference;
+- `moodboard.normalized-provider-request.v1` records the secret-redacted request projection
+  proposed for dispatch;
+- `moodboard.provider-receipt.v1` records response evidence without inventing absent provider
+  claims; and
+- `moodboard.output-occurrence.v1` records one output slot carrying a passing producer-supplied
+  media-validation record.
+
+The schemas live in `moodboard/schema/` and use an offline registry that includes their
+intent-packet dependencies. Nested objects are closed and bounded. Python values returned by
+`from_json_dict` are frozen and slotted, and `to_json_dict` revalidates direct dataclass
+construction. This is in-process value immutability; this module does not provide append-only or
+immutable durable storage.
+
+Run and attempt ids are caller-supplied canonical UUIDs because deliberately repeating a packet
+creates new occurrences. Event, capability, normalized-request, and receipt ids are
+domain-separated RFC 8785 SHA-256 identities over their complete documents minus the identity
+field. The request key binds run, attempt, packet, adapter, and normalized-request identities.
+Output identity uses the ADR-fixed `{attempt_id,output_index}` projection, with a zero-based index.
+Within one supplied bundle, the relational validator rejects duplicate or conflicting output
+keys; persistent uniqueness remains a storage/runtime responsibility.
+
+The supported producer surface is deliberately small. `seal_provider_artifact` copies a draft,
+derives the registered identity for an event, capability, normalized request, receipt, or output,
+then validates and freezes it. It rejects prefilled identities and never signs run/attempt UUIDs.
+`build_normalized_request_ref` derives the exact SHA-256, BLAKE3 ContentRef, and byte count of the
+canonical request artifact. `compute_provider_request_key` is the only public implementation of
+the request-key projection. Network dispatch, timestamps, UUID allocation, retry policy, and
+storage remain outside these helpers.
+
+`validate_artifact_bundle` validates one bounded, complete P0 response/output bundle: exactly one
+run, one ordinal-one attempt, one capability snapshot, one normalized request, one receipt, the
+required event records, and every recorded output. It is not a general validator for preflight
+failures, cancellation, terminal `outcome_unknown`, reconciliation, retries, fallbacks, or
+multi-attempt run history. A complete bundle may contain one `outcome_unknown` only when a later
+`response_received` resolves it before the terminal event.
+
+Within that narrow bundle it checks:
+
+- packet/run/attempt equality for requested provider/model, adapter, destination, route policy,
+  options, operation-input delivery, and ordered reference use;
+- that the declared capability projection authorizes the recorded count, options, input modes,
+  roles, output media bounds, and shared source-plus-reference image budget;
+- the SHA-256, BLAKE3 ContentRef, and byte count of the canonical RFC 8785 serialization of the
+  normalized-request artifact;
+- the structural consistency of the closed, secret-redacted OpenRouter body projection, including
+  endpoint, method, declared `ContentPartImage` field paths, reference authority/order, route pin,
+  and disabled fallback; transport mode and transport-value SHA-256 remain recorded claims for the
+  adapter's wire-byte-equivalence check;
+- equality among recorded receipt/output digests, byte counts, media facts, admission, and packet
+  lineage; and
+- exactly the prepared, submitted, optional single resolved-outcome-unknown, response-received,
+  and terminal event trace plus the receipt/output ids required by this complete P0 bundle.
+
+These checks do not observe the actual network request or response bytes. The provider adapter
+must separately prove that the dispatched wire request corresponds to the normalized projection.
+The OpenRouter P0 arm accepts `locality_mask.delivery_mode:not_sent` only; a native mask or overlay
+requires a separately registered transport contract. Local preservation is therefore enforced by
+the later deterministic compositor and exact verifier, not attributed to OpenRouter.
+
+The OpenRouter capability arm records a discovery endpoint, declared capability fields, and a
+`{ContentRef, SHA-256, byte_count}` reference to a private discovery-response artifact. This
+validator neither loads nor rehashes those discovery bytes and does not prove that the declared
+fields were extracted from them. A listed route is capability evidence, not proof that it served a
+response.
+
+When an API omits actual-model, upstream-route, or media-type claims, the receipt can preserve
+`actual_model:undisclosed`, `upstream_route:unknown`, and `media_type_claim:null`; it does not copy
+requested values into actual fields. An attested model or upstream tag that conflicts with the
+confirmed route makes otherwise valid output bytes ineligible. A receipt that claims attestation
+unsupported by the capability invalidates the bundle. Raw response bytes are either explicitly
+retained by immutable reference or explicitly marked `not_retained` with a closed reason. Actual
+response parsing and provenance extraction belong to the provider adapter.
+
+This change implements the provider-artifact schema and identity portion of ADR-0014 acceptance
+condition 1 and tests relational prerequisites for conditions 6 and 7. It does not by itself prove
+dispatched request-byte equality, inspect or decode provider output bytes, enforce
+validation-before-success in a durable transition system, or establish terminal immutability.
+Those portions remain for the adapter, media verifier, state-machine, and storage changes.
+
 ## `report.py`
 
 ### The axis vocabulary

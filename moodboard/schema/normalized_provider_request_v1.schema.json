@@ -1,0 +1,364 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/normalized_provider_request_v1.schema.json",
+  "title": "Moodboard normalized provider request v1",
+  "description": "Content-addressed, secret-free projection of the exact provider dispatch boundary.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "normalized_request_id",
+    "intent_packet_id",
+    "requested_provider",
+    "requested_model",
+    "selected_route_id",
+    "provider_route_policy_id",
+    "adapter_revision",
+    "capability_snapshot_id",
+    "prompt",
+    "output_count",
+    "options",
+    "operation_inputs",
+    "reference_use",
+    "destination",
+    "provider_body"
+  ],
+  "properties": {
+    "schema_version": { "const": "moodboard.normalized-provider-request.v1" },
+    "normalized_request_id": { "$ref": "#/$defs/digest" },
+    "intent_packet_id": { "$ref": "#/$defs/digest" },
+    "requested_provider": { "$ref": "#/$defs/boundedToken" },
+    "requested_model": { "$ref": "#/$defs/boundedToken" },
+    "selected_route_id": { "$ref": "#/$defs/boundedToken" },
+    "provider_route_policy_id": { "$ref": "#/$defs/digest" },
+    "adapter_revision": { "$ref": "#/$defs/versionToken" },
+    "capability_snapshot_id": { "$ref": "#/$defs/digest" },
+    "prompt": { "$ref": "#/$defs/prompt" },
+    "output_count": { "type": "integer", "minimum": 1, "maximum": 8 },
+    "options": {
+      "oneOf": [
+        {
+          "$ref": "https://github.com/ohdearquant/moodboard/schema/intent_packet_v1.schema.json#/$defs/openRouterImagesOptions"
+        },
+        {
+          "$ref": "https://github.com/ohdearquant/moodboard/schema/intent_packet_v1.schema.json#/$defs/noGenerationOptions"
+        }
+      ]
+    },
+    "operation_inputs": {
+      "$ref": "https://github.com/ohdearquant/moodboard/schema/intent_packet_v1.schema.json#/$defs/operationInputs"
+    },
+    "reference_use": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/referenceUse" }
+    },
+    "destination": {
+      "$ref": "https://github.com/ohdearquant/moodboard/schema/intent_packet_v1.schema.json#/$defs/destination"
+    },
+    "provider_body": {
+      "oneOf": [
+        { "$ref": "#/$defs/openRouterBody" },
+        { "$ref": "#/$defs/noProviderBody" }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": { "requested_provider": { "const": "openrouter" } },
+        "required": ["requested_provider"]
+      },
+      "then": {
+        "properties": {
+          "options": {
+            "$ref": "https://github.com/ohdearquant/moodboard/schema/intent_packet_v1.schema.json#/$defs/openRouterImagesOptions"
+          },
+          "provider_body": { "$ref": "#/$defs/openRouterBody" }
+        }
+      },
+      "else": {
+        "properties": {
+          "options": {
+            "$ref": "https://github.com/ohdearquant/moodboard/schema/intent_packet_v1.schema.json#/$defs/noGenerationOptions"
+          },
+          "provider_body": { "$ref": "#/$defs/noProviderBody" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "canonicalUuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "boundedToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "versionToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+    },
+    "providerField": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z][A-Za-z0-9_.\\[\\]-]*$"
+    },
+    "nullableProviderField": {
+      "oneOf": [
+        { "$ref": "#/$defs/providerField" },
+        { "type": "null" }
+      ]
+    },
+    "nullableProviderRole": {
+      "oneOf": [
+        { "$ref": "#/$defs/boundedToken" },
+        { "type": "null" }
+      ]
+    },
+    "nullableDigest": {
+      "oneOf": [
+        { "$ref": "#/$defs/digest" },
+        { "type": "null" }
+      ]
+    },
+    "nullablePosition": {
+      "oneOf": [
+        { "type": "integer", "minimum": 0, "maximum": 1023 },
+        { "type": "null" }
+      ]
+    },
+    "prompt": {
+      "type": "object",
+      "required": ["text", "compiler_revision"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1, "maxLength": 32768 },
+        "compiler_revision": { "$ref": "#/$defs/versionToken" }
+      },
+      "additionalProperties": false
+    },
+    "promptContext": {
+      "type": "object",
+      "required": ["compiler_revision", "text_items"],
+      "properties": {
+        "compiler_revision": { "$ref": "#/$defs/versionToken" },
+        "text_items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "nullablePromptContext": {
+      "oneOf": [
+        { "$ref": "#/$defs/promptContext" },
+        { "type": "null" }
+      ]
+    },
+    "referenceUse": {
+      "type": "object",
+      "required": [
+        "reference_occurrence_id",
+        "provider_use",
+        "provider_position",
+        "provider_field",
+        "provider_role",
+        "content_sha256",
+        "prompt_context"
+      ],
+      "properties": {
+        "reference_occurrence_id": { "$ref": "#/$defs/canonicalUuid" },
+        "provider_use": {
+          "enum": ["attached_image", "prompt_context_only", "not_sent"]
+        },
+        "provider_position": { "$ref": "#/$defs/nullablePosition" },
+        "provider_field": { "$ref": "#/$defs/nullableProviderField" },
+        "provider_role": { "$ref": "#/$defs/nullableProviderRole" },
+        "content_sha256": { "$ref": "#/$defs/nullableDigest" },
+        "prompt_context": { "$ref": "#/$defs/nullablePromptContext" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "provider_use": { "const": "attached_image" } },
+            "required": ["provider_use"]
+          },
+          "then": {
+            "properties": {
+              "provider_position": { "type": "integer", "minimum": 0, "maximum": 1023 },
+              "provider_field": { "$ref": "#/$defs/providerField" },
+              "provider_role": { "$ref": "#/$defs/boundedToken" },
+              "content_sha256": { "$ref": "#/$defs/digest" },
+              "prompt_context": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "provider_use": { "const": "prompt_context_only" } },
+            "required": ["provider_use"]
+          },
+          "then": {
+            "properties": {
+              "provider_position": { "type": "null" },
+              "provider_field": { "type": "null" },
+              "provider_role": { "type": "null" },
+              "content_sha256": { "type": "null" },
+              "prompt_context": { "$ref": "#/$defs/promptContext" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "provider_use": { "const": "not_sent" } },
+            "required": ["provider_use"]
+          },
+          "then": {
+            "properties": {
+              "provider_position": { "type": "null" },
+              "provider_field": { "type": "null" },
+              "provider_role": { "type": "null" },
+              "content_sha256": { "type": "null" },
+              "prompt_context": { "type": "null" }
+            }
+          }
+        }
+      ]
+    },
+    "openRouterInputReference": {
+      "type": "object",
+      "description": "Secret-free projection of one exact OpenRouter ContentPartImage transport item; URL/data bytes are represented by identity rather than persisted here.",
+      "required": [
+        "position",
+        "provider_field",
+        "item_type",
+        "transport",
+        "media_type",
+        "role",
+        "source_kind",
+        "source_id",
+        "content_sha256",
+        "transport_value_sha256"
+      ],
+      "properties": {
+        "position": { "type": "integer", "minimum": 0, "maximum": 32 },
+        "provider_field": {
+          "type": "string",
+          "minLength": 33,
+          "maxLength": 34,
+          "pattern": "^input_references\\[(0|[1-9]|[12][0-9]|3[0-2])\\]\\.image_url\\.url$"
+        },
+        "item_type": { "const": "image_url" },
+        "transport": { "enum": ["data_url", "https_url"] },
+        "media_type": { "enum": ["image/png", "image/jpeg", "image/webp"] },
+        "role": { "enum": ["source_image", "visual_context"] },
+        "source_kind": { "enum": ["operation_input", "reference_occurrence"] },
+        "source_id": { "$ref": "#/$defs/canonicalUuid" },
+        "content_sha256": { "$ref": "#/$defs/digest" },
+        "transport_value_sha256": {
+          "$ref": "#/$defs/digest",
+          "description": "SHA-256 of the exact UTF-8 image_url.url string dispatched; distinct from decoded image-byte content_sha256."
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "role": { "const": "source_image" } },
+            "required": ["role"]
+          },
+          "then": {
+            "properties": { "source_kind": { "const": "operation_input" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "role": { "const": "visual_context" } },
+            "required": ["role"]
+          },
+          "then": {
+            "properties": { "source_kind": { "const": "reference_occurrence" } }
+          }
+        }
+      ]
+    },
+    "openRouterProviderPin": {
+      "type": "object",
+      "required": ["only", "allow_fallbacks"],
+      "properties": {
+        "only": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/boundedToken" }
+        },
+        "allow_fallbacks": {
+          "const": false,
+          "description": "Provider-internal fallback is disabled; a Moodboard fallback is a new, disclosed attempt."
+        }
+      },
+      "additionalProperties": false
+    },
+    "openRouterBody": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "method",
+        "endpoint_path",
+        "model",
+        "prompt",
+        "n",
+        "seed",
+        "resolution",
+        "aspect_ratio",
+        "input_references",
+        "provider"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.openrouter-images-body-projection.v1" },
+        "method": { "const": "POST" },
+        "endpoint_path": { "const": "/api/v1/images" },
+        "model": { "$ref": "#/$defs/boundedToken" },
+        "prompt": { "type": "string", "minLength": 1, "maxLength": 32768 },
+        "n": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "resolution": { "enum": ["1K", "2K", "4K"] },
+        "aspect_ratio": {
+          "enum": ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
+        },
+        "input_references": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 33,
+          "items": { "$ref": "#/$defs/openRouterInputReference" }
+        },
+        "provider": { "$ref": "#/$defs/openRouterProviderPin" }
+      },
+      "additionalProperties": false
+    },
+    "noProviderBody": {
+      "type": "object",
+      "required": ["schema_version"],
+      "properties": {
+        "schema_version": { "const": "moodboard.provider-body.none.v1" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

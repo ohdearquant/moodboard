@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/output_occurrence_v1.schema.json",
+  "title": "Moodboard raw generator output occurrence v1",
+  "description": "Decoded, bounded generator output identified only by its attempt id and zero-based output index.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "output_occurrence_id",
+    "producer_kind",
+    "attempt_id",
+    "output_index",
+    "role",
+    "generation_run_id",
+    "intent_packet_id",
+    "normalized_request_id",
+    "provider_receipt_id",
+    "original",
+    "media_validation",
+    "admission",
+    "lineage"
+  ],
+  "properties": {
+    "schema_version": { "const": "moodboard.output-occurrence.v1" },
+    "output_occurrence_id": { "$ref": "#/$defs/digest" },
+    "producer_kind": { "const": "generator_raw" },
+    "attempt_id": { "$ref": "#/$defs/canonicalUuid" },
+    "output_index": { "type": "integer", "minimum": 0, "maximum": 7 },
+    "role": { "const": "generated_image" },
+    "generation_run_id": { "$ref": "#/$defs/canonicalUuid" },
+    "intent_packet_id": { "$ref": "#/$defs/digest" },
+    "normalized_request_id": { "$ref": "#/$defs/digest" },
+    "provider_receipt_id": { "$ref": "#/$defs/digest" },
+    "original": { "$ref": "#/$defs/originalImage" },
+    "media_validation": { "$ref": "#/$defs/mediaValidation" },
+    "admission": {
+      "oneOf": [
+        { "$ref": "#/$defs/eligibleAdmission" },
+        { "$ref": "#/$defs/rejectedAdmission" }
+      ]
+    },
+    "lineage": { "$ref": "#/$defs/lineage" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "canonicalUuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "boundedToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "safePositiveCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "dimension": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32768
+    },
+    "imageMime": {
+      "type": "string",
+      "minLength": 7,
+      "maxLength": 127,
+      "pattern": "^image/[a-z0-9][a-z0-9.+-]*$"
+    },
+    "originalImage": {
+      "type": "object",
+      "required": [
+        "content_ref",
+        "content_sha256",
+        "mime",
+        "byte_count",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "content_sha256": { "$ref": "#/$defs/digest" },
+        "mime": { "$ref": "#/$defs/imageMime" },
+        "byte_count": { "$ref": "#/$defs/safePositiveCount" },
+        "width": { "$ref": "#/$defs/dimension" },
+        "height": { "$ref": "#/$defs/dimension" }
+      },
+      "additionalProperties": false
+    },
+    "mediaValidation": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "state",
+        "decoder_revision",
+        "measured_content_sha256",
+        "measured_content_ref",
+        "measured_byte_count",
+        "measured_mime",
+        "measured_width",
+        "measured_height",
+        "measured_mode",
+        "frame_count",
+        "active_content",
+        "bounded"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.media-validation.v1" },
+        "state": { "const": "pass" },
+        "decoder_revision": { "$ref": "#/$defs/boundedToken" },
+        "measured_content_sha256": { "$ref": "#/$defs/digest" },
+        "measured_content_ref": { "$ref": "#/$defs/digest" },
+        "measured_byte_count": { "$ref": "#/$defs/safePositiveCount" },
+        "measured_mime": { "$ref": "#/$defs/imageMime" },
+        "measured_width": { "$ref": "#/$defs/dimension" },
+        "measured_height": { "$ref": "#/$defs/dimension" },
+        "measured_mode": { "enum": ["RGB", "RGBA"] },
+        "frame_count": { "const": 1 },
+        "active_content": { "const": false },
+        "bounded": { "const": true }
+      },
+      "additionalProperties": false
+    },
+    "eligibleAdmission": {
+      "type": "object",
+      "required": ["state", "rejection_reasons"],
+      "properties": {
+        "state": { "const": "eligible" },
+        "rejection_reasons": { "type": "array", "maxItems": 0 }
+      },
+      "additionalProperties": false
+    },
+    "rejectedAdmission": {
+      "type": "object",
+      "required": ["state", "rejection_reasons"],
+      "properties": {
+        "state": { "const": "rejected" },
+        "rejection_reasons": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "actual_model_conflict",
+              "upstream_route_conflict",
+              "provenance_mismatch"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "lineage": {
+      "type": "object",
+      "required": [
+        "source_asset_id",
+        "source_content_sha256",
+        "reference_occurrence_ids"
+      ],
+      "properties": {
+        "source_asset_id": { "$ref": "#/$defs/canonicalUuid" },
+        "source_content_sha256": { "$ref": "#/$defs/digest" },
+        "reference_occurrence_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/canonicalUuid" }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

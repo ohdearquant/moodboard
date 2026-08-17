@@ -1,0 +1,430 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ohdearquant/moodboard/schema/provider_capability_snapshot_v1.schema.json",
+  "title": "Moodboard provider capability snapshot v1",
+  "description": "Content-addressed, bounded capability evidence captured before provider dispatch.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "capability_snapshot_id",
+    "captured_at",
+    "adapter_revision",
+    "provider",
+    "requested_model",
+    "input_modalities",
+    "image_input_budget",
+    "outputs",
+    "options",
+    "operation_input_capabilities",
+    "actual_model_disclosure",
+    "upstream_route_disclosure",
+    "idempotency",
+    "reconciliation",
+    "provider_specific"
+  ],
+  "properties": {
+    "schema_version": { "const": "moodboard.provider-capability-snapshot.v1" },
+    "capability_snapshot_id": { "$ref": "#/$defs/digest" },
+    "captured_at": { "$ref": "#/$defs/timestamp" },
+    "adapter_revision": { "$ref": "#/$defs/versionToken" },
+    "provider": { "$ref": "#/$defs/boundedToken" },
+    "requested_model": { "$ref": "#/$defs/boundedToken" },
+    "input_modalities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": { "enum": ["text", "image"] }
+    },
+    "image_input_budget": { "$ref": "#/$defs/imageInputBudget" },
+    "outputs": { "$ref": "#/$defs/outputCapabilities" },
+    "options": {
+      "oneOf": [
+        { "$ref": "#/$defs/openRouterOptionsCapability" },
+        { "$ref": "#/$defs/noOptionsCapability" }
+      ]
+    },
+    "operation_input_capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/operationInputCapability" }
+    },
+    "actual_model_disclosure": { "enum": ["attested", "not_attested"] },
+    "upstream_route_disclosure": { "enum": ["attested", "not_attested"] },
+    "idempotency": { "$ref": "#/$defs/idempotency" },
+    "reconciliation": { "$ref": "#/$defs/reconciliation" },
+    "provider_specific": {
+      "oneOf": [
+        { "$ref": "#/$defs/openRouterCapability" },
+        { "$ref": "#/$defs/noProviderCapability" }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": { "provider": { "const": "openrouter" } },
+        "required": ["provider"]
+      },
+      "then": {
+        "properties": {
+          "options": { "$ref": "#/$defs/openRouterOptionsCapability" },
+          "provider_specific": { "$ref": "#/$defs/openRouterCapability" }
+        }
+      },
+      "else": {
+        "properties": {
+          "options": { "$ref": "#/$defs/noOptionsCapability" },
+          "provider_specific": { "$ref": "#/$defs/noProviderCapability" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "boundedToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
+    },
+    "versionToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+    },
+    "providerField": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z][A-Za-z0-9_.\\[\\]-]*$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "minLength": 20,
+      "maxLength": 40
+    },
+    "imageInputBudget": {
+      "type": "object",
+      "description": "One total provider image-input budget shared by source images and attached visual references.",
+      "required": [
+        "supported",
+        "max_count",
+        "ordered",
+        "source_and_references_share_budget",
+        "provider_roles"
+      ],
+      "properties": {
+        "supported": { "type": "boolean" },
+        "max_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024
+        },
+        "ordered": { "type": "boolean" },
+        "source_and_references_share_budget": { "const": true },
+        "provider_roles": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/boundedToken" }
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "supported": { "const": false } },
+            "required": ["supported"]
+          },
+          "then": {
+            "properties": {
+              "max_count": { "const": 0 },
+              "ordered": { "const": false },
+              "provider_roles": { "maxItems": 0 }
+            }
+          },
+          "else": {
+            "properties": { "max_count": { "minimum": 1 } }
+          }
+        }
+      ]
+    },
+    "outputCapabilities": {
+      "type": "object",
+      "required": [
+        "min_count",
+        "max_count",
+        "mime_types",
+        "resolutions",
+        "aspect_ratios",
+        "max_width",
+        "max_height"
+      ],
+      "properties": {
+        "min_count": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "max_count": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "mime_types": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 7,
+            "maxLength": 127,
+            "pattern": "^image/[a-z0-9][a-z0-9.+-]*$"
+          }
+        },
+        "resolutions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/boundedToken" }
+        },
+        "aspect_ratios": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,4}:[1-9][0-9]{0,4}$"
+          }
+        },
+        "max_width": { "type": "integer", "minimum": 1, "maximum": 32768 },
+        "max_height": { "type": "integer", "minimum": 1, "maximum": 32768 }
+      },
+      "additionalProperties": false
+    },
+    "openRouterOptionsCapability": {
+      "type": "object",
+      "required": ["schema_version", "seed_supported", "resolutions", "aspect_ratios"],
+      "properties": {
+        "schema_version": {
+          "const": "moodboard.openrouter-images-options-capability.v1"
+        },
+        "seed_supported": { "type": "boolean" },
+        "resolutions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "enum": ["1K", "2K", "4K"] }
+        },
+        "aspect_ratios": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "noOptionsCapability": {
+      "type": "object",
+      "required": ["schema_version"],
+      "properties": {
+        "schema_version": { "const": "moodboard.generation-options-capability.none.v1" }
+      },
+      "additionalProperties": false
+    },
+    "operationInputCapability": {
+      "type": "object",
+      "required": [
+        "capability_id",
+        "role",
+        "delivery_modes",
+        "provider_roles",
+        "provider_fields"
+      ],
+      "properties": {
+        "capability_id": { "$ref": "#/$defs/digest" },
+        "role": { "enum": ["source_image", "locality_mask"] },
+        "delivery_modes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "native_input",
+              "attached_control",
+              "native_mask",
+              "attached_overlay",
+              "prompt_only",
+              "not_sent"
+            ]
+          }
+        },
+        "provider_roles": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/boundedToken" }
+        },
+        "provider_fields": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/providerField" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "idempotency": {
+      "type": "object",
+      "required": [
+        "provider_accepts_key",
+        "deduplication_scope",
+        "retention_seconds",
+        "ambiguous_transport_retransmit_safe"
+      ],
+      "properties": {
+        "provider_accepts_key": { "type": "boolean" },
+        "deduplication_scope": {
+          "oneOf": [
+            { "$ref": "#/$defs/boundedToken" },
+            { "type": "null" }
+          ]
+        },
+        "retention_seconds": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1, "maximum": 31536000 },
+            { "type": "null" }
+          ]
+        },
+        "ambiguous_transport_retransmit_safe": { "type": "boolean" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "provider_accepts_key": { "const": false } },
+            "required": ["provider_accepts_key"]
+          },
+          "then": {
+            "properties": {
+              "deduplication_scope": { "type": "null" },
+              "retention_seconds": { "type": "null" },
+              "ambiguous_transport_retransmit_safe": { "const": false }
+            }
+          },
+          "else": {
+            "properties": {
+              "deduplication_scope": { "$ref": "#/$defs/boundedToken" },
+              "retention_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 31536000
+              }
+            }
+          }
+        }
+      ]
+    },
+    "reconciliation": {
+      "type": "object",
+      "required": ["supported", "provider_handle_kind"],
+      "properties": {
+        "supported": { "type": "boolean" },
+        "provider_handle_kind": {
+          "oneOf": [
+            { "$ref": "#/$defs/boundedToken" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "supported": { "const": false } },
+            "required": ["supported"]
+          },
+          "then": {
+            "properties": { "provider_handle_kind": { "type": "null" } }
+          },
+          "else": {
+            "properties": {
+              "provider_handle_kind": { "$ref": "#/$defs/boundedToken" }
+            }
+          }
+        }
+      ]
+    },
+    "openRouterCapability": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "endpoint_path",
+        "discovery_endpoint_path",
+        "upstream_provider_tags",
+        "input_reference_parameter",
+        "supports_streaming",
+        "allowed_passthrough_parameters",
+        "discovery_response"
+      ],
+      "properties": {
+        "schema_version": { "const": "moodboard.openrouter-images-capability.v1" },
+        "endpoint_path": { "const": "/api/v1/images" },
+        "discovery_endpoint_path": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 1024,
+          "pattern": "^/api/v1/images/models/[A-Za-z0-9._~!$&'()*+,;=:@%-]+/[A-Za-z0-9._~!$&'()*+,;=:@%-]+/endpoints$"
+        },
+        "upstream_provider_tags": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/boundedToken" }
+        },
+        "input_reference_parameter": { "const": "input_references" },
+        "supports_streaming": { "type": "boolean" },
+        "allowed_passthrough_parameters": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/boundedToken" }
+        },
+        "discovery_response": { "$ref": "#/$defs/contentArtifact" }
+      },
+      "additionalProperties": false
+    },
+    "contentArtifact": {
+      "type": "object",
+      "required": ["content_ref", "content_sha256", "byte_count"],
+      "properties": {
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "content_sha256": { "$ref": "#/$defs/digest" },
+        "byte_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    },
+    "noProviderCapability": {
+      "type": "object",
+      "required": ["schema_version"],
+      "properties": {
+        "schema_version": { "const": "moodboard.provider-capability.none.v1" }
+      },
+      "additionalProperties": false
+    }
+  }
+}
