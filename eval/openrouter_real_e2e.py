@@ -371,7 +371,7 @@ def _parse_json(raw: bytes, *, code: str, max_bytes: int) -> JsonObject:
         raise
     except Exception:
         _fail(code)
-    _bounded_tree(value)
+    _bounded_tree(value, code=code)
     if not isinstance(value, dict):
         _fail(code)
     return value
@@ -2948,9 +2948,9 @@ def _execute_with_token(
             "finalization_artifact_conflict",
         }:
             return error.code, None
-        return "execution_failed", None
+        return _terminal_scan_status(target, token), None
     except BaseException:
-        return "execution_failed", None
+        return _terminal_scan_status(target, token), None
     finally:
         journal = None
         token = ""
@@ -3398,6 +3398,27 @@ def _secret_variants(token: str) -> tuple[bytes, ...]:
         json.dumps(token, ensure_ascii=True)[1:-1].encode("ascii"),
     }
     return tuple(sorted(values, key=lambda item: (len(item), item)))
+
+
+def _terminal_scan_status(target: Path, token: str) -> str:
+    """Scan the private artifacts on an abnormal exit; the scan verdict outranks the collapse.
+
+    The frozen invariant is that credentials cannot survive local artifacts on any path. The
+    ordinary exits scan explicitly before returning; this covers the exits that unwound through
+    the generic handlers, where the artifacts on disk are exactly the ones nothing re-checked.
+    """
+
+    if not isinstance(token, str) or not token:
+        return "execution_failed"
+    try:
+        _scan_private_artifacts(target, token)
+    except OpenRouterRealE2EError as error:
+        if error.code in {"credential_material_persisted", "artifact_secret_scan_failed"}:
+            return error.code
+        return "artifact_secret_scan_failed"
+    except BaseException:
+        return "artifact_secret_scan_failed"
+    return "execution_failed"
 
 
 def _scan_private_artifacts(output_dir: Path, token: str) -> None:
