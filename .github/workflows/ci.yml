@@ -15,13 +15,15 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# A second push to a PR makes the first run's result meaningless, so cancel it rather than
-# leaving two runs whose greens refer to different code. On main the opposite holds: every
-# pushed merge commit deserves its own completed run, because a cancelled run on an earlier
-# merge leaves that merge unverified forever, so main runs queue instead of cancelling.
+# A second push to a PR makes the first run's result meaningless, so PR runs share a group
+# keyed by ref and the newer push cancels the older run. On main the opposite holds: every
+# pushed merge commit deserves its own completed run. A shared group cannot deliver that,
+# because GitHub keeps at most one pending run per group and replaces it even with
+# cancel-in-progress false -- under rapid merges the middle commit would silently lose its
+# run. So each main push gets its own group keyed by commit and runs to completion.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 permissions:
   contents: read
