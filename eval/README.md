@@ -122,7 +122,10 @@ The first recovery slice is intentionally narrow:
 The provider output is created before `result.json`, and `result.json` is the completion marker for
 that locally derived journal snapshot.
 Both writes are exact no-clobber: byte-identical artifacts replay without mutation, while an
-existing conflicting artifact fails `finalization_artifact_conflict` and is not replaced. Missing
+existing conflicting artifact fails `finalization_artifact_conflict` and is not replaced. A live
+concurrent exact publisher observed between its link and its staging cleanup converges rather
+than failing, and a staging I/O failure reports `finalization_artifact_io_failed`, never the
+conflict code. Missing
 or drifted frozen evidence fails locally before finalization. Absolute-path/device/inode checks
 reject copied or moved challenge directories at their checkpoints, but this remains a pathname-
 based, owner-only trust boundary. Descriptor-relative anchoring against a malicious same-UID

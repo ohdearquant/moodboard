@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import errno
 import hashlib
 import inspect
 import json
+import os
 import shutil
 import stat
 import threading
@@ -1007,3 +1009,55 @@ def test_finalize_sanitizes_hostile_pathlike_conversion() -> None:
     assert raised.value.__cause__ is None
     assert raised.value.__context__ is None
     assert _TOKEN not in _exception_graph_material(raised.value)
+
+
+def test_a_live_peer_unlink_between_link_count_and_enumeration_converges(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A publisher between its final link and its staging cleanup is not a conflict."""
+    private_dir = tmp_path / "artifacts"
+    private_dir.mkdir()
+    private_dir.chmod(0o700)
+    final = private_dir / "result.json"
+    payload = b'{"ok": true}\n'
+    descriptor = os.open(final, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(descriptor, payload)
+    finally:
+        os.close(descriptor)
+    staging = private_dir / ".openrouter-finalize-peer"
+    os.link(final, staging)
+    assert final.lstat().st_nlink == 2
+
+    real_iterdir = Path.iterdir
+
+    def racing_iterdir(self: Path) -> Any:
+        entries = list(real_iterdir(self))
+        if self == private_dir and staging in entries:
+            # The peer finishes its cleanup after our link-count sample, before enumeration.
+            staging.unlink()
+            entries = [entry for entry in entries if entry != staging]
+        return iter(entries)
+
+    monkeypatch.setattr(Path, "iterdir", racing_iterdir)
+    assert _REAL_E2E._compatible_private_artifact(final, payload) is True
+    assert final.lstat().st_nlink == 1
+    assert final.read_bytes() == payload
+
+
+def test_a_staging_io_failure_reports_its_own_code_not_a_conflict(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No space is not divergent bytes: the conflict code must stay unambiguous."""
+    private_dir = tmp_path / "artifacts"
+    private_dir.mkdir()
+    private_dir.chmod(0o700)
+
+    def failing_mkstemp(*_args: Any, **_kwargs: Any) -> Any:
+        raise OSError(errno.ENOSPC, "no space left on device")
+
+    monkeypatch.setattr(real_e2e.tempfile, "mkstemp", failing_mkstemp)
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _REAL_E2E._write_compatible_private_artifact(private_dir / "result.json", b"{}\n")
+    _assert_error_code(raised, "finalization_artifact_io_failed")
+    assert not (private_dir / "result.json").exists()

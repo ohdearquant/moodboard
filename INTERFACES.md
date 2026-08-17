@@ -768,7 +768,12 @@ This first finalizer slice deliberately accepts only these durable journal heads
 
 Derived-file publication is exact no-clobber. The output is written before `result.json`, which is
 the completion marker for that locally derived journal snapshot; an exact existing file is accepted, but different bytes fail
-`finalization_artifact_conflict` and are never overwritten. The live execute path shares this
+`finalization_artifact_conflict` and are never overwritten. A concurrent exact publisher that is
+still between linking its staged file and removing its staging link is not a conflict: the
+reconciliation re-samples the link count a bounded number of times, so only a link that persists
+is reported as a conflict. A staging or filesystem I/O failure (no space, I/O error) fails
+`finalization_artifact_io_failed`; the conflict code is reserved for divergent bytes that were
+found and deliberately preserved. The live execute path shares this
 materialization contract for the same derived files: a byte-identical pre-existing artifact is
 adopted rather than failing the previous `artifact_write_failed` exclusivity, and divergent bytes
 surface as `finalization_artifact_conflict` from execute as well. A structural/locality
