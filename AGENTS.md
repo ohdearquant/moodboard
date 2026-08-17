@@ -88,10 +88,11 @@ are not check-gated today: `pixel-rag-bridge.json` has a `pixel-rag:check` scrip
 invokes, and `report-validators.d.mts` has no drift check at all — hand edits there are
 unprotected, so verify those two yourself.
 
-`firefly-bridge.json` is a projection of a recorded measured run: the script reads
-`.cache/showcase-firefly-v1*` inputs that are not in the repository and refuses to overwrite
-an existing bridge file. Regenerating it requires that cache plus a fresh `--write` path moved
-into place. Without the cache, the committed copy is the recorded artifact — verify it with
+`firefly-bridge.json` is a projection of a recorded measured run: the script reads inputs
+under `.cache/showcase-firefly-v1/` and `.cache/showcase-firefly-khive-v1/evidence/` (neither
+is in the repository; a fresh checkout has no `.cache/`) and refuses to overwrite an existing
+bridge file. Regenerating it requires both cache roots plus a fresh `--write` path moved into
+place. Without them, the committed copy is the recorded artifact — verify it with
 `firefly:check`; do not delete it expecting to rebuild it.
 
 ## Contracts and where they are decided
