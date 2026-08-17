@@ -1462,7 +1462,7 @@ def _canonical_attempt(value: GenerationAttempt | Mapping[str, Any]) -> Generati
     return artifact
 
 
-def _decimal_cost(value: Any) -> dict[str, Any]:
+def _decimal_cost(value: Any, currency: Any = None) -> dict[str, Any]:
     if value is None:
         return {
             "state": "unavailable",
@@ -1470,6 +1470,12 @@ def _decimal_cost(value: Any) -> dict[str, Any]:
             "currency": None,
             "provenance": "not_reported",
         }
+    measured_currency = "USD" if currency is None else currency
+    if (
+        not isinstance(measured_currency, str)
+        or re.fullmatch(r"[A-Z]{3}", measured_currency) is None
+    ):
+        raise OpenRouterAdapterError("invalid_provider_response", "provider response is invalid")
     if isinstance(value, bool) or not isinstance(value, (int, Decimal)):
         raise OpenRouterAdapterError("invalid_provider_response", "provider response is invalid")
     try:
@@ -1512,7 +1518,7 @@ def _decimal_cost(value: Any) -> dict[str, Any]:
     return {
         "state": "reported",
         "amount": amount,
-        "currency": "USD",
+        "currency": measured_currency,
         "provenance": "provider_receipt",
     }
 
@@ -1637,7 +1643,10 @@ def decode_openrouter_response(
     usage = document.get("usage")
     if usage is not None and not isinstance(usage, dict):
         raise OpenRouterAdapterError("invalid_provider_response", "provider response is invalid")
-    cost = _decimal_cost(None if usage is None else usage.get("cost"))
+    cost = _decimal_cost(
+        None if usage is None else usage.get("cost"),
+        None if usage is None else usage.get("currency"),
+    )
     draft = {
         "schema_version": RECEIPT_VERSION,
         "attempt_id": descriptor.attempt_id,

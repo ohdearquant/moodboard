@@ -77,3 +77,56 @@ outcome, since the two differ by how far apart the styles are. It does not make 
 worthless, and it does make the claim narrower. The rule is that the record is not accepted
 as written, the claim is narrowed to the domain that passed, and the narrowing goes in the
 README where a reader will see it rather than in a footnote.
+
+## OpenRouter real-provider evaluation is a two-stage confirmation
+
+`openrouter_real_e2e.py` is an opt-in evaluation harness, not a general provider CLI. Preparation
+fetches and freezes exact discovery and public source bytes, compiles the authoritative rectangle
+mask and visible overlay, binds the board/retrieval authority, computes the exact provider wire
+identity, and writes an owner-only confirmation challenge. Preparation has no credential or
+transport parameter and cannot dispatch.
+
+Execution requires a separate, closed confirmation context that names the exact challenge and
+compact summary, one enrolled principal, one Studio session, the same creative session, and one
+fresh explicit approval. A document hash alone is not Studio authority: the production API has no
+default confirmer and fails `confirmation_authority_unavailable` until a trusted Studio boundary
+that atomically verifies and consumes the authorization is supplied. The retired Boolean
+`authorize_one_paid_call` entry point always fails
+`two_phase_confirmation_required`; the command line only reports the missing trusted-authority
+integration and cannot prepare or dispatch a live challenge.
+
+After all frozen bytes, identities, timestamps, directory inode, reconstructed wire, and a fresh
+byte-identical discovery response agree, a caller-supplied Studio boundary must atomically and
+durably consume the confirmation before Keychain access. This repository does not implement that
+ledger: the default rejects execution, while the injected offline seam proves one-process CAS and
+local `O_EXCL` concurrency behavior only. Credential-bearing work is contained in a non-raising
+inner scope, core dumps are disabled before Keychain access, and private response and output bytes
+remain in the owner-only journal/run directory.
+
+The fixed `$0.05` value is a **quote-admission limit**, not a provider-enforced spending cap. It is
+checked against the exact live discovery pricing before source access. Reported cost is post-hoc
+telemetry: missing, differently reported, or unexpectedly high telemetry cannot undo a charge and
+therefore does not strand an otherwise valid provider response before terminal media admission.
+Reports distinguish provider lifecycle state, media admission, raw structural/locality evidence,
+localized-edit gate status, workflow acceptance (`not_recorded`), semantic/aesthetic judgment
+(`not_run`), and compositor execution (`not_run`).
+
+No paid call is currently authorized. The available local Pixel-RAG evidence uses a retired
+projection and fails the current public reader when supplied explicitly. A separately governed
+evidence republication, a trusted authority-to-creative-session integration, a durable Studio
+confirmation consumer, and a credential-free idempotent post-response finalizer are prerequisites
+to a live run. Until those exist, the two-stage functions are an injected offline contract harness.
+
+The executable acceptance map for this slice is:
+
+| Condition | Evidence test |
+| --- | --- |
+| Prepare has no credential, transport, or Boolean authorization surface | `test_prepare_api_has_no_credential_or_transport_and_returns_frozen_challenge` |
+| Exact discovery/source/authority/mask/overlay/summary bytes are bound | `test_prepare_freezes_exact_content_bound_snapshot_summary_and_overlay` and the artifact-drift matrix |
+| Self-minted confirmation is insufficient without Studio authority | `test_production_default_rejects_self_minted_context_before_discovery_or_key` |
+| Context, expiry, inode, fresh discovery, and rebuilt wire gate Keychain | confirmation-context, expiry, directory-swap, discovery-drift, and wire-drift tests |
+| One injected in-process consumption winner can reach one fake POST | replay, ambiguity, and concurrent-executor tests |
+| Quote arithmetic is exact and `$0.05` is pre-dispatch only | ambient-Decimal and over-quote tests |
+| Missing post-paid cost telemetry does not strand valid media evidence | `test_missing_reported_cost_remains_terminal_success_after_paid_response` |
+| Credentials cannot survive public exceptions or local artifacts | real-E2E transport exception-graph tests |
+| Real board/retrieval identities are derived, never label hashes | `test_openrouter_real_e2e_authority.py` |

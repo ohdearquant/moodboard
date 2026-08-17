@@ -386,6 +386,37 @@ def test_success_claims_before_transport_and_atomically_persists_response_eviden
     assert "b64_json" not in decoded_repr
 
 
+def test_reported_cost_preserves_an_explicit_provider_currency(tmp_path: Path) -> None:
+    _journal, attempt, _capability, prepared = _seed_dispatch(tmp_path)
+    body = json.dumps(
+        {
+            "created": 1_786_930_000,
+            "data": [{"b64_json": base64.b64encode(_OUTPUT_BYTES).decode("ascii")}],
+            "usage": {"cost": 0.033, "currency": "EUR"},
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    decoded = decode_openrouter_response(
+        attempt,
+        prepared,
+        OpenRouterHttpResponse(
+            status=200,
+            headers={"content-type": "application/json"},
+            body=body,
+            elapsed_milliseconds=2450,
+        ),
+        received_at=_RECORDED_AT,
+    )
+
+    assert provider_to_json(decoded.receipt)["cost"] == {
+        "state": "reported",
+        "amount": "0.033",
+        "currency": "EUR",
+        "provenance": "provider_receipt",
+    }
+
+
 def test_concurrent_and_exact_dispatch_replay_send_the_attempt_at_most_once(
     tmp_path: Path,
 ) -> None:
