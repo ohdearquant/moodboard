@@ -116,6 +116,7 @@ from moodboard.studio_confirmation_ledger import (  # noqa: E402
 JsonObject = dict[str, Any]
 
 QUOTE_ADMISSION_LIMIT_USD: Final = Decimal("0.05")
+_STAGING_RECONCILE_ATTEMPTS: Final = 16
 # Compatibility alias for the first RED contract.  This is a quote-admission threshold, never a
 # provider-enforced spending limit.
 MAX_COST_USD: Final = QUOTE_ADMISSION_LIMIT_USD
@@ -376,7 +377,7 @@ def _parse_json(raw: bytes, *, code: str, max_bytes: int) -> JsonObject:
         raise
     except Exception:
         _fail(code)
-    _bounded_tree(value)
+    _bounded_tree(value, code=code)
     if not isinstance(value, dict):
         _fail(code)
     return value
@@ -1315,8 +1316,10 @@ def _compatible_private_artifact(path: Path, payload: bytes) -> bool:
     except FileNotFoundError:
         return False
     except OSError:
-        _fail("finalization_artifact_conflict")
-    if metadata.st_nlink > 1:
+        _fail("finalization_artifact_io_failed")
+    for _ in range(_STAGING_RECONCILE_ATTEMPTS):
+        if metadata.st_nlink <= 1:
+            break
         # Recover the narrow crash window between atomically linking a staged file at its final
         # no-clobber name and removing our private staging link.
         staged_links: list[Path] = []
@@ -1324,30 +1327,42 @@ def _compatible_private_artifact(path: Path, payload: bytes) -> bool:
             for candidate in path.parent.iterdir():
                 if not candidate.name.startswith(".openrouter-finalize-"):
                     continue
-                candidate_metadata = candidate.lstat()
+                try:
+                    candidate_metadata = candidate.lstat()
+                except FileNotFoundError:
+                    # A live peer publisher unlinked its staging link mid-enumeration.
+                    continue
                 if (candidate_metadata.st_dev, candidate_metadata.st_ino) == (
                     metadata.st_dev,
                     metadata.st_ino,
                 ):
                     staged_links.append(candidate)
-            if metadata.st_nlink != len(staged_links) + 1 or not staged_links:
-                _fail("finalization_artifact_conflict")
-            for candidate in staged_links:
-                # Another exact replay may have claimed the same crash-window cleanup.
-                with contextlib.suppress(FileNotFoundError):
-                    candidate.unlink()
-            directory_descriptor = os.open(
-                path.parent,
-                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
-            )
-            try:
-                os.fsync(directory_descriptor)
-            finally:
-                os.close(directory_descriptor)
+            if metadata.st_nlink == len(staged_links) + 1 and staged_links:
+                for candidate in staged_links:
+                    # Another exact replay may have claimed the same crash-window cleanup.
+                    with contextlib.suppress(FileNotFoundError):
+                        candidate.unlink()
+                directory_descriptor = os.open(
+                    path.parent,
+                    os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+                )
+                try:
+                    os.fsync(directory_descriptor)
+                finally:
+                    os.close(directory_descriptor)
+                break
+            # The link count and the enumeration are sampled at different instants, and a live
+            # peer publisher legitimately unlinks its staging link between them. Re-sample;
+            # only a link that persists across every attempt is a conflict.
+            metadata = path.lstat()
         except OpenRouterRealE2EError:
             raise
+        except FileNotFoundError:
+            return False
         except OSError:
-            _fail("finalization_artifact_conflict")
+            _fail("finalization_artifact_io_failed")
+    else:
+        _fail("finalization_artifact_conflict")
     measured = _secure_read_private_file(
         path,
         limit=max(1, len(payload)),
@@ -1377,7 +1392,7 @@ def _write_compatible_private_artifact(path: Path, payload: bytes) -> None:
         while written < len(view):
             count = os.write(descriptor, view[written:])
             if count <= 0:
-                _fail("finalization_artifact_conflict")
+                _fail("finalization_artifact_io_failed")
             written += count
         os.fsync(descriptor)
         os.close(descriptor)
@@ -1407,7 +1422,9 @@ def _write_compatible_private_artifact(path: Path, payload: bytes) -> None:
     except OpenRouterRealE2EError:
         raise
     except BaseException:
-        _fail("finalization_artifact_conflict")
+        # A staging/link failure here is an I/O condition; the conflict code is reserved for
+        # divergent bytes that were found and deliberately preserved.
+        _fail("finalization_artifact_io_failed")
     finally:
         if descriptor is not None:
             with contextlib.suppress(OSError):
@@ -2977,9 +2994,9 @@ def _execute_with_token(
             "finalization_artifact_conflict",
         }:
             return error.code, None
-        return "execution_failed", None
+        return _terminal_scan_status(target, token), None
     except BaseException:
-        return "execution_failed", None
+        return _terminal_scan_status(target, token), None
     finally:
         journal = None
         token = ""
@@ -3468,6 +3485,27 @@ def _secret_variants(token: str) -> tuple[bytes, ...]:
         json.dumps(token, ensure_ascii=True)[1:-1].encode("ascii"),
     }
     return tuple(sorted(values, key=lambda item: (len(item), item)))
+
+
+def _terminal_scan_status(target: Path, token: str) -> str:
+    """Scan the private artifacts on an abnormal exit; the scan verdict outranks the collapse.
+
+    The frozen invariant is that credentials cannot survive local artifacts on any path. The
+    ordinary exits scan explicitly before returning; this covers the exits that unwound through
+    the generic handlers, where the artifacts on disk are exactly the ones nothing re-checked.
+    """
+
+    if not isinstance(token, str) or not token:
+        return "execution_failed"
+    try:
+        _scan_private_artifacts(target, token)
+    except OpenRouterRealE2EError as error:
+        if error.code in {"credential_material_persisted", "artifact_secret_scan_failed"}:
+            return error.code
+        return "artifact_secret_scan_failed"
+    except BaseException:
+        return "artifact_secret_scan_failed"
+    return "execution_failed"
 
 
 def _scan_private_artifacts(output_dir: Path, token: str) -> None:

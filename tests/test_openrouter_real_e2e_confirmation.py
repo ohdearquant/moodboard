@@ -512,6 +512,43 @@ def test_execution_reports_the_secret_scan_verdict_as_its_own_code(
     _assert_error_code(raised, "credential_material_persisted")
 
 
+def test_post_response_failure_still_scans_the_private_artifacts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An exception after the paid response is journaled must not skip the artifact scan."""
+    challenge_dir = tmp_path / "post-response-scan"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+    planted = challenge_dir / "planted.bin"
+    planted.write_bytes(_TOKEN.encode("utf-8"))
+    planted.chmod(0o600)
+
+    def raising_verifier(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("verifier crashed after the paid response was journaled")
+
+    monkeypatch.setattr(real_e2e, "verify_output_structure", raising_verifier)
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _execute(challenge_dir, context_path)
+    _assert_error_code(raised, "credential_material_persisted")
+
+
+def test_post_response_failure_without_a_leak_stays_the_generic_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The terminal scan must not widen a clean abnormal exit past the generic collapse."""
+    challenge_dir = tmp_path / "post-response-clean"
+    _prepare(challenge_dir)
+    context_path = _write_context(challenge_dir)
+
+    def raising_verifier(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("verifier crashed after the paid response was journaled")
+
+    monkeypatch.setattr(real_e2e, "verify_output_structure", raising_verifier)
+    with pytest.raises(real_e2e.OpenRouterRealE2EError) as raised:
+        _execute(challenge_dir, context_path)
+    _assert_error_code(raised, "execution_failed")
+
+
 def test_prepare_rejects_a_reference_missing_its_occurrence_id(tmp_path: Path) -> None:
     """A wrong-key reference fails at the stable boundary, not as a KeyError in packet build."""
     document = json.loads(_AUTHORITY_BYTES.decode("utf-8"))
