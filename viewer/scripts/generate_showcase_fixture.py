@@ -357,6 +357,38 @@ def _normalized_report(path: Path) -> dict[str, Any]:
     return report
 
 
+def _drift_paths(generated: Any, committed: Any, prefix: str = "$", limit: int = 20) -> list[str]:
+    if len(paths := _collect_drift(generated, committed, prefix)) > limit:
+        return [*paths[:limit], f"... {len(paths) - limit} more"]
+    return paths
+
+
+def _collect_drift(generated: Any, committed: Any, prefix: str) -> list[str]:
+    if type(generated) is not type(committed):
+        return [f"{prefix}: type {type(generated).__name__} != {type(committed).__name__}"]
+    if isinstance(generated, dict):
+        paths = []
+        for key in sorted(generated.keys() | committed.keys()):
+            if key not in generated:
+                paths.append(f"{prefix}.{key}: only in committed fixture")
+            elif key not in committed:
+                paths.append(f"{prefix}.{key}: only in regenerated report")
+            else:
+                paths.extend(_collect_drift(generated[key], committed[key], f"{prefix}.{key}"))
+        return paths
+    if isinstance(generated, list):
+        if len(generated) != len(committed):
+            return [f"{prefix}: length {len(generated)} != {len(committed)}"]
+        return [
+            path
+            for index, (left, right) in enumerate(zip(generated, committed, strict=True))
+            for path in _collect_drift(left, right, f"{prefix}[{index}]")
+        ]
+    if generated != committed:
+        return [f"{prefix}: {generated!r} != {committed!r}"]
+    return []
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=SEED)
@@ -386,8 +418,13 @@ def main(argv: list[str] | None = None) -> int:
         expected_manifest = target / "manifest.json"
         if not expected_report.is_file() or not expected_manifest.is_file():
             raise RuntimeError(f"committed fixture is incomplete under {target}")
-        if _normalized_report(report) != _normalized_report(expected_report):
-            raise RuntimeError("engine-generated showcase report drifted outside timestamps")
+        generated_report = _normalized_report(report)
+        committed_report = _normalized_report(expected_report)
+        if generated_report != committed_report:
+            drift = "\n".join(_drift_paths(generated_report, committed_report))
+            raise RuntimeError(
+                f"engine-generated showcase report drifted outside timestamps:\n{drift}"
+            )
         committed_manifest = json.loads(expected_manifest.read_text(encoding="utf-8"))
         if committed_manifest.get("engine_source_dirty") is not False:
             raise RuntimeError(
