@@ -18,6 +18,7 @@ import warnings
 import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
 from functools import cache
 from io import BytesIO
 from typing import Any
@@ -61,7 +62,6 @@ from moodboard.provider_artifacts import (
     OUTPUT_VERSION,
     RECEIPT_VERSION,
     OutputOccurrence,
-    ProviderArtifactError,
     ProviderReceipt,
     validate_provider_artifact,
 )
@@ -74,10 +74,12 @@ __all__ = [
     "DEFAULT_COMPILER_MANIFEST",
     "MASK_COMPILER_REVISION",
     "LocalityError",
+    "ProviderMediaCompilation",
     "RasterCompilerManifest",
     "StructuralVerification",
     "build_locality_not_run",
     "compile_canonical_raster",
+    "compile_provider_output_media",
     "compile_rectangle_mask",
     "verify_outside_mask_rgb_exact",
     "verify_output_structure",
@@ -146,6 +148,7 @@ _COMPILER_LOCK = threading.RLock()
 _ACCEPTED_ZLIB_COMPATIBILITY_VERSIONS = frozenset({"1.3", "1.3.1.zlib-ng"})
 _PNG_ALLOWED_CRITICAL_CHUNKS = frozenset({b"IHDR", b"PLTE", b"IDAT", b"IEND"})
 _PNG_UNSUPPORTED_COLOR_CHUNKS = frozenset({b"sBIT", b"cICP", b"mDCv", b"cLLi"})
+_PNG_UNSAFE_TEXT_CHUNKS = frozenset({b"tEXt", b"zTXt", b"iTXt"})
 _PNG_SRGB_CHROMATICITIES = (31270, 32900, 64000, 33000, 30000, 60000, 15000, 6000)
 _JPEG_SOF_MARKERS = frozenset(
     {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
@@ -231,6 +234,24 @@ DEFAULT_COMPILER_MANIFEST = RasterCompilerManifest(
 class StructuralVerification:
     judgment: ConstraintVerificationJudgment
     output_raster: CanonicalRasterArtifact | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderMediaCompilation:
+    """Receipt-bound facts from one fully admitted provider image payload."""
+
+    decoder_revision: str
+    content_ref: str
+    content_sha256: str
+    byte_count: int
+    detected_mime: str
+    oriented_width: int
+    oriented_height: int
+    observed_mode: str
+    frame_count: int
+    active_content: bool
+    bounded: bool
+    canonical_raster: CanonicalRasterArtifact = dataclass_field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,8 +372,10 @@ def _require_digest(value: object, field: str) -> str:
 
 
 def _require_payload(payload: object) -> bytes:
-    if not isinstance(payload, bytes):
-        raise LocalityError("payload_invalid", "encoded image payload must be immutable bytes")
+    if type(payload) is not bytes:
+        raise LocalityError(
+            "payload_invalid", "encoded image payload must be exact built-in immutable bytes"
+        )
     return payload
 
 
@@ -422,6 +445,8 @@ def _preflight_png(payload: bytes, manifest: RasterCompilerManifest) -> _Contain
             raise LocalityError("unsupported_format", "PNG has an unknown critical chunk")
         if chunk_type in {b"acTL", b"fcTL", b"fdAT"}:
             raise LocalityError("unsupported_format", "animated PNG is outside the v1 profile")
+        if chunk_type in _PNG_UNSAFE_TEXT_CHUNKS:
+            raise LocalityError("unsupported_format", "PNG text metadata is outside the v1 profile")
         if chunk_type in _PNG_UNSUPPORTED_COLOR_CHUNKS:
             color_contract_supported = False
         if chunk_type == b"IHDR":
@@ -1137,23 +1162,23 @@ def _provider_document(
     if isinstance(value, (ProviderReceipt, OutputOccurrence)):
         try:
             document = provider_to_json(value)
-        except (ProviderArtifactError, RecursionError, TypeError, ValueError) as error:
+        except Exception:
             raise LocalityError(
                 "contract_mismatch", "provider artifact validation failed"
-            ) from error
+            ) from None
     elif isinstance(value, Mapping):
         try:
             document = copy.deepcopy(dict(value))
-        except (RecursionError, TypeError, ValueError) as error:
+        except Exception:
             raise LocalityError(
                 "contract_mismatch", "provider artifact is not finite JSON"
-            ) from error
+            ) from None
         try:
             validate_provider_artifact(document)
-        except ProviderArtifactError as error:
+        except Exception:
             raise LocalityError(
                 "contract_mismatch", "provider artifact validation failed"
-            ) from error
+            ) from None
     else:
         raise LocalityError("contract_mismatch", "provider artifact has the wrong Python type")
     if document.get("schema_version") != version:
@@ -1182,12 +1207,105 @@ def _receipt_row(
     return row
 
 
+def _compile_provider_output_media(
+    provider_receipt: ProviderReceipt | Mapping[str, Any],
+    *,
+    output_index: int,
+    output_bytes: bytes,
+    compiler_manifest: RasterCompilerManifest = DEFAULT_COMPILER_MANIFEST,
+    max_decoded_rgb_bytes: int | None = None,
+) -> ProviderMediaCompilation:
+    """Internal receipt-bound compiler with an optional remaining-work limit."""
+
+    payload = _require_payload(output_bytes)
+    receipt = _provider_document(provider_receipt, version=RECEIPT_VERSION)
+    row = _receipt_row(receipt, output_index, payload)
+    if max_decoded_rgb_bytes is not None:
+        _require_manifest(compiler_manifest)
+        if (
+            type(max_decoded_rgb_bytes) is not int
+            or not 1 <= max_decoded_rgb_bytes <= compiler_manifest.max_rgb_bytes
+        ):
+            raise LocalityError(
+                "decoded_rgb_budget_exceeded",
+                "remaining decoded RGB work budget is outside the registered bound",
+            )
+        container = _preflight(payload, compiler_manifest)
+        if container.width * container.height * 3 > max_decoded_rgb_bytes:
+            raise LocalityError(
+                "decoded_rgb_budget_exceeded",
+                "provider output exceeds the remaining decoded RGB work budget",
+            )
+    sniffed_mime = _sniff_mime(payload)
+    media_type_claim = row["media_type_claim"]
+    if (
+        media_type_claim is not None
+        and sniffed_mime is not None
+        and media_type_claim != sniffed_mime
+    ):
+        raise LocalityError(
+            "provider_payload_mismatch", "provider MIME claim conflicts with payload signature"
+        )
+    compiled = _compile(
+        payload,
+        source_content_sha256=row["content_sha256"],
+        compiler_manifest=compiler_manifest,
+    )
+    inspection = compiled.inspection
+    if media_type_claim is not None and media_type_claim != inspection.mime:
+        raise LocalityError(
+            "provider_payload_mismatch", "provider MIME claim conflicts with decoded bytes"
+        )
+    if (
+        inspection.mime is None
+        or inspection.width is None
+        or inspection.height is None
+        or inspection.mode is None
+        or inspection.frame_count is None
+        or inspection.opaque is not True
+    ):
+        raise LocalityError(
+            "contract_mismatch", "successful provider media compilation omitted measured facts"
+        )
+    return ProviderMediaCompilation(
+        decoder_revision=COMPILER_REVISION,
+        content_ref=row["content_ref"],
+        content_sha256=row["content_sha256"],
+        byte_count=row["byte_count"],
+        detected_mime=inspection.mime,
+        oriented_width=inspection.width,
+        oriented_height=inspection.height,
+        observed_mode=inspection.mode,
+        frame_count=inspection.frame_count,
+        active_content=False,
+        bounded=True,
+        canonical_raster=compiled.artifact,
+    )
+
+
+def compile_provider_output_media(
+    provider_receipt: ProviderReceipt | Mapping[str, Any],
+    *,
+    output_index: int,
+    output_bytes: bytes,
+    compiler_manifest: RasterCompilerManifest = DEFAULT_COMPILER_MANIFEST,
+) -> ProviderMediaCompilation:
+    """Receipt-bind and compile one exact provider image without requiring an occurrence."""
+
+    return _compile_provider_output_media(
+        provider_receipt,
+        output_index=output_index,
+        output_bytes=output_bytes,
+        compiler_manifest=compiler_manifest,
+    )
+
+
 def _occurrence_binding(
     occurrence: OutputOccurrence | Mapping[str, Any] | None,
     *,
     receipt: Mapping[str, Any],
     row: Mapping[str, Any],
-    compiled: _CompiledRaster,
+    media: ProviderMediaCompilation,
 ) -> dict[str, Any]:
     if occurrence is None:
         raise LocalityError(
@@ -1195,7 +1313,7 @@ def _occurrence_binding(
             "compiled provider output requires a full eligible output occurrence",
         )
     document = _provider_document(occurrence, version=OUTPUT_VERSION)
-    media = document["media_validation"]
+    recorded_media = document["media_validation"]
     original = document["original"]
     expected = {
         "producer_kind": "generator_raw",
@@ -1215,10 +1333,10 @@ def _occurrence_binding(
     expected_original = {
         "content_ref": row["content_ref"],
         "content_sha256": row["content_sha256"],
-        "mime": compiled.inspection.mime,
+        "mime": media.detected_mime,
         "byte_count": row["byte_count"],
-        "width": compiled.artifact.width,
-        "height": compiled.artifact.height,
+        "width": media.oriented_width,
+        "height": media.oriented_height,
     }
     if original != expected_original:
         raise LocalityError(
@@ -1231,15 +1349,15 @@ def _occurrence_binding(
         "measured_content_sha256": row["content_sha256"],
         "measured_content_ref": row["content_ref"],
         "measured_byte_count": row["byte_count"],
-        "measured_mime": compiled.inspection.mime,
-        "measured_width": compiled.artifact.width,
-        "measured_height": compiled.artifact.height,
-        "measured_mode": compiled.inspection.mode,
-        "frame_count": 1,
-        "active_content": False,
-        "bounded": True,
+        "measured_mime": media.detected_mime,
+        "measured_width": media.oriented_width,
+        "measured_height": media.oriented_height,
+        "measured_mode": media.observed_mode,
+        "frame_count": media.frame_count,
+        "active_content": media.active_content,
+        "bounded": media.bounded,
     }
-    if media != expected_media:
+    if recorded_media != expected_media:
         raise LocalityError(
             "output_occurrence_mismatch", "output occurrence measured media facts drifted"
         )
@@ -1309,19 +1427,11 @@ def verify_output_structure(
     payload = _require_payload(output_bytes)
     receipt = _provider_document(provider_receipt, version=RECEIPT_VERSION)
     row = _receipt_row(receipt, output_index, payload)
-    sniffed_mime = _sniff_mime(payload)
-    if (
-        row["media_type_claim"] is not None
-        and sniffed_mime is not None
-        and row["media_type_claim"] != sniffed_mime
-    ):
-        raise LocalityError(
-            "provider_payload_mismatch", "provider MIME claim conflicts with payload signature"
-        )
     try:
-        compiled = _compile(
-            payload,
-            source_content_sha256=row["content_sha256"],
+        media = compile_provider_output_media(
+            receipt,
+            output_index=output_index,
+            output_bytes=payload,
             compiler_manifest=compiler_manifest,
         )
     except LocalityError as error:
@@ -1348,24 +1458,28 @@ def verify_output_structure(
         evidence_ref = {"kind": "artifact", "artifact_id": receipt["provider_receipt_id"]}
         output_raster = None
     else:
-        claim = row["media_type_claim"]
-        if claim is not None and claim != compiled.inspection.mime:
-            raise LocalityError(
-                "provider_payload_mismatch", "provider MIME claim conflicts with decoded bytes"
-            )
         occurrence = _occurrence_binding(
             output_occurrence,
             receipt=receipt,
             row=row,
-            compiled=compiled,
+            media=media,
         )
         same_dimensions = (
-            compiled.artifact.width == source_raster.width
-            and compiled.artifact.height == source_raster.height
+            media.oriented_width == source_raster.width
+            and media.oriented_height == source_raster.height
+        )
+        inspection = _RasterInspection(
+            container_decoded=True,
+            frame_count=media.frame_count,
+            width=media.oriented_width,
+            height=media.oriented_height,
+            mode=media.observed_mode,
+            opaque=True,
+            mime=media.detected_mime,
         )
         result = {
             "state": "pass" if same_dimensions else "fail",
-            "measurements": _measurements(source_raster, compiled.inspection, compiled=True),
+            "measurements": _measurements(source_raster, inspection, compiled=True),
         }
         if not same_dimensions:
             result["reason"] = "dimension_mismatch"
@@ -1377,7 +1491,7 @@ def verify_output_structure(
             "kind": "artifact",
             "artifact_id": occurrence["output_occurrence_id"],
         }
-        output_raster = compiled.artifact
+        output_raster = media.canonical_raster
     authority = {
         "schema_version": STRUCTURAL_VERIFIER_VERSION,
         "input_digest": compute_structural_input_digest(

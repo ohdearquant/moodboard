@@ -265,6 +265,18 @@ commit acknowledgement is resolved from durable local state and is never project
 failure. This boundary does not perform media admission, mint output occurrences, or append
 `succeeded`.
 
+Terminal success is a second atomic local boundary. The journal loads the immutable response bytes
+and dispatch capability itself, persists exact canonical packet and normalized-request bytes, and
+uses the registered bounded decoder to derive every `generator_raw` media fact rather than accept
+caller measurements. Decode work is sequential and occurs before the writer lock under a
+cumulative RGB-work bound. Under one compare-and-append transaction the journal reloads and
+byte-compares those authorities, runs the complete relational bundle validator, inserts exactly
+one eligible occurrence for every contiguous receipt output, and appends the derived `succeeded`
+event binding those occurrence ids in order. Exact replay returns the stored package before CAS
+staleness; a different packet, request, payload, occurrence, or occupied slot conflicts. Success
+gate, occurrence rows, and terminal event must coexist or the journal is corrupt. Invalid media or
+provenance leaves the attempt at `response_received`; it cannot partially publish success.
+
 The immutable capability snapshot records adapter revision, provider, requested model, input
 modalities, reference limits and roles, output count, dimensions/aspect-ratio surface, seed and
 option support, operation-input roles (including source/mask/control support), actual-model
