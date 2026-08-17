@@ -301,10 +301,12 @@ def _require_manifest(manifest: RasterCompilerManifest) -> None:
             "compiler_manifest_mismatch",
             "compiler manifest does not equal the registered raster compiler manifest",
         )
-    if _runtime_manifest() != DEFAULT_COMPILER_MANIFEST:
+    runtime_manifest = _runtime_manifest()
+    if runtime_manifest != DEFAULT_COMPILER_MANIFEST:
         raise LocalityError(
             "compiler_manifest_mismatch",
-            "runtime Pillow codec build does not equal the registered compiler manifest",
+            "runtime Pillow codec build does not equal the registered compiler manifest: "
+            f"expected={DEFAULT_COMPILER_MANIFEST!r}; actual={runtime_manifest!r}",
         )
     profile = _pinned_srgb_profile_bytes()
     if not hmac.compare_digest(
