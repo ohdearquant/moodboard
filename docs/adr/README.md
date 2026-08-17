@@ -3,7 +3,7 @@
 One file per decision. A record states the context, the decision, the alternatives that were
 considered and rejected, and the consequences that follow. Records are immutable once
 accepted: a later decision that changes an earlier one gets its own record and marks the
-earlier one superseded.
+earlier one superseded. New records start from [`TEMPLATE.md`](TEMPLATE.md).
 
 ## Statuses
 
