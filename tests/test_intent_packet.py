@@ -33,6 +33,7 @@ from moodboard.intent_packet import (
     to_json_dict,
     validate_intent_packet,
 )
+from moodboard.locality_contracts import SCHEMA_PATHS as LOCALITY_SCHEMA_PATHS
 
 JsonObject = dict[str, Any]
 JsonPath = tuple[str | int, ...]
@@ -420,11 +421,13 @@ def _schema_validator() -> jsonschema.Draft202012Validator:
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator.check_schema(schema)
     registry = Registry()
-    for path in (OPERATION_SCHEMA_PATH, VERIFICATION_POLICY_SCHEMA_PATH):
+    for path in (
+        OPERATION_SCHEMA_PATH,
+        VERIFICATION_POLICY_SCHEMA_PATH,
+        *LOCALITY_SCHEMA_PATHS.values(),
+    ):
         dependency = json.loads(path.read_text(encoding="utf-8"))
-        registry = registry.with_resource(
-            dependency["$id"], Resource.from_contents(dependency)
-        )
+        registry = registry.with_resource(dependency["$id"], Resource.from_contents(dependency))
     return jsonschema.Draft202012Validator(
         schema,
         registry=registry,
@@ -806,9 +809,9 @@ def test_retrieval_route_and_provider_route_are_distinct_frozen_authorities() ->
         validate_intent_packet(packet)
 
     same_identity = _valid_packet()
-    same_identity["retrieval_route"]["route_policy_id"] = same_identity[
-        "generation_request"
-    ]["provider_route_policy"]["provider_route_policy_id"]
+    same_identity["retrieval_route"]["route_policy_id"] = same_identity["generation_request"][
+        "provider_route_policy"
+    ]["provider_route_policy_id"]
     _refresh_packet_identity(same_identity)
     with pytest.raises(IntentPacketError, match="must be distinct"):
         validate_intent_packet(same_identity)
@@ -847,9 +850,9 @@ def test_packet_rejects_credential_material_and_keeps_only_a_profile_id(
 
 def test_credential_profile_id_is_an_opaque_uuid_not_a_key_shaped_string() -> None:
     packet = _valid_packet()
-    packet["generation_request"]["destination"][
-        "credential_profile_id"
-    ] = "sk-or-v1-secret-that-must-never-persist"
+    packet["generation_request"]["destination"]["credential_profile_id"] = (
+        "sk-or-v1-secret-that-must-never-persist"
+    )
     packet["confirmation"]["dispatch_shown"]["destination"] = copy.deepcopy(
         packet["generation_request"]["destination"]
     )

@@ -4,6 +4,10 @@
 - **Date:** 2026-08-16
 - **Depends on:** ADR-0012's typed hard-gate semantics and ADR-0014's generic intent packet,
   generation attempt, and output occurrence.
+- **Amends:** ADR-0012's `constraint_verification` subject arm so raster-structure failure for
+  invalid provider bytes and its paired exact-locality `not_run` may bind a retained payload that
+  never became a selectable output occurrence. Structural pass, repairable dimension mismatch,
+  and measured exact locality remain selectable-occurrence-only.
 - **Extends:** ADR-0014 by registering `moodboard.operation.localized-edit.v1` and the
   `deterministic_compositor` producer. It does not change ADR-0004's score-abstention rules.
 - **Measurable claim:** none. This record defines coordinate, mask, verifier, failure-retention,

@@ -121,7 +121,7 @@
         "measured_mime": { "$ref": "#/$defs/imageMime" },
         "measured_width": { "$ref": "#/$defs/dimension" },
         "measured_height": { "$ref": "#/$defs/dimension" },
-        "measured_mode": { "enum": ["RGB", "RGBA"] },
+        "measured_mode": { "enum": ["L", "LA", "RGB", "RGBA"] },
         "frame_count": { "const": 1 },
         "active_content": { "const": false },
         "bounded": { "const": true }

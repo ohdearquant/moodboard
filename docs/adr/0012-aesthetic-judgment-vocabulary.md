@@ -86,7 +86,7 @@ The `subject` and `result` members form this closed discriminated union:
 | `intent_eligibility` | `asset_occurrence`: asset id, ContentRef, and route-query occurrence id | `eligible`, `excluded`, `not_computed` | typed route reason |
 | `source_similarity` | `retrieval_result`: query occurrence id and ordered-result artifact id | `computed`, `empty`, `not_computed`, `refused` | ordered rows with source ranks and exact cosine values when computed |
 | `board_compatibility` | `selectable_output_occurrence`: output occurrence id | `scored`, `abstained`, `not_computed` | conformal result when scored; typed reason when abstained |
-| `constraint_verification` | `selectable_output_occurrence`: output occurrence id | `pass`, `fail`, `not_run` | verifier-owned measurements and reason |
+| `constraint_verification` | `selectable_output_occurrence`: output occurrence id; or `provider_output_payload`: attempt, output index, receipt, ContentRef, and byte SHA-256 for invalid-payload structural failure or its blocked `not_run` only | `pass`, `fail`, `not_run` | verifier-owned measurements and reason |
 | `human_comparison` | `comparison_pair`: serve id plus left and right output occurrence ids | `recorded` | `choice`: `left`, `right`, `tie`, or `abstain` |
 | `preference_prediction` | `comparison_pair`: pair id plus left and right output occurrence ids | `predicted`, `unavailable` | pairwise probability/indifference result or typed refusal |
 
@@ -95,6 +95,17 @@ or compare. It always has ADR-0014 `admission: eligible`. V1 producer kinds are 
 `deterministic_compositor`; each occurrence retains its producer-specific lineage and constraint
 results. The term does not collapse a raw provider output and a source-backed composite into one
 occurrence.
+
+`provider_output_payload` is the narrower identity for retained provider bytes that may fail before
+ADR-0014 can publish a selectable output occurrence. Only raster-structure verification and the
+exact-locality `not_run` result blocked by that structural evidence may use it. A measured
+exact-locality `pass|fail`, board compatibility, acceptance, and human comparison still require a
+selectable output occurrence. Structural `pass` and the repairable `dimension_mismatch` failure
+also require that occurrence; other structural failures and their blocked `not_run` bind the same
+provider-payload subject. This preserves failure evidence without making invalid bytes selectable.
+Before publishing either receipt, the locality runtime hydrates the named immutable provider
+receipt and requires its attempt id plus `outputs[output_index]` ContentRef and SHA-256 to equal the
+subject. Envelope validation alone does not turn a caller-supplied tuple into provider evidence.
 
 For computed kinds, `evidence_id` is
 `sha256("moodboard.judgment.v1\0" || RFC8785(document-without-evidence_id))`. The domain tag is

@@ -8,6 +8,7 @@ Python values.  It never coerces, reranks, or combines evidence from different j
 
 from __future__ import annotations
 
+import hmac
 import json
 import math
 import uuid
@@ -24,6 +25,11 @@ from moodboard.contracts import (
     ContractIdentityError,
     canonical_json_bytes,
     verify_document_identity,
+)
+from moodboard.locality_contracts import (
+    compute_exact_locality_input_digest,
+    compute_exact_locality_not_run_input_digest,
+    compute_structural_input_digest,
 )
 
 __all__ = [
@@ -59,10 +65,9 @@ _HUMAN_REASONS: dict[str, frozenset[str | None]] = {
     "left": frozenset({None, "style", "palette", "tone", "composition", "other"}),
     "right": frozenset({None, "style", "palette", "tone", "composition", "other"}),
     "tie": frozenset({None, "equally_good", "equally_bad", "other"}),
-    "abstain": frozenset(
-        {"insufficient_context", "both_unacceptable", "render_failure", "other"}
-    ),
+    "abstain": frozenset({"insufficient_context", "both_unacceptable", "render_failure", "other"}),
 }
+_CANONICAL_COMPILABLE_DECODED_MODES = frozenset({"L", "LA", "RGB", "RGBA"})
 
 
 class JudgmentError(ValueError):
@@ -161,8 +166,7 @@ def _error_sort_key(error: jsonschema.ValidationError) -> tuple[tuple[int, str],
     """Make validation-error selection deterministic across mixed object/array paths."""
 
     return tuple(
-        (0, f"{part:020d}") if isinstance(part, int) else (1, part)
-        for part in error.absolute_path
+        (0, f"{part:020d}") if isinstance(part, int) else (1, part) for part in error.absolute_path
     )
 
 
@@ -260,9 +264,7 @@ def _validate_board(document: Mapping[str, Any]) -> None:
         ):
             raise JudgmentError("board abstention resolution_alpha does not match n_local")
         supported = 1.0 / (measurement["n_eff_local"] + 1)
-        if not math.isclose(
-            measurement["supported_alpha"], supported, rel_tol=0.0, abs_tol=1e-15
-        ):
+        if not math.isclose(measurement["supported_alpha"], supported, rel_tol=0.0, abs_tol=1e-15):
             raise JudgmentError("board abstention supported_alpha does not match n_eff_local")
         binding = "effective" if supported > resolution else "achievability"
         if measurement["binding_floor"] != binding:
@@ -287,12 +289,54 @@ def _validate_constraint(document: Mapping[str, Any]) -> None:
     result = document["result"]
     authority = document["authority"]
     if authority["schema_version"] == "moodboard.verifier.raster-structure.v1":
+        subject = document["subject"]
+        requires_selectable = result["state"] == "pass" or (
+            result["state"] == "fail" and result["reason"] == "dimension_mismatch"
+        )
+        if requires_selectable and subject["kind"] != "selectable_output_occurrence":
+            raise JudgmentError(
+                "structural pass and dimension_mismatch require a selectable output occurrence"
+            )
+        if not requires_selectable and subject["kind"] != "provider_output_payload":
+            raise JudgmentError(
+                "structurally invalid provider bytes require a provider_output_payload subject"
+            )
+        if (
+            subject["kind"] == "provider_output_payload"
+            and subject["content_sha256"] != authority["output_content_sha256"]
+        ):
+            raise JudgmentError(
+                "structural authority must bind the provider payload content SHA-256"
+            )
+        _require_locality_input_digest(
+            authority["input_digest"],
+            compute_structural_input_digest(
+                source_raster_sha256=authority["source_raster_sha256"],
+                output_content_sha256=authority["output_content_sha256"],
+            ),
+        )
         _validate_structural_constraint(result, authority)
         return
     if authority["schema_version"] != "moodboard.verifier.outside-mask-rgb-exact.v1":
         return
     if result["state"] == "not_run":
+        _require_locality_input_digest(
+            authority["input_digest"],
+            compute_exact_locality_not_run_input_digest(
+                source_raster_sha256=authority["source_raster_sha256"],
+                mask_sha256=authority["mask_sha256"],
+                blocking_structural_evidence_id=authority["blocking_structural_evidence_id"],
+            ),
+        )
         return
+    _require_locality_input_digest(
+        authority["input_digest"],
+        compute_exact_locality_input_digest(
+            source_raster_sha256=authority["source_raster_sha256"],
+            output_raster_sha256=authority["output_raster_sha256"],
+            mask_sha256=authority["mask_sha256"],
+        ),
+    )
     measurements = result["measurements"]
     protected = measurements["protected_pixel_count"]
     changed = measurements["changed_pixel_count"]
@@ -309,6 +353,11 @@ def _validate_constraint(document: Mapping[str, Any]) -> None:
         raise JudgmentError("exact locality passes only with zero changed pixels and channel error")
     if result["state"] == "fail" and changed == 0 and maximum == 0:
         raise JudgmentError("exact locality failure must carry a measured protected difference")
+
+
+def _require_locality_input_digest(recorded: str, computed: str) -> None:
+    if not hmac.compare_digest(recorded, computed):
+        raise JudgmentError("locality authority input_digest does not match its registered inputs")
 
 
 def _validate_structural_constraint(
@@ -335,20 +384,24 @@ def _validate_structural_constraint(
     if canonical_compiled and (
         not container_decoded
         or measurements["frame_count"] != 1
-        or measurements["output_mode"] != "RGB"
+        or measurements["output_mode"] not in _CANONICAL_COMPILABLE_DECODED_MODES
         or measurements["opaque"] is not True
     ):
-        raise JudgmentError("canonical structural raster requires one opaque RGB frame")
+        raise JudgmentError(
+            "canonical structural raster requires one opaque L, LA, RGB, or RGBA frame"
+        )
     if result["state"] == "pass":
         if (
             not canonical_compiled
             or measurements["frame_count"] != 1
             or measurements["output_width"] != measurements["source_width"]
             or measurements["output_height"] != measurements["source_height"]
-            or measurements["output_mode"] != "RGB"
+            or measurements["output_mode"] not in _CANONICAL_COMPILABLE_DECODED_MODES
             or measurements["opaque"] is not True
         ):
-            raise JudgmentError("structural pass requires one opaque source-sized RGB frame")
+            raise JudgmentError(
+                "structural pass requires one opaque source-sized L, LA, RGB, or RGBA frame"
+            )
         return
     reason = result["reason"]
     if reason in {"decode_failed", "decode_limit_exceeded"} and container_decoded:
@@ -484,30 +537,26 @@ def validate_judgment(document: dict[str, Any]) -> None:
     _validate_cross_fields(document)
 
 
-def validate_locality_blocking_pair(
-    structural: dict[str, Any], locality: dict[str, Any]
-) -> None:
+def validate_locality_blocking_pair(structural: dict[str, Any], locality: dict[str, Any]) -> None:
     """Validate the two-receipt structural-fail/locality-not-run relationship."""
 
     validate_judgment(structural)
     validate_judgment(locality)
     if (
         structural["kind"] != "constraint_verification"
-        or structural["authority"]["schema_version"]
-        != "moodboard.verifier.raster-structure.v1"
+        or structural["authority"]["schema_version"] != "moodboard.verifier.raster-structure.v1"
         or structural["result"]["state"] != "fail"
     ):
         raise JudgmentError("blocking evidence must be one failed raster-structure judgment")
     if (
         locality["kind"] != "constraint_verification"
-        or locality["authority"]["schema_version"]
-        != "moodboard.verifier.outside-mask-rgb-exact.v1"
+        or locality["authority"]["schema_version"] != "moodboard.verifier.outside-mask-rgb-exact.v1"
         or locality["result"]["state"] != "not_run"
     ):
         raise JudgmentError("blocked locality evidence must be one exact-locality not_run judgment")
     if structural["subject"] != locality["subject"]:
         raise JudgmentError(
-            "structural and locality judgments must name the same output occurrence"
+            "structural and locality judgments must name the same output payload or occurrence"
         )
     if locality["authority"]["blocking_structural_evidence_id"] != structural["evidence_id"]:
         raise JudgmentError("locality not_run must bind the exact structural-failure evidence id")

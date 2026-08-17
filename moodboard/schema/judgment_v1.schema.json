@@ -19,7 +19,7 @@
     "canonicalUuid": {
       "type": "string",
       "format": "uuid",
-      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "modelKey": {
       "type": "string",
@@ -269,6 +269,32 @@
       },
       "additionalProperties": false
     },
+    "providerOutputPayloadSubject": {
+      "type": "object",
+      "required": [
+        "kind",
+        "attempt_id",
+        "output_index",
+        "provider_receipt_id",
+        "content_ref",
+        "content_sha256"
+      ],
+      "properties": {
+        "kind": { "const": "provider_output_payload" },
+        "attempt_id": { "$ref": "#/$defs/canonicalUuid" },
+        "output_index": { "type": "integer", "minimum": 0, "maximum": 7 },
+        "provider_receipt_id": { "$ref": "#/$defs/digest" },
+        "content_ref": { "$ref": "#/$defs/digest" },
+        "content_sha256": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "structuralConstraintSubject": {
+      "oneOf": [
+        { "$ref": "#/$defs/selectableOutputSubject" },
+        { "$ref": "#/$defs/providerOutputPayloadSubject" }
+      ]
+    },
     "scoreInterval": {
       "type": "object",
       "required": ["low", "high", "level", "method"],
@@ -510,8 +536,9 @@
           ]
         },
         "output_mode": {
+          "description": "Observed decoded-container mode before canonical RGB compilation.",
           "type": ["string", "null"],
-          "enum": [null, "RGB", "RGBA", "L", "CMYK", "other"]
+          "enum": [null, "L", "LA", "RGB", "RGBA", "P", "CMYK", "other"]
         },
         "opaque": { "type": ["boolean", "null"] }
       },
@@ -537,6 +564,8 @@
               "enum": [
                 "decode_failed",
                 "decode_limit_exceeded",
+                "malformed_orientation",
+                "unsupported_format",
                 "unsafe_decoder_warning",
                 "unsupported_frame_count",
                 "non_opaque",
@@ -581,27 +610,84 @@
         {
           "type": "object",
           "properties": {
-            "kind": { "const": "constraint_verification" },
-            "subject": { "$ref": "#/$defs/selectableOutputSubject" }
+            "kind": { "const": "constraint_verification" }
           },
           "oneOf": [
             {
               "properties": {
+                "subject": { "$ref": "#/$defs/selectableOutputSubject" },
                 "result": { "$ref": "#/$defs/measuredLocalityResult" },
                 "authority": { "$ref": "#/$defs/localityAuthority" }
               }
             },
             {
               "properties": {
+                "subject": { "$ref": "#/$defs/structuralConstraintSubject" },
                 "result": { "$ref": "#/$defs/localityNotRunResult" },
                 "authority": { "$ref": "#/$defs/localityNotRunAuthority" }
               }
             },
             {
-              "properties": {
-                "result": { "$ref": "#/$defs/structuralResult" },
-                "authority": { "$ref": "#/$defs/structuralAuthority" }
-              }
+              "allOf": [
+                {
+                  "properties": {
+                    "subject": { "$ref": "#/$defs/structuralConstraintSubject" },
+                    "result": { "$ref": "#/$defs/structuralResult" },
+                    "authority": { "$ref": "#/$defs/structuralAuthority" }
+                  }
+                },
+                {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "subject": { "$ref": "#/$defs/selectableOutputSubject" },
+                        "result": {
+                          "type": "object",
+                          "required": ["state"],
+                          "properties": { "state": { "const": "pass" } }
+                        }
+                      }
+                    },
+                    {
+                      "properties": {
+                        "subject": { "$ref": "#/$defs/selectableOutputSubject" },
+                        "result": {
+                          "type": "object",
+                          "required": ["state", "reason"],
+                          "properties": {
+                            "state": { "const": "fail" },
+                            "reason": { "const": "dimension_mismatch" }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "properties": {
+                        "subject": { "$ref": "#/$defs/providerOutputPayloadSubject" },
+                        "result": {
+                          "type": "object",
+                          "required": ["state", "reason"],
+                          "properties": {
+                            "state": { "const": "fail" },
+                            "reason": {
+                              "enum": [
+                                "decode_failed",
+                                "decode_limit_exceeded",
+                                "malformed_orientation",
+                                "unsupported_format",
+                                "unsafe_decoder_warning",
+                                "unsupported_frame_count",
+                                "non_opaque",
+                                "unsupported_color_contract"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
             }
           ]
         }

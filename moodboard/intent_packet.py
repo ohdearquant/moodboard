@@ -50,7 +50,15 @@ _SCHEMA_DIR = Path(__file__).parent / "schema"
 SCHEMA_PATH = _SCHEMA_DIR / "intent_packet_v1.schema.json"
 OPERATION_SCHEMA_PATH = _SCHEMA_DIR / "operation_localized_edit_v1.schema.json"
 VERIFICATION_POLICY_SCHEMA_PATH = _SCHEMA_DIR / "verification_policy_v1.schema.json"
-_SCHEMA_PATHS = (SCHEMA_PATH, OPERATION_SCHEMA_PATH, VERIFICATION_POLICY_SCHEMA_PATH)
+_RASTER_SCHEMA_PATH = _SCHEMA_DIR / "raster_srgb_u8_v1.schema.json"
+_MASK_SCHEMA_PATH = _SCHEMA_DIR / "mask_u8_v1.schema.json"
+_SCHEMA_PATHS = (
+    SCHEMA_PATH,
+    OPERATION_SCHEMA_PATH,
+    VERIFICATION_POLICY_SCHEMA_PATH,
+    _RASTER_SCHEMA_PATH,
+    _MASK_SCHEMA_PATH,
+)
 
 
 class IntentPacketError(ValueError):
@@ -115,8 +123,7 @@ def _validator() -> jsonschema.Draft202012Validator:
 
 def _error_sort_key(error: jsonschema.ValidationError) -> tuple[tuple[int, str], ...]:
     return tuple(
-        (0, f"{part:020d}") if isinstance(part, int) else (1, part)
-        for part in error.absolute_path
+        (0, f"{part:020d}") if isinstance(part, int) else (1, part) for part in error.absolute_path
     )
 
 
@@ -305,10 +312,7 @@ def _validate_request_policy(document: dict[str, Any]) -> None:
 
     idempotency = request["idempotency"]
     if idempotency["provider_accepts_key"]:
-        if (
-            idempotency["deduplication_scope"] is None
-            or idempotency["retention_seconds"] is None
-        ):
+        if idempotency["deduplication_scope"] is None or idempotency["retention_seconds"] is None:
             raise IntentPacketError("provider idempotency guarantee requires scope and retention")
     elif (
         idempotency["deduplication_scope"] is not None
