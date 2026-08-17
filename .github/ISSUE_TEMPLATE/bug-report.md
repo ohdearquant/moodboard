@@ -11,8 +11,14 @@ labels: bug
 
 ## Exact reproduction
 
-<!-- The command(s) run, verbatim, and the input that triggers it. A bug that cannot be
-     reproduced from this section alone is not yet reportable; reduce it first. -->
+<!-- The command(s) run and the input that triggers the bug. A bug that cannot be reproduced
+     from this section alone is not yet reportable; reduce it first.
+
+     REDACT BEFORE PASTING. Issues are public. Replace API keys, tokens, credential-bearing
+     paths, and private payloads with placeholders like <TOKEN> or <PRIVATE_PATH>; the bug
+     must reproduce with the placeholders' shape, not their values. If the reproduction cannot
+     be shared publicly even redacted, say so here and a maintainer will arrange a private
+     channel. -->
 
 ```bash
 

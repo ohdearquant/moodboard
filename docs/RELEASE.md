@@ -20,6 +20,9 @@ Every box is checked against the exact commit being released, in order.
 - [ ] A wheel builds from clean and `tests/test_packaging.py` passes against it
 - [ ] The packaged viewer manifest's `viewer_version` equals the Python project version; a
       release with disagreeing versions is not shippable
+- [ ] The static viewer archive and the source distribution also build from clean, carry the
+      release version in name and manifest, and their manifest bytes match the verified viewer
+      package (ADR-0007 shared version; ADR-0010 distribution identity)
 - [ ] Schema versions shipped match the schemas documented; no schema file changed without a
       version change
 - [ ] `CHANGELOG` / release notes drafted from the template below, and every claim in them
